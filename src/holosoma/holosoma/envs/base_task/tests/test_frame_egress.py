@@ -240,6 +240,21 @@ def test_a_frame_that_opens_always_closes() -> None:
     assert sim.substeps == 3 * DECIMATION
 
 
+def test_episode_events_fire_once_per_batch_of_envs() -> None:
+    sim = _FakeSim(frames=1)
+    task = _LoopTask(sim)
+    task._episode_open = torch.zeros(3, dtype=torch.bool)
+    events: list[tuple[str, list[int]]] = []
+    task.hooks.add(Phase.EPISODE_START, lambda ids: events.append(("start", ids.tolist())), name="t.start")
+    task.hooks.add(Phase.EPISODE_END, lambda ids: events.append(("end", ids.tolist())), name="t.end")
+
+    task._start_episodes(torch.tensor([0, 2]))
+    task._end_episodes(torch.tensor([0, 2]))
+    task._end_episodes(torch.tensor([], dtype=torch.long))
+
+    assert events == [("start", [0, 2]), ("end", [0, 2])]
+
+
 def test_viewer_renders_on_its_own_schedule_when_not_headless() -> None:
     """A windowed run draws the viewport every ``viewer_update_decimation``, here after each frame's last substep."""
     sim = _FakeSim(frames=3, offscreen=False)

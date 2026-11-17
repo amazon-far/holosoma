@@ -1501,7 +1501,7 @@ def main() -> int:
         sim.video_recorder.setup_recording()
         # These scenarios are object-centric; aim the camera at the scene objects, not the robot.
         _focus_camera_on_objects(sim, config.scene)
-        sim.video_recorder.on_episode_start(env_id=sim.video_recorder.config.record_env_id)
+        sim.video_recorder.on_episode_start(torch.tensor([sim.video_recorder.config.record_env_id]))
 
     env_ids = torch.arange(sim.num_envs, device=sim.sim_device)
     free_names = sim.object_registry.get_names_by_type(ObjectType.INDIVIDUAL)
@@ -1535,7 +1535,7 @@ def main() -> int:
         print("PASS" if passed else "FAIL")
 
     if sim.video_recorder is not None:
-        sim.video_recorder.on_episode_end(env_id=sim.video_recorder.config.record_env_id)
+        sim.video_recorder.on_episode_end(torch.tensor([sim.video_recorder.config.record_env_id]))
         print(f"VIDEO saved under {args.record}")
 
     if passed and args.result_file:

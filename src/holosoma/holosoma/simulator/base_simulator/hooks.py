@@ -6,11 +6,14 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal, Union, overload
+from typing import TYPE_CHECKING, Any, Literal, Union, overload
 
 from typing_extensions import Self
 
 from holosoma.config_types.frequency import DecimationLike, is_frequency_string, resolve_decimation
+
+if TYPE_CHECKING:
+    import torch
 
 HookDependency = Union["HookHandle", "HookRef", "_OptionalTarget"]
 """What ``after``/``before`` accept: a :class:`HookHandle`, a :class:`HookRef`, or :func:`if_present`
@@ -59,6 +62,8 @@ class Phase(str, Enum):
 
     ``FRAME_*`` bracket the outer tick (once per frame); ``*_STEP`` bracket each physics substep. The
     names are engine-agnostic — they don't assume what drives the outer tick (a policy, a bridge, ...).
+    Episode events fire once per batch of environments that end or start together, with their ids as
+    a long tensor.
     """
 
     payload: tuple[str, ...]
@@ -68,8 +73,8 @@ class Phase(str, Enum):
     PRE_STEP = ("pre_step", (), True)
     POST_STEP = ("post_step", (), True)
     FRAME_END = ("frame_end", (), True)
-    EPISODE_END = ("episode_end", ("env_id",), False)
-    EPISODE_START = ("episode_start", ("env_id",), False)
+    EPISODE_END = ("episode_end", ("env_ids",), False)
+    EPISODE_START = ("episode_start", ("env_ids",), False)
     CLOSE = ("close", (), False)
 
     def __new__(cls, value: str, payload: tuple[str, ...], periodic: bool) -> Self:
@@ -86,8 +91,8 @@ class Phase(str, Enum):
 # ``inspect``-based check in ``add``.
 FrameCallback = Callable[[], Any]
 """Callback for a zero-payload periodic phase (``FRAME_BEGIN``/``PRE_STEP``/``POST_STEP``/``FRAME_END``)."""
-EpisodeCallback = Callable[[int], Any]
-"""Callback for an episode phase (``EPISODE_START``/``EPISODE_END``); receives ``env_id``."""
+EpisodeCallback = Callable[["torch.Tensor"], Any]
+"""Callback for an episode phase (``EPISODE_START``/``EPISODE_END``); receives the batch's ``env_ids``."""
 CloseCallback = Callable[[], Any]
 """Callback for ``CLOSE`` (zero payload, fires once at teardown)."""
 
@@ -274,7 +279,7 @@ class HookRegistry:
         """Register a hook callback for a lifecycle phase.
 
         The callback's signature must accept the phase's payload (see :class:`Phase`): zero args for
-        the periodic ``FRAME_*``/``*_STEP`` phases and ``CLOSE``, one ``env_id`` for the episode
+        the periodic ``FRAME_*``/``*_STEP`` phases and ``CLOSE``, one ``env_ids`` tensor for the episode
         phases. The typed overloads reject a mismatch at type-check time; :meth:`_check_arity` also
         checks it at registration, so a wrong-arity callback fails loudly at ``add`` rather than with a
         ``TypeError`` on the first ``emit``. A parameter with a default still satisfies a phase that

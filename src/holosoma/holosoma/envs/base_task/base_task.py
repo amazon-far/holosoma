@@ -207,13 +207,13 @@ class BaseTask:
 
     def _end_episodes(self, env_ids: torch.Tensor) -> None:
         self._episode_open[env_ids] = False
-        for env_id in env_ids.tolist():
-            self.hooks.emit(Phase.EPISODE_END, env_id)
+        if env_ids.numel():
+            self.hooks.emit(Phase.EPISODE_END, env_ids)
 
     def _start_episodes(self, env_ids: torch.Tensor) -> None:
         self._episode_open[env_ids] = True
-        for env_id in env_ids.tolist():
-            self.hooks.emit(Phase.EPISODE_START, env_id)
+        if env_ids.numel():
+            self.hooks.emit(Phase.EPISODE_START, env_ids)
 
     def reset_envs_idx(
         self,

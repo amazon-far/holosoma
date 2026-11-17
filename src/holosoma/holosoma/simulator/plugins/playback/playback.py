@@ -204,7 +204,7 @@ class MotionPlaybackPlugin:
     Each episode is one full clip playthrough (its final frame is always rendered before the
     boundary). Between episodes the plugin rewinds to the next clip's first frame (a hard reset —
     the ``PRE_STEP`` write re-pins robot+objects to frame 0 with zero velocity) and emits
-    ``EPISODE_END`` then ``EPISODE_START`` per env, so downstream plugins re-roll per-episode
+    ``EPISODE_END`` then ``EPISODE_START`` for all envs, so downstream plugins re-roll per-episode
     settings. The playlist repeats ``n_run`` times in order; after ``len(playlist) * n_run``
     episodes the run shuts down, or forever when ``n_run == 0``. Shutdown is requested from the last
     episode's final ``FRAME_END``, so that frame is egressed exactly once and no tick repeats it; a
@@ -425,12 +425,11 @@ class MotionPlaybackPlugin:
     def _begin_episode(self) -> None:
         """Close the previous episode and open the next: emit boundaries, rewind clock, arm settle."""
         sim = self.simulator
-        for env_id in range(sim.num_envs):
-            sim.hooks.emit(Phase.EPISODE_END, env_id)
+        env_ids = torch.arange(sim.num_envs, device=sim.sim_device)
+        sim.hooks.emit(Phase.EPISODE_END, env_ids)
         self._t = self.cfg.start_time
         self._settle_left = self.cfg.settle_frames
-        for env_id in range(sim.num_envs):
-            sim.hooks.emit(Phase.EPISODE_START, env_id)
+        sim.hooks.emit(Phase.EPISODE_START, env_ids)
         playlist_index = self._playlist_index(self._episode_idx)
         assert playlist_index is not None
         local_path = self.playlist[playlist_index]

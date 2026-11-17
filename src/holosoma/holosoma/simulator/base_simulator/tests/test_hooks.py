@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import torch
 
 from holosoma.config_types.video import VideoConfig
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
@@ -156,20 +157,20 @@ def test_close_phase_rejects_payload() -> None:
 
 def test_phase_payloads_have_fixed_signatures() -> None:
     hooks = HookRegistry()
-    calls: list[int] = []
+    calls: list[list[int]] = []
 
-    def record_episode_start(env_id: int) -> None:
-        calls.append(env_id)
+    def record_episode_start(env_ids: torch.Tensor) -> None:
+        calls.append(env_ids.tolist())
 
     hooks.add(Phase.EPISODE_START, record_episode_start, name="episode_start")
 
-    hooks.emit(Phase.EPISODE_START, 7)
+    hooks.emit(Phase.EPISODE_START, torch.tensor([3, 7]))
 
-    with pytest.raises(HookRegistryError, match="expects env_id"):
+    with pytest.raises(HookRegistryError, match="expects env_ids"):
         hooks.emit(Phase.EPISODE_START)
     with pytest.raises(HookRegistryError, match="expects no arguments"):
         hooks.emit(Phase.FRAME_END, 1)
-    assert calls == [7]
+    assert calls == [[3, 7]]
 
 
 def test_every_int_decimates_emissions() -> None:
@@ -210,7 +211,7 @@ def test_every_frequency_string_resolves_against_base_rate() -> None:
 def test_every_frequency_string_needs_periodic_phase() -> None:
     hooks = HookRegistry()
     with pytest.raises(HookRegistryError, match="not periodic"):
-        hooks.add(Phase.EPISODE_START, lambda _env_id: None, name="bad", every="10Hz")
+        hooks.add(Phase.EPISODE_START, lambda _env_ids: None, name="bad", every="10Hz")
 
 
 def test_every_frequency_string_needs_base_rate() -> None:
@@ -220,14 +221,14 @@ def test_every_frequency_string_needs_base_rate() -> None:
 
 
 def test_every_int_on_event_phase_is_allowed() -> None:
-    calls: list[int] = []
+    calls: list[list[int]] = []
     hooks = HookRegistry()
-    hooks.add(Phase.EPISODE_START, lambda env_id: calls.append(env_id), name="every_other", every=2)
+    hooks.add(Phase.EPISODE_START, lambda env_ids: calls.append(env_ids.tolist()), name="every_other", every=2)
 
     for i in range(4):
-        hooks.emit(Phase.EPISODE_START, i)
+        hooks.emit(Phase.EPISODE_START, torch.tensor([i]))
 
-    assert calls == [1, 3]
+    assert calls == [[1], [3]]  # every second batch
 
 
 def test_close_rejects_decimation() -> None:
@@ -307,7 +308,7 @@ def test_add_rejects_zero_arg_callback_on_episode_phase() -> None:
 
     def takes_nothing() -> None: ...
 
-    # EPISODE_START emits env_id, but the callback accepts no positional args.
+    # EPISODE_START emits env_ids, but the callback accepts no positional args.
     # ``type: ignore[call-overload]`` load-bearing (see test above): the overloads reject this too.
     with pytest.raises(HookRegistryError, match="accepts at most 0"):
         hooks.add(Phase.EPISODE_START, takes_nothing, name="bad")  # type: ignore[call-overload]
@@ -333,7 +334,7 @@ def test_add_accepts_varargs_on_any_phase() -> None:
     def anything(*args: object) -> None: ...
 
     hooks.add(Phase.POST_STEP, anything, name="a")
-    hooks.add(Phase.EPISODE_END, anything, name="b")  # *args absorbs env_id too
+    hooks.add(Phase.EPISODE_END, anything, name="b")  # *args absorbs env_ids too
 
 
 def test_add_arity_guard_ignores_self_on_bound_method() -> None:
@@ -342,7 +343,7 @@ def test_add_arity_guard_ignores_self_on_bound_method() -> None:
     hooks = HookRegistry()
 
     class Participant:
-        def on_episode_start(self, env_id: int) -> None: ...
+        def on_episode_start(self, env_ids: torch.Tensor) -> None: ...
         def capture_frame(self, env_id: int = 0) -> None: ...
 
     p = Participant()
@@ -353,7 +354,7 @@ def test_add_arity_guard_ignores_self_on_bound_method() -> None:
 def test_add_arity_guard_tolerates_uninspectable_callback() -> None:
     # Some C-level callables reject inspect.signature; the guard must not block them.
     hooks = HookRegistry()
-    hooks.add(Phase.EPISODE_END, print, name="builtin")  # print(*args) — accepts env_id
+    hooks.add(Phase.EPISODE_END, print, name="builtin")  # print(*args) — accepts env_ids
 
 
 def recorder(calls: list[str], name: str) -> Callable[[], None]:
@@ -584,7 +585,7 @@ def test_validate_reports_a_bad_graph_before_anything_emits() -> None:
     with hooks.installing("inspect"):
         hooks.add(
             Phase.EPISODE_END,
-            lambda _env_id: None,
+            lambda _env_ids: None,
             name="x.late",
             after=[HookRef("absent", _CameraHook.PUBLISH)],
         )

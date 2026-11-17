@@ -191,7 +191,7 @@ A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=No
 | `PRE_STEP` | before each physics substep | — | physics `fps` |
 | `POST_STEP` | after each physics substep (freshest sim time) | — | physics `fps` |
 | `FRAME_END` | after the frame's last substep (read state here) | — | control rate |
-| `EPISODE_START` / `EPISODE_END` | on reset boundaries | `env_id` | per event |
+| `EPISODE_START` / `EPISODE_END` | on reset boundaries, once per batch of envs | `env_ids` (long tensor) | per batch |
 | `CLOSE` | teardown (release resources); `before`/`after` describe execution here too, and ties go to the latest registered | — | once |
 
 ### Ordering
