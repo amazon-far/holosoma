@@ -23,6 +23,7 @@ dependencies = [
     "astor",
     "boto3",
     "easydict",
+    "imageio-ffmpeg>=0.6.0",
     "ipdb",
     "joblib",
     "loguru",
@@ -33,7 +34,7 @@ dependencies = [
     "mypy==1.14.1",
     "notebook",
     "numpy-stl",
-    "numpy>=1.23.5,<2",
+    "numpy>=1.23.5",  # Isaac Lab 2 setup constrains <2; Isaac Lab 3 requires >=2.
     "omegaconf",  # Used for config resolvers and DictConfig type hints
     "onnx",
     "onnxruntime",

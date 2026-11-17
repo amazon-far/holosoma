@@ -1,18 +1,4 @@
-#!/bin/bash
-# CI runs this inside holosoma docker
-set -ex
-
-
-cd /workspace/holosoma
-
-source scripts/source_isaacsim_setup.sh
-python -m pip install -e 'src/holosoma[unitree,booster]'
-
-marker="isaacsim"
-if [[ "$HOLOSOMA_MULTIGPU" == "True" ]]; then
-   marker="$marker and multi_gpu"
-elif [[ "$HOLOSOMA_MULTIGPU" == "False" ]]; then
-   marker="$marker and not multi_gpu"
-fi
-
-python -m pytest -s --strict-markers -m "$marker" --ignore=thirdparty --ignore=src/holosoma_inference
+#!/usr/bin/env bash
+# Released test-script alias for Isaac Lab 2.
+if [[ $# == 0 ]]; then set -- --backend isaaclab2; fi
+exec bash "$(dirname -- "${BASH_SOURCE[0]}")/isaaclab_ci_tests.sh" "$@"

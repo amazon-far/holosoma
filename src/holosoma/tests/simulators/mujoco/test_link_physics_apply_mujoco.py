@@ -5,8 +5,7 @@ Exercise the spawn-time seam ``MujocoSceneManager._apply_link_physics_to_robot``
 the compiled ``MjModel``. Checks that configured values land on robot link geoms, that the
 whole-robot path does not write mass, and that foreign-backend sub-configs are ignored on MuJoCo.
 
-The seam applies the whole-robot ``link_physics`` uniformly with ``apply_mass=False`` (no per-link
-override).
+The seam applies whole-robot defaults, then the first matching per-link override.
 """
 
 from __future__ import annotations

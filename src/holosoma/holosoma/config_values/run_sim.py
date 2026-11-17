@@ -11,27 +11,37 @@ These configurations extend the base simulator configs with sim2sim-specific set
 import dataclasses
 
 import holosoma.config_values.simulator
-from holosoma.config_types.simulator import BridgeConfig, SimulatorConfig, VirtualGantryCfg
+from holosoma.config_types.simulator import BridgeConfig, IsaacLabBackend, SimulatorConfig, VirtualGantryCfg
 from holosoma.utils.config_registry import ConfigRegistry
 
 RUN_SIM_REGISTRY = ConfigRegistry(SimulatorConfig, group="holosoma.config.run_sim")
 
-# IsaacSim with sim2sim optimizations
-isaacsim = RUN_SIM_REGISTRY.add(
-    "isaacsim",
+# Isaac Lab with sim2sim optimizations
+isaaclab2 = RUN_SIM_REGISTRY.add(
+    "isaaclab2",
     dataclasses.replace(
-        holosoma.config_values.simulator.isaacsim,
+        holosoma.config_values.simulator.isaaclab2,
         config=dataclasses.replace(
-            holosoma.config_values.simulator.isaacsim.config,
+            holosoma.config_values.simulator.isaaclab2.config,
             bridge=BridgeConfig(enabled=True),
             virtual_gantry=VirtualGantryCfg(enabled=True),
             sim=dataclasses.replace(
-                holosoma.config_values.simulator.isaacsim.config.sim,
+                holosoma.config_values.simulator.isaaclab2.config.sim,
                 fps=200,
             ),
         ),
     ),
 )
+
+isaaclab3 = RUN_SIM_REGISTRY.add(
+    "isaaclab3",
+    dataclasses.replace(
+        isaaclab2,
+        config=dataclasses.replace(isaaclab2.config, name="isaaclab3", isaaclab_backend=IsaacLabBackend.ISAACLAB3),
+    ),
+)
+
+isaacsim = RUN_SIM_REGISTRY.add("isaacsim", isaaclab2)
 
 # MuJoCo with sim2sim optimizations
 mujoco = RUN_SIM_REGISTRY.add(

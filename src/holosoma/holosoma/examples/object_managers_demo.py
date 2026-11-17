@@ -49,8 +49,8 @@ Run it (MuJoCo CPU needs no GPU; the others need their SDK + a CUDA device):
     python -m holosoma.examples.object_managers_demo --backend mjwarp --num-envs 4
 
     # Isaac backends (need the respective SDK):
-    python -m holosoma.examples.object_managers_demo --backend isaacsim --num-envs 4
-    python -m holosoma.examples.object_managers_demo --backend isaacsim
+    python -m holosoma.examples.object_managers_demo --backend isaaclab2 --num-envs 4
+    python -m holosoma.examples.object_managers_demo --backend isaaclab3
 
 The scene is the ``object-managers-demo`` preset (``config_values/scene.py``); it is also
 selectable from the normal CLI, e.g. ``run_sim.py simulator:mujoco scene:object-managers-demo``.
@@ -77,7 +77,9 @@ if TYPE_CHECKING:
 _BACKENDS = {
     "mujoco": ("mujoco", "cpu"),
     "mjwarp": ("mjwarp", "cuda:0"),
-    "isaacsim": ("isaacsim", "cuda:0"),
+    "isaaclab2": ("isaaclab2", "cuda:0"),
+    "isaaclab3": ("isaaclab3", "cuda:0"),
+    "isaacsim": ("isaaclab2", "cuda:0"),
 }
 
 # The four base-frame object observation terms, as a reusable group config. Each defaults to

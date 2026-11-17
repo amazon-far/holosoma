@@ -85,6 +85,11 @@ def run_harness(
         timeout=timeout,
         check=False,
     )
+    if result_file is not None:
+        # Keep actual per-environment outcomes, including failed runs, beside
+        # the verdict for GPU validation. Pytest's failure tail is not the evidence.
+        Path(result_file).with_suffix(".stdout.log").write_text(result.stdout)
+        Path(result_file).with_suffix(".stderr.log").write_text(result.stderr)
     # Runtime skip: the harness signalled (via the autotools-convention exit 77) that this cell is
     # unsupported in a way only knowable at runtime. Surface it as a real pytest skip with reason,
     # not a pass. Checked before the success assertions so a skip is never mistaken for a failure.
@@ -103,3 +108,34 @@ def run_harness(
     else:
         assert result.returncode == 0, _fail_message(label, result.returncode, result.stdout, result.stderr)
     return result
+
+
+def run_isaacsim_harness(
+    harness: str | Path,
+    *args: str,
+    simulator: str,
+    label: str,
+    timeout: float,
+    result_file: str | Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Route a native harness to one explicit preset, preserving all success checks."""
+    if simulator not in {"isaaclab2", "isaaclab3", "isaacsim"}:
+        raise ValueError(f"Expected an Isaac Sim preset, got {simulator!r}.")
+    routed_args = []
+    arguments = iter(args)
+    for argument in arguments:
+        if argument == "--simulator":
+            value = next(arguments, None)
+            if value is None or value.startswith("--"):
+                raise ValueError("--simulator requires a preset value")
+        elif not argument.startswith("--simulator="):
+            routed_args.append(argument)
+    return run_harness(
+        harness,
+        "--simulator",
+        simulator,
+        *routed_args,
+        label=label,
+        timeout=timeout,
+        result_file=result_file,
+    )

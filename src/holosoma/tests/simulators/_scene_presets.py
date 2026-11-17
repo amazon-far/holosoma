@@ -130,7 +130,8 @@ def _friction_box(y: float, friction: float) -> RigidObjectConfig:
         linear_velocity=[2.0, 0.0, 0.0],
         physics=PhysicsConfig(
             isaacsim=IsaacSimPhysicsConfig(static_friction=friction, dynamic_friction=friction),
-            mujoco=MujocoPhysicsConfig(friction=[friction, 0.005, 0.001]),
+            # MuJoCo otherwise takes max(object, ground), hiding the low value.
+            mujoco=MujocoPhysicsConfig(friction=[friction, 0.005, 0.001], priority=1),
         ),
     )
 
@@ -343,12 +344,14 @@ dr_friction_pair = SceneConfig(
             usd_file=_SMALL_BOX_USD,
             position=[0.0, 2.0, 0.07],
             linear_velocity=[2.0, 0.0, 0.0],
+            physics=PhysicsConfig(mujoco=MujocoPhysicsConfig(priority=1)),
         ),
         "dr_hi": RigidObjectConfig(
             urdf_file=_SMALL_BOX,
             usd_file=_SMALL_BOX_USD,
             position=[0.0, -2.0, 0.07],
             linear_velocity=[2.0, 0.0, 0.0],
+            physics=PhysicsConfig(mujoco=MujocoPhysicsConfig(priority=1)),
         ),
     }
 )

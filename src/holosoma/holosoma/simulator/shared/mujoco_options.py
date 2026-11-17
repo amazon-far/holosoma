@@ -1,4 +1,4 @@
-"""Apply native settings at the scene and backend stages that consume them.
+"""Apply shared MuJoCo settings without importing a simulator implementation.
 
 ``MujocoSceneManager.compile`` applies world options before compiling the spec.
 Warp-specific validation and application belong to the backend. Reset preserves

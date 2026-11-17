@@ -11,7 +11,7 @@ import mujoco
 import numpy as np
 
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
-from holosoma.simulator.mujoco.native_config import enum_value, validate_value
+from holosoma.simulator.shared.mujoco_options import enum_value, validate_value
 
 UNSUPPORTED_ENABLE_FLAGS = {
     "sleep": "pose and DOF state writes do not wake sleeping trees",

@@ -17,6 +17,8 @@ The code is adapted from Isaac Lab's terrain generation utilities with modificat
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import numpy.typing as npt
 from scipy import interpolate
@@ -212,7 +214,7 @@ def pyramid_stairs_terrain(
 
 
 def convert_heightfield_to_trimesh(
-    height_field_raw: npt.NDArray[np.int_],
+    height_field_raw: npt.NDArray[np.signedinteger[Any]],
     horizontal_scale: float,
     vertical_scale: float,
     slope_threshold: float | None = None,

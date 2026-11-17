@@ -1,7 +1,7 @@
 """Behavioral physics tests on the IsaacSim backend via the behavior_assert.py harness.
 
-Each test runs one behavioral scenario in its own subprocess at num_envs=4 and asserts the
-harness exited 0 — the harness asserts a physical OUTCOME in EVERY env. Marked ``isaacsim`` so the
+Each test runs one behavioral scenario in its own subprocess at num_envs=4 and checks its
+completion file — the harness asserts a physical OUTCOME in EVERY env. Marked ``isaacsim`` so the
 IsaacSim CI job (``-m isaacsim``) collects it; importorskip
 ("isaaclab")/CUDA-gated for direct/unfiltered runs.
 """
@@ -19,13 +19,10 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("IsaacSim requires a CUDA device", allow_module_level=True)
 
-from tests.simulators._run_harness import run_harness  # noqa: E402
-
 _HARNESS = Path(__file__).resolve().parents[1] / "behavior_assert.py"
 
-# The full behavioral catalog runs on IsaacSim at num_envs=4 — every scenario (including the
-# multi-env ones) is supported here, so there are no static skips to mark. USD-backed; every
-# behavioral preset ships a usd file. damping/restitution use the native PhysX fields here.
+# The released PhysX catalog is preserved. Newton runs the same downstream assertions
+# except explicitly PhysX-only damping/combine-mode contracts. All checks run in every world.
 _SCENARIOS = [
     "collide-into-fixed",
     "momentum-transfer",
@@ -39,6 +36,8 @@ _SCENARIOS = [
     "restitution-bounce",
     "angular-velocity-spin",
     "velocity-restore-reset",
+    "mass-force-response",
+    "inertia-torque-response",
     "object-obs-robot-pose",
     "pose-jitter-settle",
     "loader-invariance",
@@ -58,15 +57,41 @@ _SCENARIOS = [
 
 
 @pytest.mark.parametrize("scenario", _SCENARIOS)
-def test_behavior_isaacsim(scenario):
-    run_harness(
+@pytest.mark.parametrize("physics", ["physx", "newton"])
+def test_behavior_isaacsim(scenario, physics, isaaclab_backend, tmp_path, run_isaacsim_harness):
+    if physics == "newton":
+        if isaaclab_backend != "isaaclab3":
+            pytest.skip("Newton MJWarp requires Isaac Lab 3")
+        from tests.simulators.behavior_assert import NEWTON_UNSUPPORTED
+
+        if scenario in NEWTON_UNSUPPORTED:
+            pytest.skip(f"Newton MJWarp: {NEWTON_UNSUPPORTED[scenario]}")
+    result_file = tmp_path / f"behavior_{scenario}.txt"
+    # These assertions concern scene objects, not a collapsing humanoid.
+    # The pinned Newton stack can overflow/diverge during unactuated G1 falls.
+    robot = (
+        "onelink-box"
+        if physics == "newton" and scenario in {"collide-into-fixed", "per-env-relocation"}
+        else "g1-29dof"
+    )
+    result = run_isaacsim_harness(
         _HARNESS,
         "--scenario",
         scenario,
-        "--simulator",
-        "isaacsim",
+        "--physics-backend",
+        physics,
+        "--robot",
+        robot,
         "--num-envs",
         "4",
-        label=f"isaacsim/{scenario} (num_envs=4)",
+        "--result-file",
+        str(result_file),
+        label=f"isaacsim/{physics}/{robot}/{scenario} (num_envs=4)",
         timeout=900,
+        result_file=result_file,
+    )
+    assert result.returncode == 0, result.stderr[-3000:]
+    output = (result.stdout + result.stderr).lower()
+    assert all(message not in output for message in ("nefc overflow", "ncon overflow", "narrowphase overflow")), (
+        result.stdout[-3000:]
     )

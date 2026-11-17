@@ -30,22 +30,26 @@ def assemble_default_mesh_prim_paths(
     robot_mesh_prim_paths: Callable[[str | None], list[str]],
     actor_names: Iterable[str],
     discover_mesh_prim_paths: Callable[[str, str], Iterable[str]],
+    env_regex_ns: str = "/World/envs/env_.*",
+    terrain_mesh_prim_paths: Iterable[str] = (TERRAIN_PRIM_PATH,),
 ) -> list[str]:
     """Combine visual robot, ground, and scene-object targets after applying the body filter.
 
-    The ground is always the cached terrain mesh at :data:`TERRAIN_PRIM_PATH`.
+    Lab 2 uses the cached terrain root. Lab 3 callers supply discovered native
+    terrain geometry, since its concrete casters have their own mesh caches.
     """
     exclude_robot = excluded_target is not None and excluded_target[0] == "robot"
     excluded_robot_link = (
         excluded_target[1] if excluded_target is not None and excluded_target[0] == "robot_link" else None
     )
     paths = [] if exclude_robot else list(robot_mesh_prim_paths(excluded_robot_link))
-    paths.append(TERRAIN_PRIM_PATH)
+    paths.extend(terrain_mesh_prim_paths)
     for actor_name in actor_names:
         if excluded_target != ("actor", actor_name):
-            paths.extend(
-                discover_mesh_prim_paths(f"/World/envs/env_0/{actor_name}", f"/World/envs/env_.*/{actor_name}")
-            )
+            paths.extend(discover_mesh_prim_paths(f"/World/envs/env_0/{actor_name}", f"{env_regex_ns}/{actor_name}"))
+    if not paths:
+        suffix = " (body filter 'robot' excluded the robot)." if exclude_robot else "."
+        raise RuntimeError("Isaac Sim ray-cast auto-discovery found no supported visual scene meshes" + suffix)
     return paths
 
 

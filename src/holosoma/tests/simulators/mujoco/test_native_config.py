@@ -25,14 +25,14 @@ from holosoma.config_types.scene import MujocoPhysicsConfig, PhysicsConfig  # no
 from holosoma.config_values.robot import g1_29dof  # noqa: E402
 from holosoma.config_values.simulator import mjwarp  # noqa: E402
 from holosoma.config_values.simulator import mujoco as preset  # noqa: E402
-from holosoma.simulator.mujoco.backends.native_config import (  # noqa: E402
+from holosoma.simulator.mujoco.scene_manager import MujocoSceneManager  # noqa: E402
+from holosoma.simulator.shared.mujoco_options import effective_options  # noqa: E402
+from holosoma.simulator.shared.mujoco_warp_options import (  # noqa: E402
     allocation_kwargs,
     apply_warp_model,
     validate_warp_options,
     warp_option_overrides,
 )
-from holosoma.simulator.mujoco.native_config import effective_options  # noqa: E402
-from holosoma.simulator.mujoco.scene_manager import MujocoSceneManager  # noqa: E402
 from holosoma.utils.config_registry import parse_config  # noqa: E402
 from holosoma.utils.eval_utils import CheckpointConfig, load_saved_experiment_config  # noqa: E402
 from tests.simulators.mujoco._build import build_classic_sim, build_warp_sim  # noqa: E402
@@ -661,14 +661,18 @@ def test_warp_device_array_conversion_on_cpu_does_not_claim_gpu_execution():
         warp=MujocoWarpConfig(graph_conditional=False, extras={"broadphase_filter": "sphere|sphere|plane"}),
     )
     model = compiled(native, backend=mjwarp)
+    assert model.opt.disableflags == 0
     with wp.ScopedDevice("cpu"):
         uploaded = mjw.put_model(model)
+        # MJWarp versions differ in their island flags. Holosoma must preserve
+        # the installed converter's policy when applying execution options.
+        converted_disableflags = uploaded.opt.disableflags
         assert uploaded.opt.tolerance.numpy()[0] == pytest.approx(1e-6)
         apply_warp_model(uploaded, native, warp_option_overrides(native.warp))
     np.testing.assert_allclose(uploaded.opt.tolerance.numpy(), [1e-8])
     np.testing.assert_allclose(uploaded.opt.gravity.numpy(), [[0, 0, -2]])
     np.testing.assert_allclose(uploaded.opt.impratio_invsqrt.numpy(), [1 / np.sqrt(10)])
-    assert uploaded.opt.disableflags == int(mjw.DisableBit.ISLAND)
+    assert uploaded.opt.disableflags == converted_disableflags
     assert uploaded.opt.graph_conditional is False
     assert uploaded.opt.broadphase_filter == int(mjw.BroadphaseFilter.SPHERE | mjw.BroadphaseFilter.PLANE)
     with wp.ScopedDevice("cpu"):

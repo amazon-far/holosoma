@@ -17,7 +17,12 @@ skip a test by omission. A sim test outside ``tests/simulators/<backend>/`` must
 umbrella explicitly; a pure test inside such a dir opts out with ``pytest.mark.no_sim``.
 """
 
+from __future__ import annotations
+
 import os
+import subprocess
+from collections.abc import Callable
+from functools import partial
 
 import pytest
 
@@ -33,6 +38,35 @@ _ALL_MARKERS = {
     "no_sim": "no simulator (pure / CPU-only)",
     "requires_inference": "the inference environment",
 }
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--isaaclab-backend",
+        "--isaacsim-backend",
+        choices=["isaaclab2", "isaaclab3", "isaacsim"],
+        default="isaaclab2",
+        help="Isaac Sim version for the simulator tests (default: isaaclab2)",
+    )
+
+
+@pytest.fixture(scope="session")
+def isaaclab_backend(pytestconfig: pytest.Config) -> str:
+    selected = pytestconfig.getoption("--isaaclab-backend")
+    return "isaaclab2" if selected == "isaacsim" else selected
+
+
+@pytest.fixture(scope="session")
+def isaacsim_simulator(isaaclab_backend: str) -> str:
+    return isaaclab_backend
+
+
+@pytest.fixture
+def run_isaacsim_harness(isaacsim_simulator: str) -> Callable[..., subprocess.CompletedProcess[str]]:
+    """Run each native child with the explicitly selected pytest profile."""
+    from tests.simulators._run_harness import run_isaacsim_harness as run_selected_harness
+
+    return partial(run_selected_harness, simulator=isaacsim_simulator)
 
 
 def pytest_configure(config):

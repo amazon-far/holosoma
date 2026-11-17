@@ -53,6 +53,12 @@ temp/
 *.pt
 wandb/
 
+# Isaac Sim generates rank-local URDF conversions during native tests.
+src/holosoma/holosoma/data/robots/converted/
+src/holosoma/holosoma/data/robots/converted_rank*/
+src/holosoma/holosoma/data/robots/*/converted/
+src/holosoma/holosoma/data/robots/*/converted_rank*/
+
 # etc
 .claude/
 .jj/

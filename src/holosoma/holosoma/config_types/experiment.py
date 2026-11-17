@@ -240,10 +240,12 @@ class ExperimentConfig:
 
     def save_config(self, path: str) -> None:
         with open(path, "w") as file:
-            yaml.safe_dump(self.to_serializable_dict(), file)
+            # Pattern mappings use first-match precedence, so preserve their order.
+            yaml.safe_dump(self.to_serializable_dict(), file, sort_keys=False)
 
     def to_serializable_dict(self) -> dict[str, Any]:
         """Return a JSON-friendly representation of the config."""
+        data = dataclasses.asdict(self)
         # Directly using yaml.safe_dump does not handle string enums properly,
         # so round-trip through JSON to coerce typing objects into primitives.
-        return cast("dict[str, Any]", json.loads(json.dumps(dataclasses.asdict(self))))
+        return cast("dict[str, Any]", json.loads(json.dumps(data)))

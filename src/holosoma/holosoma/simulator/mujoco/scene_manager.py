@@ -17,8 +17,8 @@ from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoXMLFilterCfg, SimulatorConfig
 from holosoma.managers.terrain.base import TerrainTermBase
 from holosoma.simulator.mujoco.geom_groups import tag_compiled_robot_geom_groups
-from holosoma.simulator.mujoco.native_config import apply_fields, apply_world_config
 from holosoma.simulator.shared.asset_format import select_asset_format
+from holosoma.simulator.shared.mujoco_options import apply_fields, apply_world_config
 from holosoma.utils.path import resolve_asset_path
 
 CAMERA_MOUNT_SITE_PREFIX = "holosoma_camera_mount_"
@@ -757,8 +757,13 @@ class MujocoSceneManager:
         if self.robot_config is None:
             return
         asset = self.robot_config.asset
-        native = asset.link_physics.mujoco if asset.link_physics is not None else None
-        if asset.enable_self_collisions or native is None or (native.contype is None and native.conaffinity is None):
+        configs = [asset.link_physics]
+        if asset.enable_self_collisions or not any(
+            physics is not None
+            and physics.mujoco is not None
+            and (physics.mujoco.contype is not None or physics.mujoco.conaffinity is not None)
+            for physics in configs
+        ):
             return
         # Compiled body IDs follow tree order; retained worldbody geoms are environment.
         bodies = {root_body_id}

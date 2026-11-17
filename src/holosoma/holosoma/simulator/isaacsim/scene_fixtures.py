@@ -12,8 +12,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import isaaclab.sim as sim_utils
 import numpy as np
-import isaacsim.core.utils.stage as stage_utils
-from isaaclab.sensors import RayCaster, RayCasterCfg, patterns
+from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.utils import create_prim_from_mesh
 from pxr import Usd, UsdGeom
@@ -27,10 +26,10 @@ if TYPE_CHECKING:
 
     from holosoma.managers.terrain import TerrainManager
     from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
+    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackendAdapter
 
 GROUND_PLANE_SIZE_M = 4.0e3
-"""Side length of the plane terrain's ray-cast mesh, in metres. Ray sensors hit it in float32, so it
-stays small enough for sub-millimetre hits; physics uses IsaacLab's infinite collider."""
+"""Side length of Lab 2's finite ray-cast ground mesh; physics uses the infinite plane."""
 
 
 class TerrainFixtures(NamedTuple):
@@ -58,7 +57,11 @@ def _hide_prim_subtree(stage: Usd.Stage, prim_path: str) -> None:
 
 
 def build_terrain_fixtures(
-    terrain_manager: TerrainManager, scene: InteractiveScene, robot_base_body_name: str
+    terrain_manager: TerrainManager,
+    scene: InteractiveScene,
+    robot_base_body_name: str,
+    *,
+    backend: IsaacLabBackendAdapter,
 ) -> TerrainFixtures:
     """Author the terrain ground prim + optional height scanner cfg.
 
@@ -88,10 +91,13 @@ def build_terrain_fixtures(
     if terrain_state.mesh_type not in ["fake", None]:
         # Add a height scanner to the torso to detect the height of the terrain mesh
         # TODO: Scene USD files need ground mapping
+        alignment_kwargs: dict[str, str | bool] = (
+            {"ray_alignment": "yaw"} if backend.is_isaaclab3 else {"attach_yaw_only": True}
+        )
         height_scanner_cfg = RayCasterCfg(
-            prim_path=resolve_robot_link_prim_expression(robot_base_body_name),
+            prim_path=resolve_robot_link_prim_expression(robot_base_body_name, backend=backend),
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
-            attach_yaw_only=True,
+            **alignment_kwargs,
             # Apply a grid pattern that is smaller than the resolution to only return one height value.
             pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[0.05, 0.05]),
             debug_vis=False,
@@ -121,7 +127,7 @@ def build_terrain_fixtures(
         # Hide the ground plane's visual while keeping its collider; avoids z-fighting a scene
         # USD's own floor. Applied to the whole /World/ground subtree.
         if terrain_state.hide_visual:
-            _hide_prim_subtree(stage_utils.get_current_stage(), TERRAIN_PRIM_PATH)
+            _hide_prim_subtree(backend.stage_utils.get_current_stage(), TERRAIN_PRIM_PATH)
     elif terrain_state.mesh_type in ["trimesh", "load_obj"]:
         terrain = terrain_state.terrain
         visual_material = sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0))
@@ -145,7 +151,9 @@ def build_terrain_fixtures(
     return TerrainFixtures(global_collision_prims, height_scanner_cfg, terrain)
 
 
-def register_terrain_mesh_cache(terrain_manager: TerrainManager, scene: InteractiveScene) -> None:
+def register_terrain_mesh_cache(
+    terrain_manager: TerrainManager, scene: InteractiveScene, *, backend: IsaacLabBackendAdapter
+) -> None:
     """Register the ground's ray-cast mesh at ``/World/ground`` in IsaacLab's ray-caster cache.
 
     Trimesh/OBJ terrain shares the terrain manager's mesh; plane terrain gets a flat square
@@ -153,6 +161,11 @@ def register_terrain_mesh_cache(terrain_manager: TerrainManager, scene: Interact
     constructed, since IsaacLab's config validator would recurse into a populated
     ``RayCaster.meshes``, and before they initialize.
     """
+    if backend.is_isaaclab3:
+        # Lab 3 concrete casters extract/cache the actual ground geometry themselves.
+        return
+    from isaaclab.sensors import RayCaster
+
     terrain_state = terrain_manager.get_state("locomotion_terrain")
     if terrain_state.mesh_type in ["trimesh", "load_obj"]:
         mesh = cast("TerrainLocomotion", terrain_state).warp_mesh

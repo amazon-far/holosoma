@@ -9,10 +9,12 @@ count conversion, the per-step advance (+ optional render), and the bridge/gantr
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import math
 import os
 import sys
+import traceback
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, NoReturn
@@ -20,6 +22,27 @@ from typing import Any, NoReturn
 import tyro
 
 from holosoma.config_types.run_sim import RunSimConfig
+
+
+def add_isaaclab3_arguments(parser: argparse.ArgumentParser) -> None:
+    """Expose engine selection to shared harnesses without changing released defaults."""
+    parser.add_argument("--physics-backend", choices=["physx", "newton"], default="physx")
+    parser.add_argument("--renderer", choices=["isaac_rtx", "newton_warp", "ovrtx"], default="isaac_rtx")
+
+
+def configure_isaaclab3(config: RunSimConfig, args: argparse.Namespace) -> RunSimConfig:
+    """Select native physics/rendering only for the explicit Lab 3 test profile."""
+    if args.simulator != "isaaclab3":
+        return config
+    sim = config.simulator.config.sim
+    native = dataclasses.replace(sim.isaaclab3, physics_backend=args.physics_backend, renderer=args.renderer)
+    return dataclasses.replace(
+        config,
+        simulator=dataclasses.replace(
+            config.simulator,
+            config=dataclasses.replace(config.simulator.config, sim=dataclasses.replace(sim, isaaclab3=native)),
+        ),
+    )
 
 
 def run_and_hard_exit(main: Callable[[], int]) -> NoReturn:
@@ -32,16 +55,36 @@ def run_and_hard_exit(main: Callable[[], int]) -> NoReturn:
     (verdict already written to ``--result-file``) into a spurious timeout failure. Flushing then
     ``os._exit`` skips the atexit teardown entirely; rendering itself is fine, only clean shutdown
     hangs. (behavior_assert / scene_spawn_assert use the same escape for the MuJoCo-viewer race.)
+    Exceptions also take this path so a launcher's atexit hook cannot turn a failed harness into
+    exit zero. Ordinary exceptions print their traceback and exit one; interrupts exit 130.
 
     Use in a harness entrypoint::
 
         if __name__ == "__main__":
             run_and_hard_exit(main)
     """
-    rc = main()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(rc)
+    try:
+        rc = main()
+    except KeyboardInterrupt:
+        rc = 130
+    except SystemExit as error:
+        if error.code is None:
+            rc = 0
+        elif isinstance(error.code, int):
+            rc = error.code
+        else:
+            print(error.code, file=sys.stderr)
+            rc = 1
+    except Exception:
+        traceback.print_exc()
+        rc = 1
+    try:
+        sys.stdout.flush()
+    finally:
+        try:
+            sys.stderr.flush()
+        finally:
+            os._exit(rc)
 
 
 def steps_for_seconds(sim: Any, seconds: float) -> int:
@@ -67,11 +110,15 @@ def step(sim: Any, n: int, *, render: bool = False) -> None:
             sim.render()
 
 
-def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[Any, str, Any]:
+def launch_simulator(
+    config: RunSimConfig, device: str | None = None, *, before_construct: Callable[[], None] | None = None
+) -> tuple[Any, str, Any]:
     """Construct the configured simulator without running its setup lifecycle.
 
     Harnesses drive ``setup -> setup_terrain -> load_assets -> create_envs -> prepare_sim``
     themselves so they can act between stages; tasks use ``RunSimConfig.create_task()`` instead.
+    ``before_construct`` can author test assets after runtime/USD activation,
+    before the simulator constructor spawns its scene.
 
     Returns
     -------
@@ -93,6 +140,8 @@ def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[A
     simulation_app = None
     if get_simulator_type() == SimulatorType.ISAACSIM:
         simulation_app = setup_isaaclab_launcher(env_config, device)
+    if before_construct is not None:
+        before_construct()
 
     full_config = FullSimConfig(
         simulator=config.simulator.config,
@@ -148,7 +197,9 @@ def build_run_sim_config(
             virtual_gantry=VirtualGantryCfg(enabled=False),
         ),
     )
-    config = dataclasses.replace(config, simulator=sim_cfg)
+    config = dataclasses.replace(
+        config, simulator=sim_cfg, training=dataclasses.replace(config.training, headless=True)
+    )
 
     if record_dir is not None:
         video_kwargs: dict[str, Any] = {

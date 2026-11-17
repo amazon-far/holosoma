@@ -575,14 +575,57 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     preset = SIMULATOR_REGISTRY[_SURVIVING_BACKEND_FIXTURES[fixture_name]]
     assert (loaded_cfg.simulator._target_, loaded_cfg.simulator.config.name) == (preset._target_, preset.config.name)
     saved_simulator = copy.deepcopy(saved["simulator"])
+    if saved_simulator["config"]["name"] == "isaacsim":
+        # Released checkpoints retain their engine/settings; only the emitted
+        # backend name becomes the canonical Lab 2 spelling.
+        assert loaded_cfg.simulator.config.name == "isaaclab2"
+        saved_simulator["config"]["name"] = "isaaclab2"
     saved_simulator["config"].pop("contact_sensor_history_length")
     saved_warp = saved_simulator["config"].pop("mujoco_warp")
     loaded_simulator = copy.deepcopy(loaded["simulator"])
     loaded_simulator["config"]["sim"].pop("mujoco")
+    # New backend fields must default to the previous API when loading an old
+    # checkpoint, including in a Lab 3 environment.
+    assert loaded_simulator["config"].pop("isaaclab_backend") == "isaaclab2"
+    assert loaded_simulator["config"]["sim"].pop("isaaclab3") == {
+        "physics_backend": "physx",
+        "renderer": "isaac_rtx",
+        "require_kit": False,
+        "newton": {
+            "use_cuda_graph": True,
+            "default_shape_margin": 0.01,
+            "collision_source": "mujoco",
+            "collision": {
+                "broad_phase": "explicit",
+                "reduce_contacts": True,
+                "rigid_contact_max": None,
+                "max_triangle_pairs": 1_000_000,
+                "soft_contact_max": None,
+                "soft_contact_margin": 0.01,
+            },
+            "deterministic_mode": "not_guaranteed",
+            "debug_mode": False,
+            "collision_decimation": 0,
+        },
+        "renderer_options": {
+            "enable_shadows": None,
+            "use_cuda_graph": None,
+            "enable_textures": None,
+            "enable_ambient_lighting": None,
+            "enable_backface_culling": None,
+        },
+        "use_fabric": True,
+        "create_stage_in_memory": False,
+        "use_newton_actuators": True,
+        "contact_force_mode": "normal",
+    }
     assert loaded_simulator == saved_simulator
     assert loaded_cfg.simulator.config.sim.mujoco.warp.nconmax_per_env == saved_warp["nconmax_per_env"]
     assert loaded_cfg.simulator.config.sim.mujoco.warp.njmax_per_env == saved_warp["njmax_per_env"]
-    assert loaded["robot"]["asset"]["link_physics"] == _without(saved["robot"]["asset"]["link_physics"])
+    loaded_link_physics = copy.deepcopy(loaded["robot"]["asset"]["link_physics"])
+    if loaded_link_physics is not None:
+        assert loaded_link_physics.pop("newton") is None
+    assert loaded_link_physics == _without(saved["robot"]["asset"]["link_physics"])
     assert "apply_dof_armature_in_isaacgym" not in loaded["robot"]
     for name, sensor in saved["sensor"].items():
         loaded_sensor = copy.deepcopy(loaded["sensor"][name])

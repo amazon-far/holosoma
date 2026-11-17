@@ -1,9 +1,9 @@
 """Cross-backend actor-mount camera assertion harness.
 
 Exercises the ``target_kind="actor"`` mount resolver (a camera mounted on a spawned scene
-object rather than a robot link). Mounts a camera on the spawned ``panel`` object and asserts
-the frame has the expected shape/dtype and is non-blank. Then moves the panel and asserts the
-rendered frame changes, confirming the camera follows the actor. Exits 0 PASS, 1 FAIL, 77 SKIP.
+object rather than a robot link). A camera outside its parent panel observes a separate,
+stationary reference panel. Moving the parent must change the reference's measured depth by
+the same distance in every environment. Exits 0 PASS, 1 FAIL, 77 SKIP.
 """
 
 from __future__ import annotations
@@ -17,7 +17,9 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from tests.simulators._sim_harness import (
+    add_isaaclab3_arguments,
     build_run_sim_config,
+    configure_isaaclab3,
     launch_simulator,
     run_and_hard_exit,
     step,
@@ -32,12 +34,15 @@ SKIP_EXIT_CODE = 77
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument(
+        "--simulator", required=True, choices=["mujoco", "mjwarp", "isaaclab2", "isaaclab3", "isaacsim"]
+    )
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--headless", choices=["true", "false"], default="true")
     parser.add_argument("--result-file", default=None, help="write OK/FAIL here before teardown")
+    add_isaaclab3_arguments(parser)
     args = parser.parse_args()
 
     from tests.simulators import _camera_presets
@@ -45,8 +50,30 @@ def main() -> int:
     headless = args.headless == "true"
     sim_arg = "mujoco" if args.simulator == "mjwarp" else args.simulator
     config = build_run_sim_config(sim_arg, "panel-target", args.robot, args.terrain, sensors=_camera_presets.actor_cam)
+    camera = cast("CameraSensorConfig", config.sensor["panel_cam"])
+    reference = dataclasses.replace(config.scene.rigid_objects["panel"], position=[2.0, 0.0, _camera_presets._BASE_Z])
+    config = dataclasses.replace(
+        config,
+        sensor={
+            "panel_cam": dataclasses.replace(
+                camera,
+                mount=dataclasses.replace(
+                    camera.mount, position=[0.1, 0.0, 0.0], orientation=_camera_presets._LOOK_FORWARD_WXYZ
+                ),
+                data_types=["rgb", "depth"],
+            )
+        },
+        scene=dataclasses.replace(
+            config.scene, rigid_objects={**config.scene.rigid_objects, "reference_panel": reference}
+        ),
+        robot=dataclasses.replace(
+            config.robot,
+            init_state=dataclasses.replace(config.robot.init_state, pos=[-5.0, 0.0, _camera_presets._BASE_Z]),
+        ),
+    )
     if args.simulator == "mjwarp":
         config = _camera_presets.as_mjwarp(config)
+    config = configure_isaaclab3(config, args)
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
@@ -88,16 +115,36 @@ def main() -> int:
         if float(lum.max()) - float(lum.min()) < 1.0:
             fails.append(f"{args.simulator}/env{e}: actor-mount frame ~uniform; renderer saw nothing")
 
-    # Follow: move the panel and confirm the panel-mounted camera's frame changes.
-    before = img.clone()
+    from tests.simulators.camera_follow_assert import _panel_median_depth
+
+    def reference_depths():
+        rgb = sim.get_camera_data("panel_cam", "rgb")
+        depth = sim.get_camera_data("panel_cam", "depth")
+        return [_panel_median_depth(rgb[e], depth[e]) for e in range(n)]
+
+    # The old fixture placed the camera inside its parent panel. Both moved together,
+    # so an unchanged image could be correct. A stationary reference constrains follow.
+    before = reference_depths()
+    for e, distance in enumerate(before):
+        if distance is None or abs(distance - 0.89) > 0.04:
+            fails.append(f"{args.simulator}/env{e}: reference depth {distance}, expected 0.89 m")
     panel_states = sim.get_actor_states(["panel"], torch.arange(n, device=device)).clone()
-    panel_states[:, 2] += 0.5  # lift the panel 0.5 m
-    sim.set_actor_states(["panel"], torch.arange(n, device=device), panel_states)
+    move = 0.15
+    selected = torch.arange(0, n, 2, device=device)
+    panel_states[selected, 0] += move
+    old_rgb = sim.get_camera_data("panel_cam", "rgb")
+    old_depth = sim.get_camera_data("panel_cam", "depth")
+    owned_rgb, owned_depth = old_rgb.clone(), old_depth.clone()
+    sim.set_actor_states(["panel"], selected, panel_states[selected])
     step(sim, max(2, steps_for_seconds(sim, 0.05)))
     sim.render_sensors()
-    after = sim.get_camera_data("panel_cam", "rgb")
-    if torch.equal(before, after):
-        fails.append(f"{args.simulator}: panel-mounted camera frame unchanged after moving the panel (not following)")
+    after = reference_depths()
+    for e, (old, new) in enumerate(zip(before, after, strict=True)):
+        expected = move if e % 2 == 0 else 0.0
+        if old is None or new is None or abs((old - new) - expected) > 0.04:
+            fails.append(f"{args.simulator}/env{e}: reference depth {old} -> {new}, expected a {expected} m decrease")
+    if not torch.equal(old_rgb, owned_rgb) or not torch.equal(old_depth, owned_depth):
+        fails.append("retained actor-mount output mutated after the next capture")
 
     if args.result_file:
         with open(args.result_file, "w") as fh:

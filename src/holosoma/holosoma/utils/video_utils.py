@@ -191,17 +191,41 @@ def create_video(
             # mp4v straight from OpenCV
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # type: ignore[attr-defined]
             out = cv2.VideoWriter(str(final_video), fourcc, fps, (w, h))
-            if not out.isOpened():
-                raise RuntimeError(f"cv2.VideoWriter could not open {final_video}")
-            try:
-                for frame in video_frames:
-                    # Convert RGB to BGR for OpenCV
-                    out.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-            except BaseException:
+            if out.isOpened():
+                try:
+                    for frame in video_frames:
+                        # Convert RGB to BGR for OpenCV.
+                        out.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                except BaseException:
+                    out.release()
+                    final_video.unlink(missing_ok=True)
+                    raise
                 out.release()
-                final_video.unlink(missing_ok=True)
-                raise
-            out.release()
+            else:
+                out.release()
+                # Kit's OpenCV bundle omits FFmpeg; preserve the requested mp4v codec.
+                from imageio_ffmpeg import count_frames_and_secs, write_frames
+
+                encoder = write_frames(
+                    str(final_video),
+                    (w, h),
+                    fps=fps,
+                    codec="mpeg4",
+                    quality=None,
+                    macro_block_size=1,
+                    output_params=["-q:v", "2"],
+                )
+                try:
+                    encoder.send(None)
+                    for frame in video_frames:
+                        encoder.send(np.ascontiguousarray(frame))
+                finally:
+                    encoder.close()
+                if not final_video.is_file() or final_video.stat().st_size == 0:
+                    raise RuntimeError("FFmpeg encoder produced no video")
+                frame_count, _duration = count_frames_and_secs(str(final_video))
+                if frame_count != len(video_frames):
+                    raise RuntimeError(f"FFmpeg encoded {frame_count} frames; expected {len(video_frames)}")
 
         logger.info(f"Successfully saved video file: {final_video}")
 
@@ -214,6 +238,7 @@ def create_video(
         return final_video
 
     except Exception as e:
+        final_video.unlink(missing_ok=True)
         raise RuntimeError("Video creation failed") from e
 
 

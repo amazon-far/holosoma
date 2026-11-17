@@ -38,7 +38,14 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.sampler import STAGE_RESET, STAGE_SETUP, TermSampler
 from tests.simulators import _scene_presets
-from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, step, steps_for_seconds
+from tests.simulators._sim_harness import (
+    add_isaaclab3_arguments,
+    build_run_sim_config,
+    configure_isaaclab3,
+    launch_simulator,
+    run_and_hard_exit,
+    steps_for_seconds,
+)
 
 GRAVITY = 9.81
 
@@ -62,6 +69,16 @@ def _behavior_sampler(stage: int, term: str = "behavior_assert") -> TermSampler:
 # chosen so it cannot collide with 0 (pass), 1 (FAIL), or a signal crash (128+N >= 129).
 SKIP_EXIT_CODE = 77
 
+# These scenarios explicitly exercise PhysX configuration or its live USD listener.
+# Newton's Coulomb/contact model does not implement the same damping/combine-mode contract.
+NEWTON_UNSUPPORTED = {
+    "dr-damping-governs": "live USD damping requires Kit PhysX",
+    "damping-decay": "config-time PhysX free-body damping",
+    "damped-fall-twin": "config-time PhysX free-body damping",
+    "combine-mode-collision": "PhysX per-material friction combine modes",
+    "robot-combine-mode": "PhysX per-material friction combine modes",
+}
+
 
 # --------------------------------------------------------------------------------------------
 # Boot machinery: the generic pieces live in _sim_harness; this harness records video, so it always
@@ -78,8 +95,13 @@ def _build_run_sim_config(simulator, scene, robot, terrain, record_dir):
         # _focus_camera_on_objects; these offsets frame around that point.
         from holosoma.config_types.video import CartesianCameraConfig
 
-        cam = CartesianCameraConfig(offset=[1.1, 1.1, 0.7], target_offset=[0.0, 0.0, 0.0], smoothing=0.6)
-    return build_run_sim_config(
+        cam = CartesianCameraConfig(
+            offset=[1.1, 1.1, 0.7],
+            target_offset=[0.0, 0.0, 0.0],
+            smoothing=0.6,
+            tracking_body_name="baseLink" if robot == "onelink-box" else "auto",
+        )
+    config = build_run_sim_config(
         simulator,
         scene,
         robot,
@@ -88,11 +110,47 @@ def _build_run_sim_config(simulator, scene, robot, terrain, record_dir):
         video_camera=cam,
         show_command_overlay=False,  # robot command text is irrelevant to object scenarios
     )
+    if record_dir is not None:
+        config = dataclasses.replace(
+            config,
+            logger=dataclasses.replace(
+                config.logger,
+                video=dataclasses.replace(config.logger.video, width=128, height=96, use_recording_thread=False),
+            ),
+        )
+    return config
 
 
 def _step(sim, n):
     """Advance ``n`` physics steps WITH render each step (this harness records video)."""
-    step(sim, n, render=True)
+    for _ in range(n):
+        sim.simulate_at_each_physics_step()
+        _render(sim)
+
+
+def _render(sim):
+    """Capture native movies on control boundaries and prove captures leave dynamics untouched."""
+    recorder = getattr(sim, "video_recorder", None)
+    capturing = (
+        recorder is not None
+        and getattr(sim.backend, "is_isaaclab3", False)
+        and recorder.is_recording
+        and sim._sim_step_counter % sim.simulator_config.sim.control_decimation_steps == 0
+    )
+    if capturing:
+        from tests.simulators._native_runtime_assertions import snapshot_native_physics
+
+        count = sim.sim.get_physics_step_count()
+        before = snapshot_native_physics(sim)
+    sim.render()
+    if capturing:
+        recorder.capture_frame(env_id=recorder.config.record_env_id)
+        assert sim.sim.get_physics_step_count() == count, "movie capture advanced the physics clock"
+        import torch
+
+        assert all(torch.equal(a, b) for a, b in zip(before, snapshot_native_physics(sim), strict=True)), (
+            "movie rendering changed native dynamics"
+        )
 
 
 def _focus_camera_on_objects(sim, scene_config):
@@ -169,7 +227,7 @@ def assert_collide_into_fixed(ctx):
     peak_x = hammer0_x.clone()
     for _ in range(n):
         ctx.sim.simulate_at_each_physics_step()
-        ctx.sim.render()
+        _render(ctx.sim)
         peak_x = ctx.torch.maximum(peak_x, ctx.states("hammer")[:, 0])
     hammer = ctx.states("hammer")
     wall = ctx.states("wall")
@@ -211,7 +269,7 @@ def assert_momentum_transfer(ctx):
     target_vx_peak = ctx.states("target")[:, 7].clone()
     for _ in range(n):
         ctx.sim.simulate_at_each_physics_step()
-        ctx.sim.render()
+        _render(ctx.sim)
         target_vx_peak = ctx.torch.maximum(target_vx_peak, ctx.states("target")[:, 7])
     g1 = ctx.states("target")[:, :3]
     sv1 = ctx.states("striker")[:, 7]
@@ -369,6 +427,37 @@ def assert_dr_damping_governs(ctx):
         f"  dr-damp: damped vx {float(vd0[0]):.3f}->{float(vd1[0]):.3f} (loss {float(damped_loss[0]):.3f}) "
         f"control loss {float(control_loss[0]):.3f}  damped>control_all={ok}"
     )
+    if ctx.args.simulator == "isaaclab3" and ctx.n >= 2:
+        import types
+
+        from holosoma.managers.randomization.terms.objects import (
+            randomize_object_angular_damping_startup,
+            randomize_object_linear_damping_startup,
+        )
+
+        # Both bodies remain airborne. Give the control a known spin, then edit
+        # live damping only in odd environments; even environments remain controls.
+        state = ctx.states("control").clone()
+        state[:, 10:13] = ctx.torch.tensor([0.0, 0.0, 2.0], device=state.device)
+        ctx.sim.set_actor_states(["control"], ctx.env_ids, state)
+        ctx.sim.write_state_updates()
+        _step(ctx.sim, 1)
+        before = ctx.states("control")[:, [7, 12]].clone()
+        shell = types.SimpleNamespace(simulator=ctx.sim, num_envs=ctx.n, device=ctx.sim.sim_device)
+        selected = ctx.env_ids[1::2]
+        for randomizer in (randomize_object_linear_damping_startup, randomize_object_angular_damping_startup):
+            randomizer(
+                shell,
+                selected,
+                sampler=_behavior_sampler(STAGE_RESET),
+                damping_range=[3.0, 3.0],
+                object_names=["control"],
+            )
+        _step(ctx.sim, steps_for_seconds(ctx.sim, 0.2))
+        loss = before - ctx.states("control")[:, [7, 12]]
+        sparse_ok = _all(loss[1::2].amin(dim=0) > loss[::2].amax(dim=0) + 0.1)
+        print(f"  dr-damp live: linear/angular losses={loss.tolist()} selected={selected.tolist()} sparse={sparse_ok}")
+        ok = ok and sparse_ok
     return ok
 
 
@@ -406,7 +495,7 @@ def _step_with_force(ctx, n, apply_fn):
         if apply_fn is not None:
             apply_fn()
         ctx.sim.simulate_at_each_physics_step()
-        ctx.sim.render()
+        _render(ctx.sim)
 
 
 def assert_external_force(ctx):
@@ -703,7 +792,18 @@ def assert_velocity_restore_on_reset(ctx):
     # set, exactly as the production reset/jitter terms do — no manual origin add.
     poses = sim.get_actor_initial_poses(["rbox"], ctx.env_ids)  # [n,7]
     vels = sim.get_actor_initial_velocities(["rbox"], ctx.env_ids)  # [n,6]
-    sim.set_actor_states(["rbox"], ctx.env_ids, t.cat([poses, vels], dim=1))
+    before_reset = ctx.states("rbox").clone()
+    # Sparse odd rows, followed by their complement, exercise the same public reset
+    # seam used by reset terms. Unselected worlds must retain pose AND momentum.
+    for selected in (ctx.env_ids[1::2], ctx.env_ids[::2]):
+        if not selected.numel():
+            continue
+        before = ctx.states("rbox").clone()
+        sim.set_actor_states(["rbox"], selected, t.cat([poses[selected], vels[selected]], dim=1))
+        untouched = ctx.env_ids[~t.isin(ctx.env_ids, selected)]
+        assert t.allclose(ctx.states("rbox")[untouched], before[untouched], atol=1e-5, rtol=0), (
+            "partial restoration changed another environment's state"
+        )
     restored = ctx.states("rbox")
     # Position restored to the original WORLD spawn pose in every env (catches an origin
     # double-count / frame mismatch that the velocity checks alone would miss).
@@ -718,7 +818,71 @@ def assert_velocity_restore_on_reset(ctx):
     moved = _all((after[:, 0] - p_mid[:, 0]) > 1e-2)
     spun = _all((after[:, 3:7] - q_mid).abs().amax(dim=1) > 1e-2)
     print(f"  vel-restore: pos_ok={pos_ok} lin_ok={lin_ok} ang_ok={ang_ok} moving_again={moved and spun}")
-    return pos_ok and lin_ok and ang_ok and moved and spun
+    actually_reset = _all((before_reset[:, :3] - restored[:, :3]).abs().amax(dim=1) > 0.01)
+    return pos_ok and lin_ok and ang_ok and moved and spun and actually_reset
+
+
+def assert_property_response(ctx):
+    """Double mass or inertia in odd worlds; identical impulses must give half the response.
+
+    A before/after control on the same airborne bodies avoids asset inertia assumptions.
+    Unchanged even worlds detect broadcast writes; force and torque axes are checked too.
+    """
+    from isaaclab.managers import SceneEntityCfg
+
+    from holosoma.simulator.isaacsim.events import randomize_rigid_body_inertia, randomize_rigid_body_mass
+    from holosoma.utils.sampler import DistributionSpec
+
+    t, sim = ctx.torch, ctx.sim
+    inertia = ctx.args.scenario == "inertia-torque-response"
+    name, channel = ("tbox", 12) if inertia else ("fbox", 7)
+    initial = ctx.states(name).clone()
+    impulse = t.tensor([0.0, 0.0, 0.01] if inertia else [20.0, 0.0, 0.0], device=sim.sim_device)
+    kwargs = {"torques" if inertia else "forces": impulse}
+    n = steps_for_seconds(sim, 0.1)
+
+    def response():
+        before = ctx.states(name)[:, channel].clone()
+        _step_with_force(ctx, n, lambda: sim.apply_external_force(name, env_ids=ctx.env_ids, **kwargs))
+        return ctx.states(name)[:, channel] - before
+
+    baseline = response()
+    sim.set_actor_states([name], ctx.env_ids, initial)
+    sim.write_state_updates()
+    selected = ctx.env_ids[1::2]
+    asset = SceneEntityCfg(name, body_ids=slice(None))
+    sampler = _behavior_sampler(STAGE_RESET)
+    if inertia:
+        randomize_rigid_body_inertia(
+            sim,
+            selected,
+            asset,
+            specs=[DistributionSpec.parse([2.0, 2.0])] * 6,
+            operation="scale",
+            sampler=sampler,
+        )
+    else:
+        randomize_rigid_body_mass(
+            sim,
+            selected,
+            asset,
+            mass=[2.0, 2.0],
+            operation="scale",
+            recompute_inertia=False,
+            sampler=sampler,
+        )
+    changed = response()
+    expected = baseline.clone()
+    expected[selected] *= 0.5
+    ok = _all(baseline > 1e-3) and t.allclose(changed, expected, rtol=0.08, atol=1e-4)
+    state = ctx.states(name)
+    cross_axes = state[:, 10:12] if inertia else state[:, 10:13]
+    ok = ok and _all(cross_axes.abs().amax(dim=1) < 1e-3)
+    print(
+        f"  {ctx.args.scenario}: baseline={baseline.tolist()} changed={changed.tolist()} "
+        f"expected={expected.tolist()} ok={ok}"
+    )
+    return ok
 
 
 def _yaw_world_to_base(t, yaw, vec_w):
@@ -1306,6 +1470,8 @@ SCENARIOS = {
     "restitution-bounce": ("restitution-bounce", assert_restitution_bounce, 1, True, ()),
     "angular-velocity-spin": ("angular-spin", assert_angular_spin, 1, True, ()),
     "velocity-restore-reset": ("velocity-restore", assert_velocity_restore_on_reset, 1, True, ()),
+    "mass-force-response": ("external-force", assert_property_response, 2, False, ()),
+    "inertia-torque-response": ("external-force", assert_property_response, 2, False, ()),
     "object-obs-robot-pose": ("obs-under-pose", assert_object_obs_under_pose, 2, True, ()),
     "pose-jitter-settle": ("jitter-settle", assert_pose_jitter_settle, 2, True, ()),
     "loader-invariance": ("loader-invariance-freefall", assert_loader_invariance, 1, True, ()),
@@ -1392,7 +1558,9 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument(
+        "--simulator", required=True, choices=["mujoco", "mjwarp", "isaaclab2", "isaaclab3", "isaacsim"]
+    )
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -1400,6 +1568,7 @@ def main() -> int:
     parser.add_argument("--headless", choices=["true", "false"], default="true")
     parser.add_argument("--record", default=None, metavar="DIR", help="save a video of the run to DIR")
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
+    add_isaaclab3_arguments(parser)
     args = parser.parse_args()
     headless = args.headless == "true"
 
@@ -1410,6 +1579,9 @@ def main() -> int:
     # invocation with an unsupported combo — they exit with SKIP_EXIT_CODE (translated to a real
     # pytest.skip by run_harness) rather than a silent pass, and bail before any sim build.
     is_mujoco = args.simulator in ("mujoco", "mjwarp")
+    if args.simulator == "isaaclab3" and args.physics_backend == "newton" and args.scenario in NEWTON_UNSUPPORTED:
+        print(f"SKIP: {NEWTON_UNSUPPORTED[args.scenario]} is unsupported by Newton MJWarp")
+        return SKIP_EXIT_CODE
     if not mujoco_ok and is_mujoco:
         print(f"SKIP: scenario '{args.scenario}' is Isaac-only (no equivalent on MuJoCo)")
         return SKIP_EXIT_CODE
@@ -1428,13 +1600,31 @@ def main() -> int:
     twin_link_physics = _twin_robot_link_physics()
     robot_key = "onelink-box" if args.scenario in twin_link_physics else args.robot
 
-    config = _build_run_sim_config(args.simulator, scene_key, robot_key, args.terrain, args.record)
+    config = configure_isaaclab3(
+        _build_run_sim_config(args.simulator, scene_key, robot_key, args.terrain, args.record), args
+    )
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
         config,
         device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=headless),
     )
+    if args.simulator == "isaaclab3" and args.physics_backend == "physx" and args.scenario == "dr-damping-governs":
+        # Live USD damping on cloned bodies requires Kit's PhysX listener in
+        # this SDK. Other headless scenarios retain the standalone runtime.
+        sim_cfg = config.simulator.config
+        config = dataclasses.replace(
+            config,
+            simulator=dataclasses.replace(
+                config.simulator,
+                config=dataclasses.replace(
+                    sim_cfg,
+                    sim=dataclasses.replace(
+                        sim_cfg.sim, isaaclab3=dataclasses.replace(sim_cfg.sim.isaaclab3, require_kit=True)
+                    ),
+                ),
+            ),
+        )
 
     # Apply the scenario's link_physics onto the one-link robot's asset, so the robot link carries the
     # same PhysicsConfig the twin object does (replace the nested frozen asset).
@@ -1493,6 +1683,18 @@ def main() -> int:
         pre_hook(sim, pre_env_ids, torch)
 
     sim.prepare_sim()
+    if args.simulator == "isaaclab3" and args.physics_backend == "newton":
+        from isaaclab.utils.string import string_to_callable
+        from isaaclab_newton.physics import NewtonMJWarpManager
+
+        assert issubclass(string_to_callable(sim.sim.cfg.physics.class_type), NewtonMJWarpManager)
+    if args.simulator == "isaaclab3" and args.record is None:
+        from tests.simulators._native_runtime_assertions import assert_native_runtime
+
+        assert not sim.tiled_cameras and sim.video_recorder is None, (
+            "physics-only scenarios must not activate rendering"
+        )
+        assert_native_runtime(physics=args.physics_backend, uses_kit=args.scenario == "dr-damping-governs")
 
     if not headless:
         sim.setup_viewer()
@@ -1535,6 +1737,15 @@ def main() -> int:
         print("PASS" if passed else "FAIL")
 
     if sim.video_recorder is not None:
+        if args.simulator == "isaaclab3":
+            import numpy as np
+
+            frames = sim.video_recorder.video_frames
+            assert len(frames) > 2, "renderer preference did not produce actual movie frames"
+            assert max(np.abs(frame.astype(float) - frames[0].astype(float)).mean() for frame in frames[1:]) > 0.1, (
+                "active movie did not show the changing physical scene"
+            )
+            print(f"  active renderer: {len(frames)} owned movie frames; unchanged native dynamics at each capture")
         sim.video_recorder.on_episode_end(env_id=sim.video_recorder.config.record_env_id)
         print(f"VIDEO saved under {args.record}")
 
@@ -1551,4 +1762,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_and_hard_exit(main)

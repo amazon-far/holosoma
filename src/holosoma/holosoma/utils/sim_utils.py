@@ -82,24 +82,24 @@ def setup_simulator_imports(config: EnvConfig) -> None:
     # IsaacSim imports handled in setup_isaaclab_launcher
 
 
-def _ensure_render_pipeline_active() -> None:
-    """Force IsaacLab's offscreen render pipeline on when cameras are enabled.
+def _ensure_render_pipeline_active(*, isaaclab3: bool = False) -> None:
+    """Enable offscreen rendering before constructing either native SimulationContext.
 
-    ``AppLauncher`` only sets ``/isaaclab/render/offscreen`` when ``enable_cameras AND headless``.
-    ``SimulationContext`` reads that flag at construction and, with no GUI and no offscreen render,
-    latches ``render_mode = NO_GUI_OR_RENDERING`` — a terminal state in which ``sim.render()`` is a
-    no-op, so camera sensors never receive a new frame. A non-headless run with cameras (the
-    ``RunSimConfig`` default) lands exactly there: cameras are enabled but nothing renders.
-
-    Setting the flag after the app exists but before ``SimulationContext`` is built puts the run in
-    ``PARTIAL_RENDERING`` instead, which is what the camera path needs. A real GUI run is unaffected:
-    ``_has_gui`` already selects ``FULL_RENDERING``.
+    Both launchers set this flag automatically only for headless runs with
+    cameras. Set it for interactive camera runs too, so sensors receive frames
+    even when a GUI is unavailable. Lab 2 otherwise latches its no-render mode;
+    Lab 3 uses this setting with its separate renderer and visualizer lifecycle.
     """
-    import carb
+    if isaaclab3:
+        from isaaclab.app import get_settings_manager
 
-    settings = carb.settings.get_settings()
-    if not settings.get("/isaaclab/render/offscreen"):
-        settings.set_bool("/isaaclab/render/offscreen", True)
+        get_settings_manager().set("/isaaclab/render/offscreen", True)
+    else:
+        import carb
+
+        settings = carb.settings.get_settings()
+        if not settings.get("/isaaclab/render/offscreen"):
+            settings.set_bool("/isaaclab/render/offscreen", True)
 
 
 def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
@@ -117,14 +117,23 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     Any | None
         IsaacSim simulation app instance, or None for other simulators.
     """
-    from isaaclab.app import AppLauncher
+    from holosoma.simulator.isaacsim.backends import get_backend_for_config
 
+    # Decide runtime requirements before SDK argument registration can import
+    # Kit. A renderer preference alone does not activate cameras or a viewer.
+    video_enabled = config.logger.video.enabled or config.logger.headless_recording
+    cameras_enabled = any(
+        isinstance(sensor, CameraSensorConfig) and not is_isaacsim_raycast_camera(sensor)
+        for sensor in config.sensors.values()
+    )
+    needs_rendering = video_enabled or cameras_enabled
+    backend = get_backend_for_config(config)
     parser = argparse.ArgumentParser(description="Run simulation with IsaacSim.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
     parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
     parser.add_argument("--env_spacing", type=int, default=20, help="Distance between environments in simulator.")
     parser.add_argument("--output_dir", type=str, default="logs", help="Directory to store the output.")
-    AppLauncher.add_app_launcher_args(parser)
+    backend.add_launcher_args(parser)
 
     # Parse known arguments to get argparse params
     args_cli, unknown_args = parser.parse_known_args()
@@ -139,15 +148,12 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     if int(os.environ.get("WORLD_SIZE", "1")) > 1:
         args_cli.distributed = True
 
-    # LiDAR and ray-cast camera queries do not need RTX; only video and RTX cameras enable the renderer.
-    video_enabled = config.logger.video.enabled or config.logger.headless_recording
-    cameras_enabled = any(
-        isinstance(sensor, CameraSensorConfig) and not is_isaacsim_raycast_camera(sensor)
-        for sensor in config.sensors.values()
-    )
-    needs_rendering = video_enabled or cameras_enabled
+    # LiDAR and ray-cast cameras do not need RTX.
     if needs_rendering:
         args_cli.enable_cameras = True
+    if backend.is_isaaclab3 and video_enabled:
+        # Declare movie rendering to Lab 3's headless launch lifecycle.
+        args_cli.video = True
 
     isaacsim_config = config.simulator.config.isaacsim
     for name, value in isaacsim_config.app_launcher_args().items():
@@ -155,11 +161,10 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
 
     simulation_app: Any = None
     try:
-        app_launcher = AppLauncher(args_cli)
-        simulation_app = app_launcher.app
+        simulation_app = backend.launch_app(args_cli, sim_config=config.simulator.config.sim)
 
         if needs_rendering:
-            _ensure_render_pipeline_active()
+            _ensure_render_pipeline_active(isaaclab3=backend.is_isaaclab3)
 
         logger.info(f"IsaacSim args_cli: {args_cli}")
         logger.info(f"IsaacSim unknown_args: {unknown_args}")
@@ -302,6 +307,12 @@ def _close_simulation_app(simulation_app: Any, failure: BaseException | None) ->
         # Kit can terminate the process inside close(), before Python reaches the
         # caller's exception handler. Set its exit status before closing the app.
         return_code = _simulation_exit_code(failure)
+        from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Runtime
+
+        if isinstance(simulation_app, IsaacLab3Runtime):
+            _flush_simulation_logs()
+            simulation_app.close(exit_code=return_code)
+            return
         if return_code:
             try:
                 simulation_app.app.post_uncancellable_quit(return_code)

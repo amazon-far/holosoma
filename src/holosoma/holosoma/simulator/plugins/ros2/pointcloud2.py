@@ -47,7 +47,7 @@ def transform_xyz_points(
         return points
 
     matrix, offset = _transform_components(tuple(translation), tuple(rotation))
-    transformed = np.asarray(points, dtype=np.float32) @ matrix.T
+    transformed: npt.NDArray[np.float32] = np.asarray(points, dtype=np.float32) @ matrix.T
     transformed += offset
     return transformed
 

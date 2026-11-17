@@ -38,12 +38,10 @@ _RAYCAST_HARNESS = Path(__file__).resolve().parents[1] / "raycast_camera_assert.
 _MOUNT_FABRIC_HARNESS = Path(__file__).resolve().parents[1] / "camera_mount_fabric_assert.py"
 
 
-def test_camera_geometry(tmp_path):
+def test_camera_geometry(tmp_path, run_isaacsim_harness):
     result_file = tmp_path / "geo_isaacsim.txt"
-    run_harness(
+    run_isaacsim_harness(
         _HARNESS,
-        "--simulator",
-        "isaacsim",
         "--result-file",
         str(result_file),
         label="isaacsim/camera-geometry",
@@ -52,13 +50,11 @@ def test_camera_geometry(tmp_path):
     )
 
 
-def test_camera_depth(tmp_path):
+def test_camera_depth(tmp_path, run_isaacsim_harness):
     # Depth in meters, image-plane, +inf no-hit. Panel at a known distance reads ~that.
     result_file = tmp_path / "depth_isaacsim.txt"
-    run_harness(
+    run_isaacsim_harness(
         _DEPTH_HARNESS,
-        "--simulator",
-        "isaacsim",
         "--result-file",
         str(result_file),
         label="isaacsim/camera-depth",
@@ -67,13 +63,11 @@ def test_camera_depth(tmp_path):
     )
 
 
-def test_camera_recorder(tmp_path):
+def test_camera_recorder(tmp_path, run_isaacsim_harness):
     # A viz config requesting recording yields a non-None camera_sensor_recorder that capture()s a frame.
     result_file = tmp_path / "rec_isaacsim.txt"
-    run_harness(
+    run_isaacsim_harness(
         _CONTRACT_HARNESS,
-        "--simulator",
-        "isaacsim",
         "--check-recorder",
         "--result-file",
         str(result_file),
@@ -83,13 +77,11 @@ def test_camera_recorder(tmp_path):
     )
 
 
-def test_camera_fisheye_projection(tmp_path):
+def test_camera_fisheye_projection(tmp_path, run_isaacsim_harness):
     # The authored f-theta calibration produces observably wider projection geometry than pinhole.
     result_file = tmp_path / "fisheye_isaacsim.txt"
-    run_harness(
+    run_isaacsim_harness(
         _PROJECTION_HARNESS,
-        "--simulator",
-        "isaacsim",
         "--result-file",
         str(result_file),
         label="isaacsim/camera-fisheye",
@@ -98,13 +90,11 @@ def test_camera_fisheye_projection(tmp_path):
     )
 
 
-def test_camera_follow(tmp_path):
+def test_camera_follow(tmp_path, run_isaacsim_harness):
     # Camera tracks its mount body: move the robot, the panel depth drops by the moved distance.
     result_file = tmp_path / "follow_isaacsim.txt"
-    run_harness(
+    run_isaacsim_harness(
         _FOLLOW_HARNESS,
-        "--simulator",
-        "isaacsim",
         "--result-file",
         str(result_file),
         label="isaacsim/camera-follow",
@@ -113,13 +103,11 @@ def test_camera_follow(tmp_path):
     )
 
 
-def test_camera_multi(tmp_path):
+def test_camera_multi(tmp_path, run_isaacsim_harness):
     # Two cameras with different views each return their own frame (no buffer mixup).
     result_file = tmp_path / "multi_isaacsim.txt"
-    run_harness(
+    run_isaacsim_harness(
         _MULTI_HARNESS,
-        "--simulator",
-        "isaacsim",
         "--result-file",
         str(result_file),
         label="isaacsim/camera-multi",
@@ -128,13 +116,11 @@ def test_camera_multi(tmp_path):
     )
 
 
-def test_camera_actor_mount(tmp_path):
+def test_camera_actor_mount(tmp_path, run_isaacsim_harness):
     # Exercises target_kind='actor': a camera on a scene object resolves, renders, and follows it.
     result_file = tmp_path / "actor_isaacsim.txt"
-    run_harness(
+    run_isaacsim_harness(
         _ACTOR_HARNESS,
-        "--simulator",
-        "isaacsim",
         "--result-file",
         str(result_file),
         label="isaacsim/camera-actor-mount",
@@ -144,14 +130,12 @@ def test_camera_actor_mount(tmp_path):
 
 
 @pytest.mark.parametrize("num_envs", ["1", "3"])
-def test_camera_world_mount(tmp_path, num_envs):
+def test_camera_world_mount(tmp_path, num_envs, run_isaacsim_harness):
     # target_kind='world': a free-floating camera (child of the env prim) fixed in the env frame
     # does NOT follow the robot, and each env's camera sits at its own origin.
     result_file = tmp_path / f"world_isaacsim_{num_envs}.txt"
-    run_harness(
+    run_isaacsim_harness(
         _WORLD_HARNESS,
-        "--simulator",
-        "isaacsim",
         "--num-envs",
         num_envs,
         "--result-file",
@@ -162,13 +146,11 @@ def test_camera_world_mount(tmp_path, num_envs):
     )
 
 
-def test_camera_follow_multi_env(tmp_path):
+def test_camera_follow_multi_env(tmp_path, run_isaacsim_harness):
     # num_envs=4: yaw only env 0 and assert the other envs' frames are unchanged.
     result_file = tmp_path / "follow_isaacsim_multi.txt"
-    run_harness(
+    run_isaacsim_harness(
         _FOLLOW_HARNESS,
-        "--simulator",
-        "isaacsim",
         "--num-envs",
         "4",
         "--result-file",
@@ -179,13 +161,11 @@ def test_camera_follow_multi_env(tmp_path):
     )
 
 
-def test_camera_orientation(tmp_path):
+def test_camera_orientation(tmp_path, run_isaacsim_harness):
     # Off-axis panel on a non-square camera lands in the expected image quadrant (catches mirror/flip/transpose).
     result_file = tmp_path / "orient_isaacsim.txt"
-    run_harness(
+    run_isaacsim_harness(
         _ORIENT_HARNESS,
-        "--simulator",
-        "isaacsim",
         "--result-file",
         str(result_file),
         label="isaacsim/camera-orientation",
@@ -194,14 +174,12 @@ def test_camera_orientation(tmp_path):
     )
 
 
-def test_camera_obs_pipeline(tmp_path):
+def test_camera_obs_pipeline(tmp_path, run_isaacsim_harness):
     # Drives render_sensors -> camera obs term -> transform -> obs dict; asserts CHW float01 format
     # and that a decimation=3 camera holds while a decimation=1 camera updates.
     result_file = tmp_path / "obs_isaacsim.txt"
-    run_harness(
+    run_isaacsim_harness(
         _OBS_HARNESS,
-        "--simulator",
-        "isaacsim",
         "--result-file",
         str(result_file),
         label="isaacsim/camera-obs-pipeline",
@@ -211,7 +189,9 @@ def test_camera_obs_pipeline(tmp_path):
 
 
 @pytest.mark.parametrize("check", ["frame", "rerender", "scene", "dynamic-scene", "default-selection"])
-def test_raycast_camera(tmp_path, check):
+def test_raycast_camera(tmp_path, check, isaaclab_backend):
+    if isaaclab_backend != "isaaclab2":
+        pytest.skip("The per-camera ray-cast depth adapter currently supports Isaac Lab 2 only.")
     # Depth without RTX, partial rerenders, shared scene meshes, physics-driven actor motion, and the
     # default selection (hidden ground kept, mount body left out) beside the G1 preset's explicit paths.
     result_file = tmp_path / f"raycast_{check}_isaacsim.txt"
@@ -228,11 +208,13 @@ def test_raycast_camera(tmp_path, check):
 
 
 @pytest.mark.parametrize("num_envs", [1, 2])
-def test_camera_renders_at_its_mount_offset(tmp_path, num_envs):
+def test_camera_renders_at_its_mount_offset(tmp_path, num_envs, run_isaacsim_harness, isaaclab_backend):
+    if isaaclab_backend != "isaaclab2":
+        pytest.skip("This regression checks Lab 2's TiledCamera/Fabric startup repair.")
     # Cameras on links that move while Isaac Lab initializes sensors must still render from their
     # authored offset: Fabric camera world == mount body world x USD local, after startup and later.
     result_file = tmp_path / f"mount_fabric_isaacsim_{num_envs}.txt"
-    run_harness(
+    run_isaacsim_harness(
         _MOUNT_FABRIC_HARNESS,
         "--num-envs",
         str(num_envs),

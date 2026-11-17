@@ -1,4 +1,5 @@
 # Keep Holosoma's dependencies within the Isaac Sim 5.1.0 runtime contract.
+numpy<2
 click==8.1.7
 packaging==23.0
 psutil==5.9.8
