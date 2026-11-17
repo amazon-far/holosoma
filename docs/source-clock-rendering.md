@@ -55,10 +55,10 @@ scanner; other tasks can disable it with `terrain.terrain_term.height_scanner=Fa
 `holosoma.cosim` is an optional same-host, same-GPU bridge. It shares persistent
 SimState cache allocations, sends only metadata through ZeroMQ, and uses CUDA
 ready/done events. Scenes, environment placement and process/container deployment
-remain caller-owned. The bridge validates joint/object order and environment
-origins at startup (after the renderer has matched them where it can), and that
-both processes use the same physical GPU (by UUID, since `CUDA_VISIBLE_DEVICES`
-can renumber devices).
+remain caller-owned. The bridge validates that both processes use the same
+physical GPU (by UUID, since `CUDA_VISIBLE_DEVICES` can renumber devices); the
+render handler validates joint/object order and environment origins (after
+matching the origins where it can).
 
 From the command line, start the renderer with the scene's run_sim arguments, then run
 the source with the `cosim-render` plugin. Configure the source's remote cameras as
@@ -110,6 +110,16 @@ the handshake at construction, then `publish()`, its mapped
 side, `Receiver` maps the shared state and hands each frame to a handler;
 `holosoma.cosim.render.RenderHandler` applies it to a `RenderTask`, renders it
 and exports the requested camera outputs.
+
+Other co-simulations build on `holosoma.cosim.base`, which assumes nothing about
+the peer. `CosimPlugin` owns the source's `Publisher` and closes it with the
+simulator; a subclass returns its `requests()`, the JSON `meta()` the peer
+receives at the handshake, and the hooks it `install()`s to publish.
+`BufferHandler` is the peer's side, Holosoma simulator or not: a subclass
+checks the metadata in `accept()`, picks fields in `reads()` (`matching()`
+checks their layout), returns the tensor that fills each requested export from
+`export_source()`, and does its work in `step()`; the exports are copied after
+every step.
 
 The source shares every non-empty SimState field, writable and derived. When the
 connection opens, each side sends the buffers it exports (name, shape, dtype and

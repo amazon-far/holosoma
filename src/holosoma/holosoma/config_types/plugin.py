@@ -98,14 +98,19 @@ class ClockPublishPluginConfig(PluginConfig):
 
 
 @dataclass(frozen=True)
-class CosimRenderPluginConfig(PluginConfig):
+class CosimPluginConfig(PluginConfig, abc.ABC):
+    """Base config for a plugin that shares this simulator's state with a co-simulation peer."""
+
+    endpoint: str = ""
+    """ZeroMQ endpoint the peer listens on, e.g. ``ipc:///tmp/$USER/cosim.sock``."""
+
+
+@dataclass(frozen=True)
+class CosimRenderPluginConfig(CosimPluginConfig):
     """Publish this simulator's state to a co-simulation renderer, and take remote cameras' images from it.
 
     Start the renderer first: ``python -m holosoma.cosim.render --endpoint <endpoint> <run_sim args>``.
     """
-
-    endpoint: str = ""
-    """ZeroMQ endpoint the renderer listens on, e.g. ``ipc:///tmp/$USER/cosim.sock``."""
 
     def get_cls(self) -> Callable[..., Any]:
         from holosoma.cosim.render import CosimRenderPlugin

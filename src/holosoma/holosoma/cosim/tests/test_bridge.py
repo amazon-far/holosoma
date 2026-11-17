@@ -15,9 +15,10 @@ import torch
 
 from holosoma.config_types.plugin import CosimRenderPluginConfig
 from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
+from holosoma.cosim import base as cosim_base
 from holosoma.cosim import bridge
 from holosoma.cosim import cuda as cosim_cuda
-from holosoma.cosim import render as cosim_render
+from holosoma.cosim.base import BufferHandler
 from holosoma.cosim.cameras import camera_requests
 from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, share
 from holosoma.cosim.render import CosimRenderPlugin, RenderHandler
@@ -72,7 +73,7 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
             "ready_handle": "00",
             "gpu_uuid": "gpu-a",
             "source_pid": os.getpid(),
-            "scene": {"dof_names": ["a", "b"], "object_names": [], "env_origins": [[0.0, 0.0, 0.0]]},
+            "meta": {"dof_names": ["a", "b"], "object_names": [], "env_origins": [[0.0, 0.0, 0.0]]},
         },
         {"type": "FRAME_AVAILABLE", "frame": {"sequence": 1, "sim_time": 0.035}},
         {"type": "CLOSE"},
@@ -107,7 +108,7 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
     stream = SimpleNamespace(wait_event=lambda _: calls.append("ready"), record_event=lambda _: calls.append("done"))
     _fake_cuda(monkeypatch, stream, synchronize=lambda _: calls.append("sync"))
     monkeypatch.setattr(
-        cosim_render, "allocate_shared", lambda shape, dtype, _: torch.zeros(shape, dtype=getattr(torch, dtype))
+        cosim_base, "allocate_shared", lambda shape, dtype, _: torch.zeros(shape, dtype=getattr(torch, dtype))
     )
     monkeypatch.setattr(
         bridge, "share", lambda name, owner: BufferSpec(name, tuple(owner.shape), "00", str(owner.dtype)[6:])
@@ -159,7 +160,7 @@ def test_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture, mismatc
         messages[0]["exports"] = [{"name": "dof_pos", "shape": [1, 3], "handle": "00"}]
     else:
         wrong: list[Any] = [[1.0, 0.0, 0.0]] if mismatch == "env_origins" else ["wrong"]
-        (messages[0] if mismatch == "gpu_uuid" else messages[0]["scene"])[mismatch] = wrong
+        (messages[0] if mismatch == "gpu_uuid" else messages[0]["meta"])[mismatch] = wrong
     with pytest.raises(ValueError, match="differs|differ"):
         worker.run()
     assert not any(isinstance(call, tuple) and call[0] != "place" for call in calls)
@@ -178,7 +179,7 @@ def test_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture, mismatc
 )
 def test_remote_camera_mismatch_fails_before_mapping(receiver: ReceiverFixture, change: dict[str, Any]) -> None:
     worker, calls, replies, messages = receiver
-    record = _camera(worker.sim.sensor_manager, "cam", remote=False, data_types=["rgb"])
+    record = _camera(cast("Any", worker.handler).simulator.sensor_manager, "cam", remote=False, data_types=["rgb"])
     (request,) = camera_requests(record, 1)
     if "meta" in change:
         change = {"meta": {**request.meta, **change["meta"]}}
@@ -193,12 +194,14 @@ def test_receiver_exports_its_images_after_each_render(
     receiver: ReceiverFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     worker, calls, replies, messages = receiver
-    record = _camera(worker.sim.sensor_manager, "cam", remote=False, data_types=["rgb", "depth"])
+    record = _camera(
+        cast("Any", worker.handler).simulator.sensor_manager, "cam", remote=False, data_types=["rgb", "depth"]
+    )
     messages[0]["requests"] = [bridge.as_received(asdict(request)) for request in camera_requests(record, 1)]
     messages.insert(2, {"type": "FRAME_AVAILABLE", "frame": {"sequence": 2, "sim_time": 0.035}})
     exports: list[torch.Tensor] = []
     exported_before_render: list[list[float]] = []
-    allocate, render = cosim_render.allocate_shared, cast("Any", worker.handler).task.render_frame
+    allocate, render = cosim_base.allocate_shared, cast("Any", worker.handler).task.render_frame
 
     def allocate_shared(*args: Any) -> torch.Tensor:
         exports.append(allocate(*args))
@@ -211,7 +214,7 @@ def test_receiver_exports_its_images_after_each_render(
         record.set_buffer("rgb", torch.full((1, 3, 4, 3), frame, dtype=torch.uint8))
         record.set_buffer("depth", torch.full((1, 3, 4, 1), float(frame)))
 
-    monkeypatch.setattr(cosim_render, "allocate_shared", allocate_shared)
+    monkeypatch.setattr(cosim_base, "allocate_shared", allocate_shared)
     monkeypatch.setattr(cast("Any", worker.handler).task, "render_frame", render_frame)
     worker.run()
     assert [(spec["name"], spec["dtype"]) for spec in replies[0]["exports"]] == [
@@ -234,26 +237,24 @@ def test_receiver_reads_only_the_state_it_can_apply(receiver: ReceiverFixture) -
     assert bridge.MappedBuffers.names == ["dof_pos"]  # type: ignore[attr-defined]
 
 
-class _ReadingHandler:
-    """A handler that only reads ``fields``, without applying them anywhere."""
+class _ReadingHandler(BufferHandler):
+    """A peer that only reads ``fields``, with no simulator."""
 
-    def __init__(self, simulator: Any, fields: tuple[str, ...]) -> None:
-        self.simulator, self.fields = simulator, fields
+    def __init__(self, fields: tuple[str, ...]) -> None:
+        super().__init__("cuda:0")
+        self.fields = fields
         self.seen: list[dict[str, Any]] = []
 
     def reads(self, exports: Any) -> tuple[str, ...]:
         return self.fields
 
-    def allocate(self, requests: Any) -> dict[str, Any]:
-        return {}
-
-    def process(self, state: Any, sim_time: float, *, phase: str | None) -> None:
+    def step(self, frame: Any, state: Any) -> None:
         self.seen.append(dict(state))
 
 
 def test_handler_reads_derived_state_without_applying_it(receiver: ReceiverFixture) -> None:
     worker, calls, replies, messages = receiver
-    handler = _ReadingHandler(worker.sim, ("contact_forces",))
+    handler = _ReadingHandler(("contact_forces",))
     messages[0]["exports"] = [
         {"name": "dof_pos", "shape": [1, 2], "handle": "00"},
         {"name": "contact_forces", "shape": [1, 3], "handle": "00"},
@@ -266,7 +267,7 @@ def test_handler_reads_derived_state_without_applying_it(receiver: ReceiverFixtu
 
 def test_reading_a_field_the_source_does_not_share_fails_before_mapping(receiver: ReceiverFixture) -> None:
     worker, calls, replies, _messages = receiver
-    handler = _ReadingHandler(worker.sim, ("contact_forces",))
+    handler = _ReadingHandler(("contact_forces",))
     with pytest.raises(ValueError, match="does not share"):
         bridge.Receiver(cast("Any", handler), endpoint="ipc:///unused").run()
     assert "map" not in calls and replies[-1]["type"] == "ERROR"
@@ -451,7 +452,7 @@ def test_only_an_interrupted_exchange_still_closes_with_the_receiver(
     source, _manager, _images, calls = plugin
     exchange = cast("Any", source.publisher.control).exchange
 
-    def fail(command: str, **fields: Any) -> dict[str, Any]:
+    def fail(command: str, **fields: Any) -> Any:
         if command != "CLOSE":
             calls.append((command, fields))
             raise failure

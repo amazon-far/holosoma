@@ -119,26 +119,15 @@ class BufferRequest:
         return cls(raw["name"], tuple(raw["shape"]), raw["dtype"], dict(raw["meta"]))
 
 
-def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
-    """The joint, object and environment layout both sides' state must share."""
-    layout: dict[str, Any] = as_received(
-        {
-            "dof_names": list(sim.dof_names),
-            "object_names": list(sim.object_state_names),
-            "env_origins": sim.scene.env_origins.cpu().tolist(),
-        }
-    )
-    return layout
-
-
 class Publisher:
     """Share a source's state caches with a receiver and exchange frames with it in lockstep.
 
-    The handshake runs at construction: every state field ``allocator`` shares, and ``requests``, go to
-    the receiver. It answers with the fields it reads and one export per request, mapped as
-    :attr:`imports`. Callers decide when to :meth:`publish`; each exchange refreshes the fields the
-    receiver reads and orders later work after the receiver's. After an exchange fails, other than by
-    interruption, the publisher refuses further exchanges and closes without contacting the receiver.
+    The handshake runs at construction: every state field ``allocator`` shares, ``requests`` and ``meta``,
+    which the receiver interprets, go to the receiver. It answers with the fields it reads and one export
+    per request, mapped as :attr:`imports`. Callers decide when to :meth:`publish`; each exchange refreshes
+    the fields the receiver reads and orders later work after the receiver's. After an exchange fails,
+    other than by interruption, the publisher refuses further exchanges and closes without contacting the
+    receiver.
     """
 
     def __init__(
@@ -148,6 +137,7 @@ class Publisher:
         *,
         endpoint: str,
         requests: Sequence[BufferRequest] = (),
+        meta: Mapping[str, Any] | None = None,
     ) -> None:
         import warp as wp
 
@@ -171,7 +161,7 @@ class Publisher:
                 ready_handle=self.ready.ipc_handle().hex(),
                 gpu_uuid=gpu_uuid(sim.sim_device),
                 source_pid=os.getpid(),
-                scene=scene_layout(sim),
+                meta=as_received(dict(meta or {})),
             )
             if reply["type"] != "OPENED":
                 raise RuntimeError("Receiver did not accept state buffers")
@@ -248,21 +238,24 @@ class Publisher:
 
 
 class FrameHandler(Protocol):
-    """What a receiver reads from a source, what it does with each frame, and the exports it answers requests with."""
+    """A receiver's side of the exchange; :class:`holosoma.cosim.base.BufferHandler` implements it."""
 
-    simulator: BaseSimulator
+    device: str
+    """CUDA device for imported state, exports and events."""
 
-    def reads(self, exports: Sequence[BufferSpec]) -> tuple[str, ...]:
-        """Return the exported state fields to map and refresh each frame; raise if one is unusable."""
+    @property
+    def owners(self) -> Mapping[str, Any]:
+        """Shared allocations answering the source's requests, by name, once :meth:`open` returns."""
 
-    def allocate(self, requests: list[BufferRequest]) -> dict[str, Any]:
-        """Check the source's requests and return one shared array per request, by name."""
+    def open(
+        self, exports: Sequence[BufferSpec], requests: Sequence[BufferRequest], meta: Mapping[str, Any]
+    ) -> tuple[str, ...]:
+        """Accept the source, allocate :attr:`owners` and return the exported fields to read; raise to refuse."""
 
-    def process(self, state: Mapping[str, torch.Tensor], sim_time: float, *, phase: str | None) -> None:
-        """Process the source's ``state`` at source time ``sim_time`` and fill the exports.
+    def process(self, frame: Frame, state: Mapping[str, torch.Tensor]) -> None:
+        """Process the source's ``state`` for ``frame`` and fill the exports.
 
-        ``state`` holds the read fields, read-only and valid only during the call. ``phase`` is the
-        source's hook phase the frame came from, or ``None`` unless exactly one phase is emitting.
+        ``state`` holds the read fields, read-only and valid only during the call.
         """
 
 
@@ -275,18 +268,18 @@ class Receiver:
 
     def __init__(self, handler: FrameHandler, *, endpoint: str) -> None:
         self.handler = handler
-        self.sim = handler.simulator
         self.control = ControlChannel(endpoint=endpoint, receiver=True)
 
     def run(self) -> None:
         import torch
         import warp as wp
 
+        device = self.handler.device
         mapped: MappedBuffers | None = None
         ready = done = None
         source_pid: int | None = None
         sequence = 0
-        stream = wp.stream_from_torch(torch.cuda.current_stream(self.sim.sim_device))
+        stream = wp.stream_from_torch(torch.cuda.current_stream(device))
 
         def receive() -> dict[str, Any]:
             if source_pid is not None:
@@ -301,39 +294,22 @@ class Receiver:
                 try:
                     command = message["type"]
                     if command == "OPEN" and mapped is None:
-                        scene = message["scene"]
-                        origins = self.sim.scene.env_origins
-                        self.sim.match_env_origins(
-                            torch.tensor(scene["env_origins"], dtype=torch.float32, device=origins.device)
-                        )
-                        own_scene = scene_layout(self.sim)
-                        if differing := sorted(
-                            key for key in {*scene, *own_scene} if scene.get(key) != own_scene.get(key)
-                        ):
-                            raise ValueError(f"Scene {differing} differs between simulators")
-                        if (source_gpu := message["gpu_uuid"]) != (own_gpu := gpu_uuid(self.sim.sim_device)):
+                        if (source_gpu := message["gpu_uuid"]) != (own_gpu := gpu_uuid(device)):
                             raise ValueError(f"Source GPU {source_gpu} differs from receiver GPU {own_gpu}")
                         exported = [BufferSpec.from_message(raw) for raw in message["exports"]]
-                        reads = self.handler.reads(exported)
+                        requests = [BufferRequest.from_message(raw) for raw in message["requests"]]
+                        reads = self.handler.open(exported, requests, message["meta"])
                         if unknown := sorted(set(reads) - {spec.name for spec in exported}):
                             raise ValueError(f"Receiver reads state fields {unknown} the source does not share")
-                        exports = self.handler.allocate(
-                            [BufferRequest.from_message(raw) for raw in message["requests"]]
-                        )
-                        mapped = MappedBuffers(
-                            [spec for spec in exported if spec.name in reads], device=self.sim.sim_device
-                        )
-                        ready = wp.event_from_ipc_handle(
-                            bytes.fromhex(message["ready_handle"]),
-                            device=self.sim.sim_device,
-                        )
-                        done = wp.Event(device=self.sim.sim_device, interprocess=True)
+                        mapped = MappedBuffers([spec for spec in exported if spec.name in reads], device=device)
+                        ready = wp.event_from_ipc_handle(bytes.fromhex(message["ready_handle"]), device=device)
+                        done = wp.Event(device=device, interprocess=True)
                         source_pid = int(message["source_pid"])
                         self.control.socket.send_json(
                             {
                                 "type": "OPENED",
                                 "done_handle": done.ipc_handle().hex(),
-                                "exports": [asdict(share(name, owner)) for name, owner in exports.items()],
+                                "exports": [asdict(share(name, owner)) for name, owner in self.handler.owners.items()],
                                 "reads": list(reads),
                             }
                         )
@@ -342,13 +318,13 @@ class Receiver:
                         if frame.sequence != sequence + 1:
                             raise ValueError("Frames must be consecutive")
                         stream.wait_event(ready)
-                        self.handler.process(mapped.tensors, frame.sim_time, phase=frame.phase)
+                        self.handler.process(frame, mapped.tensors)
                         mapped.verify_read_only()
                         stream.record_event(done)
                         sequence = frame.sequence
                         self.control.socket.send_json({"type": "FRAME_COMPLETE", "sequence": sequence})
                     elif command == "CLOSE" and mapped is not None:
-                        torch.cuda.synchronize(self.sim.sim_device)
+                        torch.cuda.synchronize(device)
                         mapped.release()
                         mapped = None
                         self.control.socket.send_json({"type": "UNMAPPED"})
@@ -361,7 +337,7 @@ class Receiver:
         except BaseException:
             if mapped is not None:
                 with contextlib.suppress(Exception):  # Keep the original failure.
-                    torch.cuda.synchronize(self.sim.sim_device)
+                    torch.cuda.synchronize(device)
                     mapped.release()
             raise
         finally:
