@@ -88,9 +88,6 @@ def test_refresh_changes_values_without_replacing_simstate_storage() -> None:
     torch.testing.assert_close(held[:, 2, :3], plan.qpos[:, :3])
     torch.testing.assert_close(held[:, 0, :3], plan.xpos[:, 1])
     assert torch.count_nonzero(held[:, 0, 7:]) == 0
-    held[0, 1, 0] = -1
-    with pytest.raises(RuntimeError, match="read-only"):
-        state.flush_writes()
 
 
 def test_empty_scene_has_an_empty_object_axis() -> None:

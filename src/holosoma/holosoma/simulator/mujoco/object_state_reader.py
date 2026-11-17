@@ -14,14 +14,11 @@ from holosoma.utils.rotations import quat_rotate
 
 @dataclass(frozen=True)
 class ObjectReadPlan:
-    """Fixed topology and reusable scratch; :meth:`read` returns the same output tensor each call.
+    """Fixed object addressing and reusable scratch; :meth:`read` returns the same output tensor each call.
 
-    Actor indices identify unified actors, not native bodies or qpos columns.
-    Build this translation once from the registry order and the backend's
-    existing resolved address tables. Rebuild the simulator for topology changes.
+    Rebuild the simulator for topology changes.
     """
 
-    names: tuple[str, ...]
     qpos: torch.Tensor
     qvel: torch.Tensor
     xpos: torch.Tensor
@@ -90,9 +87,8 @@ class ObjectReadPlan:
             return torch.tensor(values, dtype=torch.long, device=qpos.device)
 
         free_count, static_count = len(free_columns), len(static_columns)
-        # Scratch is separate from native physics storage. Static velocities remain exactly zero.
+        # Static rows' velocity columns are zeroed once and never written.
         return cls(
-            names,
             qpos,
             qvel,
             xpos,
@@ -110,10 +106,9 @@ class ObjectReadPlan:
         )
 
     def read(self) -> torch.Tensor:
-        """Read all objects without actor lookup, host readback or per-actor calls.
+        """Return ``[E, O, 13]`` object roots in the per-actor getter's world-frame convention.
 
-        Matches the per-actor getter: freejoint pose/velocity comes from qpos/qvel; only jointless
-        objects use derived world body poses, which the caller must have brought up to date.
+        Jointless objects use derived world body poses, which the caller must have brought up to date.
         """
         envs = self.qpos.shape[0]
         free_count = self.free_columns.numel()
@@ -123,8 +118,7 @@ class ObjectReadPlan:
             pose = self.free_pose.view(envs, free_count, 7)
             velocity = self.free_velocity.view(envs, free_count, 6)
             quaternion = cast("torch.Tensor", mj_to_holosoma_quat(pose[..., 3:7]))
-            # Intentional native -> unified mapping: xyzw quaternion; native
-            # linear velocity is world-frame and angular velocity is body-local.
+            # Native angular velocity is body-local; unified state is world-frame.
             self.free_states[..., :3].copy_(pose[..., :3])
             self.free_states[..., 3:7].copy_(quaternion)
             self.free_states[..., 7:10].copy_(velocity[..., :3])
