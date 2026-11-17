@@ -7,6 +7,8 @@ import math
 import pytest
 import torch
 
+pytest.importorskip("mujoco")
+
 from holosoma.simulator.base_simulator.state import SimState
 from holosoma.simulator.mujoco.object_state_reader import ObjectReadPlan
 

@@ -435,7 +435,7 @@ def test_mjwarp_lidar_reuses_camera_bvh_without_duplicate_same_frame_refit(
     backend._sensor_refit_contexts = {-1}
     backend._kinematics_pending = False
 
-    camera = SimpleNamespace(name="camera", config=SimpleNamespace(data_types=[]))
+    camera = SimpleNamespace(name="camera", config=SimpleNamespace(data_types=[], remote=False))
     lidar = SimpleNamespace(
         name="lidar",
         config=LidarSensorConfig(mount=SensorMountConfig(target_kind="world")),
