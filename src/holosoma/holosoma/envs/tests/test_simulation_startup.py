@@ -29,8 +29,10 @@ def task_type(monkeypatch: pytest.MonkeyPatch) -> TaskFixture:
         def __init__(self, tyro_config: Any, terrain_manager: Any, device: str) -> None:
             super().__init__(tyro_config, terrain_manager, device)
             self.scene = EnvOriginsScene(torch.tensor([[10.0, 0.0, 0.0], [20.0, 0.0, 0.0]]), device)
-            camera = SimpleNamespace(effective_decimation=1)
-            self.sensor_manager = cast("Any", SimpleNamespace(cameras=[camera], lidars=[]))
+            camera = SimpleNamespace(
+                effective_decimation=1, name="cam", config=SimpleNamespace(remote=False), buffers={}
+            )
+            self.sensor_manager = cast("Any", SimpleNamespace(cameras=[camera], lidars=[], last_due=set()))
 
         def setup(self) -> None:
             calls.append("setup")
