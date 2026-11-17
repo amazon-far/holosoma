@@ -18,7 +18,7 @@ marks every tensor stale after.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, overload
@@ -258,10 +258,12 @@ class SimState:
                 if registration.write is None:
                     registration.valid = False
 
-    def mark_stale(self) -> None:
-        """Mark every tensor stale, so the next access re-reads it."""
+    def mark_stale(self, names: Iterable[str] | None = None) -> None:
+        """Mark every tensor stale, or only those registered with ``names``, so the next access re-reads it."""
+        selected = None if names is None else set(names)
         for registration in self._registrations:
-            registration.valid = False
+            if selected is None or not selected.isdisjoint(registration.names):
+                registration.valid = False
 
     def get(self, name: str) -> Any:
         registration = self._by_name.get(name)

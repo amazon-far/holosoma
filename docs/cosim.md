@@ -37,6 +37,7 @@ state, renders, and returns the requested images, which fill the remote cameras 
 exits when the source closes, including on Ctrl+C.
 
 - Local and remote cameras mix on one source.
+- `set_mount_pose()` works on a remote camera: the pose travels with the state, as `mount_pose/<camera>`.
 - Several renderers: give each its own plugin slot and endpoint, and set each remote camera to the slot that
   supplies it.
 - `cosim-render` is an ordinary plugin, so any task that installs plugins can use it; the tested path is
@@ -127,6 +128,5 @@ fields its peer reads.
 - Lockstep: the source waits for every exchange, with no overlap between physics and the peer's work.
 - After a reset, a remote camera keeps the reset environment's frame from before the reset until the next
   frame, as local cameras do.
-- Remote cameras have no runtime `set_mount_pose()` yet.
 - Failures propagate to both processes; there is no reconnection. Startup and the first frame may take
   minutes on first use; later exchanges time out after 30 seconds.

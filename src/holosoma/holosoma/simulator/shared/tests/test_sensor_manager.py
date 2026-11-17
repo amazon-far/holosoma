@@ -26,6 +26,7 @@ from holosoma.config_types.sensor import (
     SensorMountConfig,
 )
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.simulator.base_simulator.state import SimState
 from holosoma.simulator.shared.lidar_sensor import LidarPatternProvider
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch
@@ -247,3 +248,28 @@ def test_a_due_remote_camera_without_a_renderer_fails_at_the_sensor_render_hook(
     manager.collect_due()
     with pytest.raises(RuntimeError, match=r"did not fill them: \{'cam': 'cosim'\}"):
         BaseSimulator._sensors_rendered(cast("Any", SimpleNamespace(sensor_manager=manager)))
+
+
+def test_mount_pose_state_follows_set_mount_pose_and_writes_only_changed_rows() -> None:
+    manager = SensorManager("cpu", 50.0, num_envs=2)
+    local = manager.register_camera("local", _cam())
+    manager.register_camera("remote", dataclasses.replace(_cam(), remote="cosim"))
+    writes: list[list[int]] = []
+    local.write_mount_pose = lambda ids, _poses: writes.append(ids.tolist())
+    state = SimState()
+    BaseSimulator._register_mount_poses(cast("Any", SimpleNamespace(state=state, sensor_manager=manager)))
+
+    state.get("mount_pose/remote")
+    moved = torch.tensor([0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+    manager.set_mount_pose("remote", moved)  # stored without a writer; the cached field is re-read
+    torch.testing.assert_close(state.get("mount_pose/remote"), moved.expand(2, 7))
+
+    poses = state.get("mount_pose/local").clone()
+    state.assign({"mount_pose/local": poses})
+    state.flush_writes()
+    assert writes == []
+    poses[1, 0] += 0.5
+    state.assign({"mount_pose/local": poses})
+    state.flush_writes()
+    assert writes == [[1]]
+    torch.testing.assert_close(manager.get_mount_pose("local"), poses)

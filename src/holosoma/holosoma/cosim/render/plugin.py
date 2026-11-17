@@ -7,7 +7,8 @@ plugin by subclassing :class:`holosoma.cosim.base.BufferHandler`; :mod:`.rendere
   order of the joint, robot-body and object fields; ``env_origins`` ``[E, 3]`` is where the source simulated
   each environment, and the renderer places its environments there.
 - State: every non-empty SimState field. Roots are world-frame ``[pos, quat xyzw, lin vel, ang vel]``;
-  ``_rigid_body_pos`` and ``_rigid_body_rot`` are each body's world position and xyzw orientation.
+  ``_rigid_body_pos`` and ``_rigid_body_rot`` are each body's world position and xyzw orientation;
+  ``mount_pose/<sensor>`` ``[E, 7]`` is a sensor's current offset from its mount, XYZ + XYZW.
 - Requests: one per remote-camera output, named :func:`image_name` and decoded by :func:`camera_output`. rgb is
   ``uint8 [E, H, W, 3]``; depth is ``float32 [E, H, W, 1]``, metric distance to the image plane, ``+inf`` for no
   return. The source applies the camera's ``depth_clipping_behavior`` when it stores the image.

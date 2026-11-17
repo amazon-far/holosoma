@@ -6,7 +6,8 @@ The receiver writes ``DIR/ready`` once it accepts connections and exits after th
 selects the receiver's backend; the source is always MJWarp.
 
 With ``--loopback`` both sides add an rgb + depth camera ``loopback`` beside ``overview`` at the same pose; the
-source's is remote. :func:`run_pair` runs both roles for tests.
+source's is remote, and halfway through the source moves both cameras' mounts the same way.
+:func:`run_pair` runs both roles for tests.
 """
 
 from __future__ import annotations
@@ -93,7 +94,14 @@ def source(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bo
         cosim = sim.installed_plugins["cosim"]
         sim.hooks.add(Phase.FRAME_END, lambda: capture(sim, saved), after=sim.sensor_render_hook)
         task.reset_envs_idx()
-        for _ in range(frames):
+        for frame in range(frames):
+            if loopback and frame == frames // 2:
+                # Move both cameras the same way; the remote one moves through the renderer.
+                manager = sim.sensor_manager
+                moved = manager.get_mount_pose("overview")
+                moved[:, 0] += 0.2
+                for name in ("overview", "loopback"):
+                    manager.set_mount_pose(name, moved)
             task.step()
         saved["frames"] = cosim.publisher.sequence
     torch.save(saved, output / "source.pt")

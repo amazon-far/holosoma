@@ -128,6 +128,8 @@ class SensorManager:
         self._order: list[str] = []
         self._last_camera_due: set[str] = set()
         self._last_lidar_due: set[str] = set()
+        self.on_mount_pose_set: Callable[[str], None] | None = None
+        """Called with the sensor's name after :meth:`set_mount_pose` stores new offsets."""
 
     def _initial_mount_poses(self, config: SensorConfig) -> torch.Tensor:
         mount = config.mount
@@ -227,13 +229,15 @@ class SensorManager:
         Use XYZ + XYZW with unit quaternions: a single ``[7]`` pose broadcasts, while ``[N, 7]``
         sets each selected environment. ``env_ids=None`` selects all environments.
         Offsets persist across resets; sensor outputs reflect the change on their next render/capture.
+        A remote camera only stores the offsets, for the plugin that supplies its images.
         Call outside CUDA graph capture.
         """
         record = self.get_sensor(name)
         ids = self._mount_env_ids(env_ids)
         if ids.unique().numel() != ids.numel():
             raise ValueError("env_ids must not contain duplicates when setting sensor mount poses.")
-        if record.mount_poses is None or record.write_mount_pose is None:
+        remote = isinstance(record, CameraRecord) and record.config.remote is not None
+        if record.mount_poses is None or (record.write_mount_pose is None and not remote):
             raise NotImplementedError(f"Sensor '{name}' has no runtime mount-pose writer.")
         offsets = torch.as_tensor(poses, dtype=torch.float32, device=self.device).detach().clone()
         if offsets.shape == (7,):
@@ -248,8 +252,11 @@ class SensorManager:
         offsets[:, 3:] /= norms
         if len(ids) == 0:
             return
-        record.write_mount_pose(ids, offsets)
+        if record.write_mount_pose is not None:
+            record.write_mount_pose(ids, offsets)
         record.mount_poses[ids] = offsets
+        if self.on_mount_pose_set is not None:
+            self.on_mount_pose_set(name)
 
     @property
     def names(self) -> list[str]:
