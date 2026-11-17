@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from dataclasses import asdict, replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -294,6 +295,35 @@ def test_receiver_stops_waiting_when_the_source_exits(receiver: ReceiverFixture)
     assert calls[-2:] == ["unmap", "close"]
 
 
+def test_exchange_after_an_interrupted_request_takes_the_right_reply(tmp_path: Path) -> None:
+    import threading
+
+    import zmq
+
+    endpoint = f"ipc://{tmp_path}/control.sock"
+    receiver = bridge.ControlChannel(endpoint=endpoint, receiver=True, startup_timeout_ms=3000)
+    control = bridge.ControlChannel(endpoint=endpoint, startup_timeout_ms=100)
+
+    def serve() -> None:
+        for _ in range(2):  # Ends by timeout if the second request never arrives.
+            message = receiver.receive()
+            if message["type"] == "FRAME_AVAILABLE":
+                threading.Event().wait(0.3)
+            receiver.socket.send_json({"type": f"{message['type']}_REPLY"})
+
+    server = threading.Thread(target=serve, daemon=True)
+    server.start()
+    try:
+        with pytest.raises(zmq.Again):
+            control.exchange("FRAME_AVAILABLE")
+        control.set_timeout(2000)
+        assert control.exchange("CLOSE") == {"type": "CLOSE_REPLY"}
+    finally:
+        server.join(timeout=5)
+        control.close()
+        receiver.close()
+
+
 def test_publisher_without_shared_state_fails_before_connecting(monkeypatch: pytest.MonkeyPatch) -> None:
     values = {"dof_pos": torch.zeros(1, 2)}
     state = SimpleNamespace(names=lambda: list(values), get=values.__getitem__)
@@ -414,20 +444,24 @@ def test_episode_start_rerenders_only_the_reset_rows(plugin: PluginFixture) -> N
         assert bool((buffer[0] == 1).all()) and bool((buffer[1] == 7).all())
 
 
-def test_failed_exchange_closes_without_contacting_the_receiver(plugin: PluginFixture) -> None:
+@pytest.mark.parametrize(("failure", "closes"), [(RuntimeError("receiver failed"), False), (KeyboardInterrupt(), True)])
+def test_only_an_interrupted_exchange_still_closes_with_the_receiver(
+    plugin: PluginFixture, failure: BaseException, closes: bool
+) -> None:
     source, _manager, _images, calls = plugin
+    exchange = cast("Any", source.publisher.control).exchange
 
     def fail(command: str, **fields: Any) -> dict[str, Any]:
-        calls.append((command, fields))
-        raise RuntimeError("receiver failed")
+        if command != "CLOSE":
+            calls.append((command, fields))
+            raise failure
+        return exchange(command, **fields)
 
     cast("Any", source.publisher.control).exchange = fail
-    with pytest.raises(RuntimeError, match="receiver failed"):
+    with pytest.raises(type(failure)):
         source.simulator.hooks.emit(Phase.FRAME_END)
-    with pytest.raises(RuntimeError, match="earlier co-simulation exchange failed"):
-        source.publisher.publish()
     source.close()
-    assert calls[-1] == "unmap" and not any(call[0] == "CLOSE" for call in calls if isinstance(call, tuple))
+    assert (calls[-1] == ("CLOSE", {})) is closes and "unmap" in calls
 
 
 @pytest.mark.parametrize("dtype", ["uint8", "float32"])

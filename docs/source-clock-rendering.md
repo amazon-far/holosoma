@@ -139,8 +139,8 @@ simulation time and the source's hook phase they were sent from (`frame_end` for
 camera frames, `episode_start` for re-renders after resets, `None` unless exactly
 one phase is emitting). The receiver sets its kinematic clock to the frame's
 time. Publisher close obtains an unmap acknowledgment before storage can be
-released; after a failed exchange the publisher refuses further exchanges and
-closes without contacting the receiver. Failures/timeouts propagate; reconnection
+released; after an exchange fails, other than by interruption, the publisher
+refuses further exchanges and closes without contacting the receiver. Failures/timeouts propagate; reconnection
 and scene changes are not implemented. Startup and the first frame exchange may
 take up to five minutes (first-use compilation); later source exchanges time out
 after 30 seconds. After the handshake the receiver waits for frames as long as

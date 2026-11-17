@@ -44,6 +44,7 @@ class ControlChannel:
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP if receiver else zmq.REQ)
         self.socket.setsockopt(zmq.LINGER, 0)
+        self.awaiting_reply = False
         self.set_timeout(startup_timeout_ms)
         try:
             (self.socket.bind if receiver else self.socket.connect)(endpoint)
@@ -58,8 +59,14 @@ class ControlChannel:
         self.socket.setsockopt(zmq.SNDTIMEO, timeout_ms)
 
     def exchange(self, command: str, **fields: Any) -> dict[str, Any]:
+        if self.awaiting_reply:
+            # A request interrupted before its reply, e.g. by a signal, leaves REQ waiting for that reply.
+            self.receive()
+            self.awaiting_reply = False
         self.socket.send_json(dict(type=command, **fields))
+        self.awaiting_reply = True
         reply = self.receive()
+        self.awaiting_reply = False
         if reply["type"] == "ERROR":
             raise RuntimeError(reply["message"])
         return reply
@@ -130,8 +137,8 @@ class Publisher:
     The handshake runs at construction: every state field ``allocator`` shares, and ``requests``, go to
     the receiver. It answers with the fields it reads and one export per request, mapped as
     :attr:`imports`. Callers decide when to :meth:`publish`; each exchange refreshes the fields the
-    receiver reads and orders later work after the receiver's. After a failed exchange the publisher
-    refuses further exchanges and closes without contacting the receiver.
+    receiver reads and orders later work after the receiver's. After an exchange fails, other than by
+    interruption, the publisher refuses further exchanges and closes without contacting the receiver.
     """
 
     def __init__(
@@ -202,7 +209,7 @@ class Publisher:
         stream.record_event(self.ready)
         try:
             reply = self.control.exchange(command, **fields)
-        except BaseException:
+        except Exception:
             self.failed = True
             raise
         stream.wait_event(self.done)
