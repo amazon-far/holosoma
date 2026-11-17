@@ -34,3 +34,6 @@ def test_receiver_images_become_the_source_remote_camera_data() -> None:
     for output in outputs:
         assert torch.equal(sent[output], rendered[output])
         assert torch.equal(sent[output], sent[output.replace("loopback", "overview")])
+    moved, still = rendered["loopback/depth"], rendered["still/depth"]
+    finite = moved.isfinite() & still.isfinite()
+    assert (moved - still)[finite].abs().mean() > 0.005  # metres; the source moved the mount 0.2 m

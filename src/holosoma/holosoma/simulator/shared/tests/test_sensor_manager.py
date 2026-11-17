@@ -273,3 +273,30 @@ def test_mount_pose_state_follows_set_mount_pose_and_writes_only_changed_rows() 
     state.flush_writes()
     assert writes == [[1]]
     torch.testing.assert_close(manager.get_mount_pose("local"), poses)
+
+
+def test_writing_the_mount_pose_field_keeps_it_valid_and_matching_the_sensor() -> None:
+    manager = SensorManager("cpu", 50.0, num_envs=1)
+    manager.register_camera("cam", _cam()).write_mount_pose = lambda _ids, _poses: None
+    state = SimState()
+    BaseSimulator._register_mount_poses(cast("Any", SimpleNamespace(state=state, sensor_manager=manager)))
+
+    held = state.get("mount_pose/cam")
+    for step in (0.1, 0.2):  # a held reference can be written and flushed repeatedly
+        held[0, 0] += step
+        state.flush_writes()
+    torch.testing.assert_close(manager.get_mount_pose("cam"), held)
+
+    near_unit = held.clone()
+    near_unit[0, 3:] = torch.tensor([0.0, 0.0, 0.0, 1.00005])
+    state.assign({"mount_pose/cam": near_unit})
+    state.flush_writes()
+    torch.testing.assert_close(state.get("mount_pose/cam"), manager.get_mount_pose("cam"))  # normalised
+
+    stored = manager.get_mount_pose("cam")
+    held = state.get("mount_pose/cam")
+    held[0, 3:] = torch.tensor([0.0, 0.0, 0.0, 2.0])
+    with pytest.raises(ValueError, match="unit quaternion"):
+        state.flush_writes()
+    state.flush_writes()  # the rejected write is discarded, not retried
+    torch.testing.assert_close(state.get("mount_pose/cam"), stored)

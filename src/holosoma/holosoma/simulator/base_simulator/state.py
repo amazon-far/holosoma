@@ -258,9 +258,9 @@ class SimState:
                 if registration.write is None:
                     registration.valid = False
 
-    def mark_stale(self, names: Iterable[str] | None = None) -> None:
+    def mark_stale(self, names: str | Iterable[str] | None = None) -> None:
         """Mark every tensor stale, or only those registered with ``names``, so the next access re-reads it."""
-        selected = None if names is None else set(names)
+        selected = None if names is None else {names} if isinstance(names, str) else set(names)
         for registration in self._registrations:
             if selected is None or not selected.isdisjoint(registration.names):
                 registration.valid = False

@@ -31,3 +31,6 @@ def test_isaacsim_renderer_fills_the_source_remote_camera() -> None:
     for output in ("loopback/rgb", "loopback/depth"):
         assert torch.equal(sent[output], rendered[output])
     assert rendered["loopback/rgb"].float().std() > 0
+    moved, still = rendered["loopback/depth"], rendered["still/depth"]
+    finite = moved.isfinite() & still.isfinite()
+    assert (moved - still)[finite].abs().mean() > 0.005  # metres; the source moved the mount 0.2 m

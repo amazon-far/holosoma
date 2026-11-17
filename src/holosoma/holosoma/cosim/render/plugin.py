@@ -8,7 +8,8 @@ plugin by subclassing :class:`holosoma.cosim.base.BufferHandler`; :mod:`.rendere
   each environment, and the renderer places its environments there.
 - State: every non-empty SimState field. Roots are world-frame ``[pos, quat xyzw, lin vel, ang vel]``;
   ``_rigid_body_pos`` and ``_rigid_body_rot`` are each body's world position and xyzw orientation;
-  ``mount_pose/<sensor>`` ``[E, 7]`` is a sensor's current offset from its mount, XYZ + XYZW.
+  ``mount_pose/<sensor>`` ``[E, 7]`` is a sensor's current offset from its mount, XYZ + XYZW. A renderer
+  must apply it for remote cameras to follow ``set_mount_pose()``; the source warns once if one moves unread.
 - Requests: one per remote-camera output, named :func:`image_name` and decoded by :func:`camera_output`. rgb is
   ``uint8 [E, H, W, 3]``; depth is ``float32 [E, H, W, 1]``, metric distance to the image plane, ``+inf`` for no
   return. The source applies the camera's ``depth_clipping_behavior`` when it stores the image.
@@ -25,6 +26,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
+
+import torch
+from loguru import logger
 
 from holosoma.cosim.base import CosimPlugin
 from holosoma.cosim.bridge import BufferRequest, as_received
@@ -98,6 +102,12 @@ class CosimRenderPlugin(CosimPlugin):
         slot = simulator.hooks.installing_slot
         self.remote = [record for record in manager.cameras if slot is not None and record.config.remote == slot]
         super().__init__(cfg, simulator)
+        read = set(self.publisher.fields)
+        self._unread_mounts = [
+            (record, record.mount_poses.clone())
+            for record in self.remote
+            if record.mount_poses is not None and f"mount_pose/{record.name}" not in read
+        ]
 
     def requests(self) -> list[BufferRequest]:
         num_envs = self.simulator.sensor_manager.num_envs
@@ -122,6 +132,7 @@ class CosimRenderPlugin(CosimPlugin):
             cameras = [record for record in self.remote if record.name in due]
             if not cameras:
                 return
+            self._warn_if_unread_mount_moved()
             self.publisher.publish()
             images = self.publisher.imports
             for record in cameras:
@@ -129,3 +140,9 @@ class CosimRenderPlugin(CosimPlugin):
                     record.set_buffer(data_type, images[image_name(record.name, data_type)].clone())
         elif due:
             self.publisher.publish()
+
+    def _warn_if_unread_mount_moved(self) -> None:
+        """Warn once if a remote camera moves although its renderer does not read its mount pose."""
+        if moved := [record.name for record, pose in self._unread_mounts if not torch.equal(pose, record.mount_poses)]:
+            logger.warning(f"Remote cameras {moved} moved, but their renderer does not read mount_pose/<camera>")
+            self._unread_mounts = []

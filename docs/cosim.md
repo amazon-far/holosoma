@@ -38,6 +38,7 @@ exits when the source closes, including on Ctrl+C.
 
 - Local and remote cameras mix on one source.
 - `set_mount_pose()` works on a remote camera: the pose travels with the state, as `mount_pose/<camera>`.
+  On the renderer, cameras the source also has follow the source's poses every frame.
 - Several renderers: give each its own plugin slot and endpoint, and set each remote camera to the slot that
   supplies it.
 - `cosim-render` is an ordinary plugin, so any task that installs plugins can use it; the tested path is

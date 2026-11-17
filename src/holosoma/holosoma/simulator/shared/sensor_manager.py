@@ -223,14 +223,16 @@ class SensorManager:
             raise RuntimeError(f"Sensor '{name}' has no runtime mount state.")
         return record.mount_poses[self._mount_env_ids(env_ids)].clone()
 
-    def set_mount_pose(self, name: str, poses: torch.Tensor, env_ids: torch.Tensor | None = None) -> None:
+    def set_mount_pose(
+        self, name: str, poses: torch.Tensor, env_ids: torch.Tensor | None = None, *, notify: bool = True
+    ) -> None:
         """Update camera/LiDAR poses relative to their configured mount.
 
         Use XYZ + XYZW with unit quaternions: a single ``[7]`` pose broadcasts, while ``[N, 7]``
         sets each selected environment. ``env_ids=None`` selects all environments.
         Offsets persist across resets; sensor outputs reflect the change on their next render/capture.
-        A remote camera only stores the offsets, for the plugin that supplies its images.
-        Call outside CUDA graph capture.
+        A remote camera only stores the offsets, for the plugin that supplies its images. ``notify=False``
+        skips :attr:`on_mount_pose_set`. Call outside CUDA graph capture.
         """
         record = self.get_sensor(name)
         ids = self._mount_env_ids(env_ids)
@@ -255,7 +257,7 @@ class SensorManager:
         if record.write_mount_pose is not None:
             record.write_mount_pose(ids, offsets)
         record.mount_poses[ids] = offsets
-        if self.on_mount_pose_set is not None:
+        if notify and self.on_mount_pose_set is not None:
             self.on_mount_pose_set(name)
 
     @property

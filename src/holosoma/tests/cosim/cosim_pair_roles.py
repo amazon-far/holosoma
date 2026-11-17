@@ -5,8 +5,8 @@ usage: cosim_pair_roles.py {source,receiver} --endpoint ipc://... --output DIR [
 The receiver writes ``DIR/ready`` once it accepts connections and exits after the source closes. ``--simulator``
 selects the receiver's backend; the source is always MJWarp.
 
-With ``--loopback`` both sides add an rgb + depth camera ``loopback`` beside ``overview`` at the same pose; the
-source's is remote, and halfway through the source moves both cameras' mounts the same way.
+With ``--loopback`` both sides add rgb + depth cameras ``loopback`` and ``still`` at ``overview``'s pose; the
+source's ``loopback`` is remote, and halfway through the source moves ``overview`` and ``loopback`` the same way.
 :func:`run_pair` runs both roles for tests.
 """
 
@@ -46,7 +46,8 @@ def config(num_envs: int, loopback: bool = False, *, endpoint: str | None = None
     cameras: dict[str, Any] = {"overview": camera}
     if loopback:
         camera = replace(camera, data_types=["rgb", "depth"])
-        cameras = {"overview": camera, "loopback": replace(camera, remote=None if endpoint is None else "cosim")}
+        remote = replace(camera, remote=None if endpoint is None else "cosim")
+        cameras = {"overview": camera, "loopback": remote, "still": camera}
     plugins: dict[str, PluginConfig] = {} if endpoint is None else {"cosim": CosimRenderPluginConfig(endpoint=endpoint)}
     run = replace(run, training=replace(run.training, num_envs=num_envs, headless=True), sensor=cameras, plugin=plugins)
     set_simulator_type(run.simulator)

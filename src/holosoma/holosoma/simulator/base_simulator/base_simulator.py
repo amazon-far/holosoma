@@ -885,21 +885,26 @@ class BaseSimulator:
 
     def _register_mount_poses(self) -> None:
         """Serve each sensor's mount offsets as writable state ``mount_pose/<sensor>``, ``[E, 7]`` XYZ + XYZW."""
-        manager = self.sensor_manager
+        manager, state = self.sensor_manager, self.state
 
         def register(record: Any) -> None:
             def write(rows: torch.Tensor, poses: torch.Tensor) -> None:
                 # Unchanged rows skip the backend writer, which is costly on some renderers.
                 rows = rows[(poses[rows] != record.mount_poses[rows]).any(-1)]
-                if rows.numel():
-                    manager.set_mount_pose(record.name, poses[rows], rows)
+                if not rows.numel():
+                    return
+                try:
+                    manager.set_mount_pose(record.name, poses[rows], rows, notify=False)
+                finally:
+                    # The buffer holds what the sensor stores: normalised, or unchanged after a rejected write.
+                    poses[rows] = record.mount_poses[rows]
 
-            self.state.register(f"mount_pose/{record.name}", lambda: record.mount_poses, write=write)
+            state.register(f"mount_pose/{record.name}", lambda: record.mount_poses, write=write)
 
         for record in [*manager.cameras, *manager.lidars]:
             if record.mount_poses is not None:
                 register(record)
-        manager.on_mount_pose_set = lambda name: self.state.mark_stale((f"mount_pose/{name}",))
+        manager.on_mount_pose_set = lambda name: state.mark_stale(f"mount_pose/{name}")
 
     def close(self) -> None:
         """Emit the one-pass simulator teardown phase.
