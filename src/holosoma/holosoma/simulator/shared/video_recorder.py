@@ -25,6 +25,8 @@ from holosoma.simulator.shared.camera_controller import CameraController, Camera
 from holosoma.utils.video_utils import create_video, format_command_labels, overlay_text_on_image
 
 if TYPE_CHECKING:
+    import torch
+
     from holosoma.config_types.video import VideoConfig
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
     from holosoma.simulator.base_simulator.hooks import HookRegistry
@@ -335,20 +337,19 @@ class VideoRecorderInterface(ABC):
 
         return total_episodes % self.config.interval == 0
 
-    def on_episode_start(self, env_id: int) -> None:
+    def on_episode_start(self, env_ids: torch.Tensor) -> None:
         """Handle episode start event.
 
-        This method is called when an episode starts in a specific environment.
-        It tracks total episodes across all environments and only records from
-        the configured record_env_id.
+        This method is called when episodes start in a batch of environments.
+        It counts episodes of the configured record_env_id and only records from it.
 
         Parameters
         ----------
-        env_id : int
-            The environment ID where the episode is starting.
+        env_ids : torch.Tensor
+            The environment IDs where episodes are starting.
         """
         # Only record from the specified environment
-        if env_id != self.config.record_env_id:
+        if self.config.record_env_id not in env_ids.tolist():
             return
 
         # Increment total episode count (across all environments)
@@ -358,14 +359,14 @@ class VideoRecorderInterface(ABC):
             self._current_episode = self._total_episodes
             self.start_recording(self._total_episodes)
 
-    def on_episode_end(self, env_id: int) -> None:
+    def on_episode_end(self, env_ids: torch.Tensor) -> None:
         """Handle episode end event.
 
-        This method is called when an episode ends and stops recording
-        if it was active for the current episode.
+        This method is called when episodes end in a batch of environments and stops
+        recording if it was active for the current episode.
         """
         # Only stop for the specified environment
-        if env_id != self.config.record_env_id:
+        if self.config.record_env_id not in env_ids.tolist():
             return
 
         # Let stop_recording() handle the recording state check

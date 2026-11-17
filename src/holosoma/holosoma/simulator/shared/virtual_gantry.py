@@ -163,9 +163,9 @@ class VirtualGantry:
         self.point = np.array([x, y, self.height])
         logger.debug(f"Virtual gantry position reset to '{self.point}'")
 
-    def on_episode_start(self, env_id: int) -> None:
+    def on_episode_start(self, env_ids: torch.Tensor) -> None:
         """Reset the gantry anchor when the tracked environment starts."""
-        if env_id == 0:
+        if 0 in env_ids.tolist():
             self.set_position_to_robot()
 
     def handle_command(self, command_data: GantryCommandData | GantryCommand) -> bool:

@@ -435,7 +435,7 @@ def main() -> int:
     # movie; on_episode_end (after the loop) encodes and writes the file.
     if sim.video_recorder is not None:
         sim.video_recorder.setup_recording()
-        sim.video_recorder.on_episode_start(env_id=sim.video_recorder.config.record_env_id)
+        sim.video_recorder.on_episode_start(torch.tensor([sim.video_recorder.config.record_env_id]))
 
     free_names = sim.object_registry.get_names_by_type(ObjectType.INDIVIDUAL)
     static_names = sim.object_registry.get_names_by_type(ObjectType.SCENE)
@@ -653,7 +653,7 @@ def main() -> int:
 
     # Finalize the movie (encode + write) BEFORE any hard-exit below, which would skip it.
     if sim.video_recorder is not None:
-        sim.video_recorder.on_episode_end(env_id=sim.video_recorder.config.record_env_id)
+        sim.video_recorder.on_episode_end(torch.tensor([sim.video_recorder.config.record_env_id]))
         print(f"VIDEO saved under {args.record}")
 
     return code

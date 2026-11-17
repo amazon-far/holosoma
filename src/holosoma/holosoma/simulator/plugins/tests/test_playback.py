@@ -9,7 +9,7 @@ shutdown, object routing).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -469,11 +469,20 @@ def _multi_cfg(
     return MotionPlaybackPluginConfig(motion_files=files, **kw)
 
 
-def _spy(sim: _FakeSimulator) -> list[tuple[str, int]]:
-    """Record episode-boundary emits in order as (phase, env_id)."""
+def _spy(sim: _FakeSimulator, emits: list[str] | None = None) -> list[tuple[str, int]]:
+    """Record episode-boundary emits in order as (phase, env_id), one entry per env of each batch."""
     log: list[tuple[str, int]] = []
-    sim.hooks.add(Phase.EPISODE_END, lambda env_id: log.append(("end", env_id)), name="spy.end")
-    sim.hooks.add(Phase.EPISODE_START, lambda env_id: log.append(("start", env_id)), name="spy.start")
+
+    def spy(phase: str) -> Callable[[torch.Tensor], None]:
+        def record(env_ids: torch.Tensor) -> None:
+            if emits is not None:
+                emits.append(phase)
+            log.extend((phase, env_id) for env_id in env_ids.tolist())
+
+        return record
+
+    sim.hooks.add(Phase.EPISODE_END, spy("end"), name="spy.end")
+    sim.hooks.add(Phase.EPISODE_START, spy("start"), name="spy.start")
     return log
 
 
@@ -522,12 +531,14 @@ def test_n_run_repeats_single_clip(tmp_path: Path) -> None:
     assert xs.count(0.0) == 3
 
 
-def test_episode_boundary_emits_end_then_start_per_env(tmp_path: Path) -> None:
+def test_episode_boundary_emits_end_then_start_for_all_envs(tmp_path: Path) -> None:
     sim = _FakeSimulator(num_envs=2)
     _make(_multi_cfg(tmp_path, [0.0, 100.0]), sim)  # 2 episodes -> 1 boundary
-    log = _spy(sim)
+    emits: list[str] = []
+    log = _spy(sim, emits)
     _run_until_shutdown(sim)
-    # One boundary: EPISODE_END for every env, then EPISODE_START for every env.
+    # One boundary: one EPISODE_END for every env, then one EPISODE_START for every env.
+    assert emits == ["end", "start"]
     assert log == [("end", 0), ("end", 1), ("start", 0), ("start", 1)]
 
 
