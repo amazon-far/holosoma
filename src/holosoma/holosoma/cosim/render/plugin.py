@@ -9,10 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import asdict
-from enum import Enum
 from typing import TYPE_CHECKING, Any
-
-import torch
 
 from holosoma.cosim.base import CosimPlugin
 from holosoma.cosim.bridge import BufferRequest, as_received
@@ -72,19 +69,11 @@ def camera_requests(record: CameraRecord, num_envs: int) -> list[BufferRequest]:
     ]
 
 
-class CosimRenderHook(Enum):
-    """Hooks :class:`CosimRenderPlugin` publishes, for ordering with ``HookRef(<slot>, member)``."""
-
-    RERENDER = "rerender"
-    """The ``EPISODE_START`` re-render of reset environments; order state writers before it."""
-
-
 class CosimRenderPlugin(CosimPlugin):
     """Share ``simulator``'s state with a renderer and publish a frame whenever a camera is due.
 
     Remote cameras take the renderer's images: each frame they are filled after local sensors render
-    and before consumers read them, and after resets the renderer re-renders the reset envs. Without
-    remote cameras, state is published after local cameras render.
+    and before consumers read them. Without remote cameras, state is published after local cameras render.
     """
 
     def __init__(self, cfg: CosimRenderPluginConfig, simulator: BaseSimulator) -> None:
@@ -110,8 +99,6 @@ class CosimRenderPlugin(CosimPlugin):
             after=self.simulator.sensor_capture_hook,
             before=self.simulator.sensor_render_hook,
         )
-        if self.remote:
-            yield hooks.add(Phase.EPISODE_START, self._rerender, name="cosim.rerender", key=CosimRenderHook.RERENDER)
 
     def _frame(self) -> None:
         """Publish when a camera is due, and fill the due remote cameras from the renderer's images."""
@@ -127,15 +114,3 @@ class CosimRenderPlugin(CosimPlugin):
                     record.set_buffer(data_type, images[image_name(record.name, data_type)].clone())
         elif due:
             self.publisher.publish()
-
-    def _rerender(self, env_ids: torch.Tensor) -> None:
-        """Have the renderer render the reset envs' state at the current time, and take their rows."""
-        self.publisher.publish()
-        images = self.publisher.imports
-        for record in self.remote:
-            for data_type in record.config.data_types:
-                image = images[image_name(record.name, data_type)]
-                if data_type in record.buffers:
-                    record.set_buffer_rows(data_type, env_ids, image[env_ids])
-                else:
-                    record.set_buffer(data_type, image.clone())

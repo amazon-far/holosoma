@@ -149,8 +149,7 @@ cameras and completes GPU reads. Physics resumes after completion: serialized
 lockstep, with no physics/render overlap or frame pipelining. Startup handles and
 layout travel once; subsequent notifications carry the frame sequence,
 simulation time and the source's hook phase they were sent from (`frame_end` for
-camera frames, `episode_start` for re-renders after resets, `None` unless exactly
-one phase is emitting). The receiver sets its kinematic clock to the frame's
+camera frames, `None` unless exactly one phase is emitting). The receiver sets its kinematic clock to the frame's
 time. Publisher close obtains an unmap acknowledgment before storage can be
 released; after an exchange fails, other than by interruption, the publisher
 refuses further exchanges and closes without contacting the receiver. Failures/timeouts propagate; reconnection
@@ -205,17 +204,8 @@ into a new buffer, so earlier frames held by consumers stay valid. Publication f
 remote cameras: a frame is published when one of them is due. Without remote
 cameras the source publishes after capture, as above.
 
-Sources reset environments after cameras render. On `EPISODE_START`, which fires
-once per reset batch after the reset state is written, the plugin publishes a
-frame at the current source time; the receiver applies the reset state and
-renders every environment, and the source takes only the reset rows (the whole
-image if a camera has none yet). A plugin that writes state at `EPISODE_START`
-orders itself before this re-render with
-`before=HookRef(<cosim slot>, CosimRenderHook.RERENDER)`, using
-`holosoma.cosim.render.plugin.CosimRenderHook`. State
-changes that start no episode, such as a motion-tracking command teleporting an
-environment to a new clip, are not re-rendered: remote cameras keep their frame
-from before the change for that step.
+Remote cameras are not re-rendered after resets: like local cameras, a reset environment
+keeps its frame from before the reset until the next frame.
 
 Limits: the receiver renders all of its cameras for every published frame, while
 the source updates only its due cameras. Runtime mount-pose changes and episode

@@ -4,7 +4,7 @@ usage: cosim_pair_roles.py {source,receiver} --endpoint ipc://... --output DIR [
 The receiver writes ``DIR/ready`` once it accepts connections and exits after the source closes.
 
 With ``--loopback`` both sides add an rgb + depth camera ``loopback`` beside ``overview`` at the same pose; the
-source's is remote. After its frames the source resets env 0, which re-renders it.
+source's is remote.
 """
 
 from __future__ import annotations
@@ -57,20 +57,16 @@ def receiver(endpoint: str, output: Path, num_envs: int, loopback: bool) -> None
     from holosoma.cosim.render.renderer import RenderHandler, create_render_task
     from holosoma.simulator.base_simulator.hooks import Phase
 
-    captures: list[dict[str, Any]] = []
-
-    def keep() -> None:
-        captures[:] = [*captures[-1:], {}]
-        capture(sim, captures[-1])
+    saved: dict[str, Any] = {}
 
     with create_render_task(config(num_envs, loopback)) as task:
         sim = task.simulator
-        sim.hooks.add(Phase.FRAME_END, keep, after=sim.sensor_render_hook)
+        sim.hooks.add(Phase.FRAME_END, lambda: capture(sim, saved), after=sim.sensor_render_hook)
         receiver_loop = Receiver(RenderHandler(task), endpoint=endpoint)
         (output / "ready").write_text("ready\n")
         receiver_loop.run()
         frames = task.frames_rendered
-    torch.save({**captures[-1], "previous": captures[0], "frames": frames}, output / "receiver.pt")
+    torch.save({**saved, "frames": frames}, output / "receiver.pt")
 
 
 def source(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bool) -> None:
@@ -86,11 +82,6 @@ def source(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bo
         task.reset_envs_idx()
         for _ in range(frames):
             task.step()
-        if loopback:
-            saved["stale"] = sim.get_camera_data("loopback", "rgb").clone().cpu()
-            task.reset_envs_idx(torch.tensor([0], device=sim.sim_device))  # Its EPISODE_START re-renders env 0.
-            sim.backend.render_cameras([sim.sensor_manager.get("overview")])
-            capture(sim, saved.setdefault("reset", {}))
         saved["frames"] = cosim.publisher.sequence
     torch.save(saved, output / "source.pt")
 

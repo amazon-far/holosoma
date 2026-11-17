@@ -434,19 +434,6 @@ def test_remote_due_cameras_get_copies_of_the_receiver_images(plugin: PluginFixt
     assert calls[-1] == ("CLOSE", {})  # no more frames after close
 
 
-def test_episode_start_rerenders_only_the_reset_rows(plugin: PluginFixture) -> None:
-    source, manager, images, calls = plugin
-    hooks = source.simulator.hooks
-    hooks.emit(Phase.FRAME_END)
-    for image in images.values():
-        image.fill_(7)
-    hooks.emit(Phase.EPISODE_START, torch.tensor([1]))
-    assert calls[-1] == ("FRAME_AVAILABLE", {"frame": {"sequence": 2, "sim_time": 0.5, "phase": "episode_start"}})
-    for data_type in ("rgb", "depth"):
-        buffer = manager.get("cam").buffers[data_type]
-        assert bool((buffer[0] == 1).all()) and bool((buffer[1] == 7).all())
-
-
 @pytest.mark.parametrize(("failure", "closes"), [(RuntimeError("receiver failed"), False), (KeyboardInterrupt(), True)])
 def test_only_an_interrupted_exchange_still_closes_with_the_receiver(
     plugin: PluginFixture, failure: BaseException, closes: bool

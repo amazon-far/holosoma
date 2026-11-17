@@ -78,12 +78,5 @@ def test_receiver_images_become_the_source_remote_camera_data() -> None:
 
     assert sent["frames"] == rendered["frames"] > 1
     for output in outputs:
-        assert torch.equal(sent[output], rendered["previous"][output])
+        assert torch.equal(sent[output], rendered[output])
         assert torch.equal(sent[output], sent[output.replace("loopback", "overview")])
-
-    reset = sent["reset"]
-    assert not torch.equal(reset["loopback/rgb"][0], sent["stale"][0])
-    torch.testing.assert_close(rendered["robot_root_states"], reset["robot_root_states"])
-    for output in outputs:
-        assert torch.equal(reset[output], rendered[output])
-        assert torch.equal(reset[output], reset[output.replace("loopback", "overview")])
