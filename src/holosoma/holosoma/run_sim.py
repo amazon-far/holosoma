@@ -81,13 +81,7 @@ def main() -> None:
     logger.info("Holosoma Direct Simulation Runner")
     logger.info("Compositional configuration via subcommands (like eval_agent.py)")
 
-    from holosoma.utils.config_document import ConfigDocumentError, expand_config_args
     from holosoma.utils.config_registry import parse_config
-
-    try:
-        sys.argv = [sys.argv[0], *expand_config_args(sys.argv[1:])]
-    except ConfigDocumentError as exc:
-        raise SystemExit(f"--config: {exc}") from exc
 
     config = parse_config(
         RunSimConfig,

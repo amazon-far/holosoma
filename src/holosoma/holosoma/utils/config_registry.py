@@ -213,7 +213,8 @@ def parse_config(
 ) -> Any:
     """Parse a config with plugin, preset-file, and dynamic-dict support.
 
-    Recognizes repeatable ``--import-file PATH`` options and top-level
+    Recognizes repeatable ``--import-file PATH`` options, one ``--config PATH [--config-path a.b]``
+    run document (see :mod:`holosoma.utils.config_document`), and top-level
     ``<field>.<key>:<variant>`` dict declarations.
 
     Args:
@@ -225,6 +226,7 @@ def parse_config(
     Returns:
         The parsed config instance.
     """
+    from holosoma.utils.config_document import ConfigDocumentError, expand_config_args
     from holosoma.utils.tyro_utils import (
         TYRO_CONIFG,
         dynamic_dict_decl_pattern,
@@ -235,13 +237,17 @@ def parse_config(
 
     use_sys_argv = args is None
     argv = sys.argv[1:] if args is None else list(args)
-    _reject_legacy_mujoco_cli(argv)
 
     import_paths, argv = split_import_file_args(argv)
     load_plugins(import_paths)
 
     # Factories build tyro subcommand aliases from registries after external presets are loaded.
     config_type = _resolve_config(config)
+    try:
+        argv = expand_config_args(argv, frozenset(_root_subcommands(config_type)))
+    except ConfigDocumentError as exc:
+        raise SystemExit(str(exc)) from exc
+    _reject_legacy_mujoco_cli(argv)
 
     dynamic_defaults: dict[str, dict[str, Any]] = {}
     for field_name, value_hint in find_dynamic_dict_fields(config_type).items():
@@ -283,19 +289,15 @@ def _resolve_config(config: Any) -> Any:
     return config() if is_factory else config
 
 
-def _root_subcommand_default(config_type: Any, argv: list[str]) -> Any:
-    """Return the preset selected by a root-level subcommand token in ``argv``, if any.
+def _root_subcommands(config_type: Any) -> dict[str, Any]:
+    """Return root-level subcommand names (hyphenated) mapped to their preset defaults.
 
     A root alias like ``Annotated[ExperimentConfig, tyro.conf.arg(constructor=
     subcommand_type_from_defaults({'exp:name': preset, ...}))]`` carries each preset as
-    the ``default`` of a ``tyro.conf.subcommand`` on the union members. When argv picks
-    one (e.g. ``exp:g1-29dof-wbt``), that preset — not a bare instance — is the correct
-    base for dynamic-dict injection. Tokens match with tyro's hyphen/underscore
-    equivalence. Returns None when the root is not such an alias or no token matches.
+    the ``default`` of a ``tyro.conf.subcommand`` on the union members. Returns an empty
+    mapping when the root is not such an alias.
     """
-    tokens = {t.replace("_", "-") for t in argv if not t.startswith("-")}
-    if not tokens:
-        return None
+    found: dict[str, Any] = {}
     for marker in getattr(config_type, "__metadata__", ()):
         factory = getattr(marker, "constructor_factory", None)
         if factory is None:
@@ -308,8 +310,22 @@ def _root_subcommand_default(config_type: Any, argv: list[str]) -> Any:
         for member in typing.get_args(union):
             for sub in getattr(member, "__metadata__", ()):
                 name = getattr(sub, "name", None)
-                if isinstance(name, str) and name.replace("_", "-") in tokens:
-                    return getattr(sub, "default", None)
+                if isinstance(name, str):
+                    found.setdefault(name.replace("_", "-"), getattr(sub, "default", None))
+    return found
+
+
+def _root_subcommand_default(config_type: Any, argv: list[str]) -> Any:
+    """Return the preset selected by a root-level subcommand token in ``argv``, if any.
+
+    When argv picks one (e.g. ``exp:g1-29dof-wbt``), that preset — not a bare instance — is
+    the correct base for dynamic-dict injection. Tokens match with tyro's hyphen/underscore
+    equivalence. Returns None when the root is not an alias or no token matches.
+    """
+    tokens = {t.replace("_", "-") for t in argv if not t.startswith("-")}
+    for name, preset in _root_subcommands(config_type).items():
+        if name in tokens:
+            return preset
     return None
 
 
