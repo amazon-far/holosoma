@@ -1,1 +1,1 @@
-"""Co-simulation rendering: :mod:`.plugin` for the source's plugin, :mod:`.renderer` for the renderer process."""
+"""Co-simulation rendering: the ``cosim-render`` plugin and the renderer process it drives."""
