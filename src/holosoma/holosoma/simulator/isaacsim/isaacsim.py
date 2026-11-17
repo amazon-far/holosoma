@@ -335,10 +335,10 @@ class IsaacSim(BaseSimulator):
 
     def match_env_origins(self, origins: torch.Tensor) -> None:
         """Move the cloned environment prims to ``origins``, so world-frame state renders in place."""
-        if self._render_capture is None:
-            raise RuntimeError("Environments can be moved only for render-only rendering")
         if origins.shape != self.scene.env_origins.shape or torch.equal(origins, self.scene.env_origins):
             return
+        if self._render_capture is None:
+            raise RuntimeError("Environments can be moved only for render-only rendering")
         from pxr import Gf
 
         stage = stage_utils.get_current_stage()

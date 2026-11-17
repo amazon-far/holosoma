@@ -77,10 +77,9 @@ python -m holosoma.run_sim \
 
 The plugin installs the shared cache allocator, so it must be installed before anything
 reads simulator state; list it first. Co-simulation plugins on one simulator share that
-allocator. When the renderer places environments itself
-(Isaac's clone grid), it moves them to the source's origins at startup, so world-frame
-state, world-mounted cameras and terrain agree; other renderers keep their configured
-origins, which must match the source's.
+allocator. At startup the renderer adopts the source's environment origins: Isaac
+moves its clone-grid environments to them, and MuJoCo re-places world-mounted sensors,
+so world-frame state, world-mounted cameras and terrain agree.
 
 Receiver process:
 

@@ -706,7 +706,7 @@ class BaseSimulator:
         return None
 
     def prepare_render_only(self) -> None:
-        """Prepare, after ordinary startup, to render applied state at an external clock."""
+        """Prepare, after ordinary startup, to render applied state without physics."""
 
     def match_env_origins(self, origins: torch.Tensor) -> None:
         """Place render-only environments at ``origins`` ``[num_envs, 3]``, where a source simulated them.

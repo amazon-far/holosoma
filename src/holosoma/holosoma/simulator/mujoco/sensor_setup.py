@@ -96,16 +96,16 @@ def _write_mount_pose(
 def register_cameras(sim: MuJoCo, manager: SensorManager) -> None:
     """Register cameras and create the backend's renderers for local cameras.
 
-    Widens MuJoCo's global near/far clip range to cover every configured camera because MuJoCo
+    Widens MuJoCo's global near/far clip range to cover every local camera because MuJoCo
     clipping is global rather than per-camera.
     """
     cameras = {name: config for name, config in sim.sensor_config.items() if isinstance(config, CameraSensorConfig)}
     if cameras:
         assert sim.root_model is not None
         extent = float(sim.root_model.stat.extent)
-        if extent > 0:
-            sim.root_model.vis.map.znear = min(camera.near for camera in cameras.values()) / extent
-            sim.root_model.vis.map.zfar = max(camera.far for camera in cameras.values()) / extent
+        if extent > 0 and (local_configs := [camera for camera in cameras.values() if not camera.remote]):
+            sim.root_model.vis.map.znear = min(camera.near for camera in local_configs) / extent
+            sim.root_model.vis.map.zfar = max(camera.far for camera in local_configs) / extent
 
         for name, config in cameras.items():
             record = manager.register_camera(name, config)

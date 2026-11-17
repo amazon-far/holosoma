@@ -633,6 +633,14 @@ class MuJoCo(BaseSimulator):
         self.commands = torch.zeros(self.num_envs, 9, device=self.sim_device, dtype=torch.float32)
         logger.info(f"Initialized command system with shape: {self.commands.shape}")
 
+    def match_env_origins(self, origins: torch.Tensor) -> None:
+        """Adopt the source's environment ``origins``, so world-mounted sensors render where it simulated them."""
+        if origins.shape != self.env_origins.shape or torch.equal(origins.to(self.env_origins), self.env_origins):
+            return
+        self.env_origins = origins.to(self.env_origins).clone()
+        self.scene = EnvOriginsScene(self.env_origins, self.sim_device)
+        initialize_camera_mounts(self)
+
     def _set_robot_initial_state(self) -> None:
         """Set complete initial robot state (position, orientation, velocities).
 
@@ -1120,9 +1128,23 @@ class MuJoCo(BaseSimulator):
             self.backend.set_actor_state(env_ids, obj_states, qpos_addr, qvel_addr)
 
     def _write_object_root_states(self, env_ids: torch.Tensor, states: torch.Tensor) -> None:
-        """Write ``[len(env_ids), num_objects, 13]`` object roots, in ``object_state_names`` order."""
-        resolved = [(name, env_ids) for name, _ in self._object_state_pairs]
-        self._write_actor_rows(resolved, states.transpose(0, 1).reshape(-1, 13))
+        """Write ``[len(env_ids), num_objects, 13]`` object roots, in ``object_state_names`` order.
+
+        Static objects are placed in one backend call, so kinematics refreshes once per write.
+        """
+        names = [name for name, _ in self._object_state_pairs]
+        static = [column for column, name in enumerate(names) if name in self.static_object_body_ids]
+        free = [column for column, name in enumerate(names) if name not in self.static_object_body_ids]
+        if free:
+            resolved = [(names[column], env_ids) for column in free]
+            self._write_actor_rows(resolved, states[:, free].transpose(0, 1).reshape(-1, 13))
+        if static:
+            self.backend.set_static_body_world_pose(
+                [self.static_object_body_ids[names[column]] for column in static],
+                states[:, static, :3],
+                states[:, static, 3:7],
+                env_ids=env_ids,
+            )
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
         """Get actor indices using ObjectRegistry (robot or rigid object).
