@@ -57,7 +57,7 @@ from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera, R
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
-    from holosoma.simulator.shared.sensor_manager import CameraRecord
+    from holosoma.simulator.shared.sensor_manager import CameraRecord, LidarRecord
 
 
 def build_cameras(sim: IsaacSim) -> None:
@@ -215,17 +215,25 @@ def render_cameras(sim: IsaacSim, due: list[CameraRecord]) -> None:
         if camera_record.name in sim.raycast_cameras:
             sim.raycast_cameras[camera_record.name].render(camera_record)
             continue
-        out = sim.tiled_cameras[camera_record.name].data.output
-        if "rgb" in camera_record.config.data_types:
-            rgb = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
-            if rgb.dtype != torch.uint8:
-                rgb = rgb.clamp(0, 255).to(torch.uint8)
-            camera_record.set_buffer("rgb", rgb)
-        if "depth" in camera_record.config.data_types:
-            # distance_to_image_plane is float32 meters, image-plane. Ensure a trailing channel
-            # dim; CameraRecord applies the configured cross-backend no-return convention.
-            depth = out["distance_to_image_plane"].to(torch.float32)
-            camera_record.set_buffer("depth", depth if depth.ndim == 4 else depth.unsqueeze(-1))
+        for output, frame in _tiled_camera_frame(sim.tiled_cameras[camera_record.name], camera_record).items():
+            camera_record.set_buffer(output, frame)
+
+
+def _tiled_camera_frame(camera: TiledCamera, record: CameraRecord) -> dict[str, torch.Tensor]:
+    """Read a TiledCamera's latest output as ``[N,H,W,3]`` uint8 ``rgb`` and ``[N,H,W,1]`` float32 ``depth``."""
+    out = camera.data.output
+    frame = {}
+    if "rgb" in record.config.data_types:
+        rgb = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
+        if rgb.dtype != torch.uint8:
+            rgb = rgb.clamp(0, 255).to(torch.uint8)
+        frame["rgb"] = rgb
+    if "depth" in record.config.data_types:
+        # distance_to_image_plane is float32 meters, image-plane. Ensure a trailing channel
+        # dim; CameraRecord applies the configured cross-backend no-return convention.
+        depth = out["distance_to_image_plane"].to(torch.float32)
+        frame["depth"] = depth if depth.ndim == 4 else depth.unsqueeze(-1)
+    return frame
 
 
 def _pattern(
@@ -696,15 +704,56 @@ def _app_updates_without_physics() -> Iterator[None]:
 
 def render_lidars(sim: IsaacSim) -> None:
     for lidar_record in sim.sensor_manager.collect_lidars_due():
-        pattern = lidar_record.pattern_at(sim.time())
-        sensor = sim.scene.sensors.get(lidar_record.name)
-        if not isinstance(sensor, MutableMultiMeshRayCaster):
-            raise TypeError(f"LiDAR '{lidar_record.name}' has no mutable MultiMeshRayCaster.")
-        sensor.set_ray_directions(pattern.directions)
+        _scan_lidar(sim, lidar_record)
+
+
+def _lidar_sensor(sim: IsaacSim, name: str) -> MutableMultiMeshRayCaster:
+    sensor = sim.scene.sensors.get(name)
+    if not isinstance(sensor, MutableMultiMeshRayCaster):
+        raise TypeError(f"LiDAR '{name}' has no mutable MultiMeshRayCaster.")
+    return sensor
+
+
+def _scan_lidar(sim: IsaacSim, lidar_record: LidarRecord) -> None:
+    pattern = lidar_record.pattern_at(sim.time())
+    sensor = _lidar_sensor(sim, lidar_record.name)
+    sensor.set_ray_directions(pattern.directions)
+    with _app_updates_without_physics():
+        native = sensor.data
+    distances = torch.linalg.vector_norm(native.ray_hits_w - sensor.ray_starts_w, dim=-1)
+    finalize_lidar_returns(lidar_record, pattern.directions, distances)
+
+
+def rerender_sensors(sim: IsaacSim, env_ids: torch.Tensor) -> None:
+    """Re-render ``env_ids`` for RTX cameras and LiDARs, leaving other envs' rows unchanged.
+
+    RTX cameras render ``sim.num_rerenders_on_reset`` times; LiDARs cast once with their last
+    scan's pattern. A sensor with no frame yet is captured for every env."""
+    tiled = [record for record in sim.sensor_manager.cameras if record.name in sim.tiled_cameras]
+    if tiled:
+        # Isaac Lab rewrites a camera's output for every env in place, and held frames can alias it.
+        for record in tiled:
+            for output, buffer in record.buffers.items():
+                record.buffers[output] = buffer.clone()
+        for _ in range(sim.simulator_config.sim.num_rerenders_on_reset):
+            sim._render_frame()
+        for record in tiled:
+            camera = sim.tiled_cameras[record.name]
+            camera._is_outdated[env_ids.to(camera._is_outdated.device)] = True
+            for output, frame in _tiled_camera_frame(camera, record).items():
+                record.set_frame(output, frame, env_ids)
+    for lidar_record in sim.sensor_manager.lidars:
+        directions = lidar_record.scan_directions
+        if directions is None:
+            _scan_lidar(sim, lidar_record)
+            continue
+        sensor = _lidar_sensor(sim, lidar_record.name)
+        sensor.set_ray_directions(directions)
+        ids = env_ids.to(sensor.ray_starts_w.device)
         with _app_updates_without_physics():
-            native = sensor.data
-        distances = torch.linalg.vector_norm(native.ray_hits_w - sensor.ray_starts_w, dim=-1)
-        finalize_lidar_returns(lidar_record, pattern.directions, distances)
+            sensor._update_buffers_impl(ids)
+        distances = torch.linalg.vector_norm(sensor._data.ray_hits_w[ids] - sensor.ray_starts_w[ids], dim=-1)
+        finalize_lidar_returns(lidar_record, directions, distances, env_ids=env_ids)
 
 
 def build_sensors(sim: IsaacSim) -> None:

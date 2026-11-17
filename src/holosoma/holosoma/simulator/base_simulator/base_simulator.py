@@ -1012,11 +1012,19 @@ class BaseSimulator:
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
 
     def rerender_sensors(self, env_ids: torch.Tensor) -> None:
-        """Re-render ``env_ids`` for sensors that support partial rendering; other sensors keep their frame.
+        """Re-render ``env_ids`` into the sensor buffers, leaving other envs' rows unchanged.
 
-        Body poses must already reflect the state written for those envs.
+        Ray-cast cameras always re-render. Other sensors re-render only when
+        ``sim.num_rerenders_on_reset`` is above 0, and otherwise keep their frame. Body poses must
+        already reflect the state written for those envs.
         """
+        if env_ids.numel() > 0 and self.simulator_config.sim.num_rerenders_on_reset > 0:
+            self._rerender_full_pass_sensors(env_ids)
         self.sensor_manager.rerender(env_ids)
+
+    def _rerender_full_pass_sensors(self, env_ids: torch.Tensor) -> None:
+        """Re-render ``env_ids`` for the sensors that have no ``rerender`` callback."""
+        raise NotImplementedError("The '_rerender_full_pass_sensors' method must be implemented in subclasses.")
 
     def get_camera_data(
         self,
