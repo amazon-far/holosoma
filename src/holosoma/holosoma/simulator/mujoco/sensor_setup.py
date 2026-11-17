@@ -126,11 +126,10 @@ def initialize_camera_mounts(sim: MuJoCo) -> None:
 
 
 def render_cameras(sim: MuJoCo) -> None:
-    """Render due local cameras into their cached output buffers, then due remote cameras."""
+    """Render due local cameras into their cached output buffers; remote cameras are filled by their renderer."""
     due = sim.sensor_manager.collect_due()
     if local := [record for record in due if not record.config.remote]:
         sim.backend.render_cameras(local)
-    sim.sensor_manager.render_remote(due)
 
 
 def register_lidars(sim: MuJoCo, manager: SensorManager) -> None:

@@ -35,9 +35,11 @@ if TYPE_CHECKING:
 class CosimRenderPlugin:
     """Share ``simulator``'s state with a renderer and publish a frame whenever a camera is due.
 
-    Remote cameras take the renderer's images: this plugin is their remote renderer. Without remote
-    cameras, state is published after local cameras render. Installs the shared cache allocator, so it
-    must run before anything reads simulator state; construction blocks until the renderer accepts.
+    Remote cameras take the renderer's images: each frame they are filled after local sensors render
+    and before consumers read them, and after resets the renderer re-renders the reset envs. Without
+    remote cameras, state is published after local cameras render. Installs the shared cache
+    allocator, so it must run before anything reads simulator state; construction blocks until the
+    renderer accepts.
     """
 
     def __init__(self, cfg: CosimRenderPluginConfig, simulator: BaseSimulator) -> None:
@@ -49,36 +51,42 @@ class CosimRenderPlugin:
         if not manager.cameras:
             raise ValueError("The source publishes when its cameras are due; configure at least one camera")
         self.simulator = simulator
-        self.remote = manager.remote_cameras
+        self.remote = [record for record in manager.cameras if record.config.remote]
         requests = [request for record in self.remote for request in camera_requests(record, manager.num_envs)]
         self.publisher = Publisher(simulator, shared_state(simulator), endpoint=cfg.endpoint, requests=requests)
         hooks = simulator.hooks
-        self.capture_hook = None
-        if self.remote:
-            manager.set_remote_renderer(self)
-        else:
-            self.capture_hook = hooks.add(
-                Phase.FRAME_END, self._capture, name="cosim.publish", after=simulator.sensor_render_hook
-            )
+        self.frame_hook = hooks.add(
+            Phase.FRAME_END,
+            self._frame,
+            name="cosim.frame",
+            after=simulator.sensor_capture_hook,
+            before=simulator.sensor_render_hook,
+        )
+        self.episode_hook = (
+            hooks.add(Phase.EPISODE_START, self._rerender, name="cosim.rerender") if self.remote else None
+        )
         self.close_hook = hooks.add(Phase.CLOSE, self.close, name="cosim.close")
 
-    def _capture(self) -> None:
-        if self.simulator.sensor_manager.last_due:
+    def _frame(self) -> None:
+        """Publish when a camera is due, and fill the due remote cameras from the renderer's images."""
+        due = self.simulator.sensor_manager.last_due
+        if self.remote:
+            cameras = [record for record in self.remote if record.name in due]
+            if not cameras:
+                return
+            self.publisher.publish()
+            images = self.publisher.imports
+            for record in cameras:
+                for data_type in record.config.data_types:
+                    record.set_buffer(data_type, images[image_name(record.name, data_type)].clone())
+        elif due:
             self.publisher.publish()
 
-    def render_remote(self, cameras: list[CameraRecord]) -> None:
-        """Publish a frame and set ``cameras``' buffers to copies of the renderer's images."""
-        self.publisher.publish()
-        images = self.publisher.imports
-        for record in cameras:
-            for data_type in record.config.data_types:
-                record.set_buffer(data_type, images[image_name(record.name, data_type)].clone())
-
-    def rerender_remote(self, cameras: list[CameraRecord], env_ids: torch.Tensor) -> None:
-        """Have the renderer render current state at the current time, and take its ``env_ids`` rows."""
+    def _rerender(self, env_ids: torch.Tensor) -> None:
+        """Have the renderer render the reset envs' state at the current time, and take their rows."""
         self.publisher.repeat()
         images = self.publisher.imports
-        for record in cameras:
+        for record in self.remote:
             for data_type in record.config.data_types:
                 image = images[image_name(record.name, data_type)]
                 if data_type in record.buffers:
@@ -89,10 +97,9 @@ class CosimRenderPlugin:
     def close(self) -> None:
         if self.publisher.closed:
             return
-        if self.capture_hook is None:
-            self.simulator.sensor_manager.set_remote_renderer(None)
-        else:
-            self.capture_hook.remove()
+        self.frame_hook.remove()
+        if self.episode_hook is not None:
+            self.episode_hook.remove()
         self.publisher.close()
 
 

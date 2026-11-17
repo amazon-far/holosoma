@@ -226,10 +226,14 @@ class BaseSimulator:
         self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
         self._kinematic_time = 0.0
         self.hooks = HookRegistry(base_rates=self._hook_base_rates())
-        # Egress consumers follow this handle, so it runs ahead of them whatever order they
-        # register in. No-ops until a backend registers sensors.
+        # Egress consumers follow ``sensor_render_hook``, so camera buffers are final when they run,
+        # whatever order they register in. Hooks that fill buffers themselves, such as a remote
+        # renderer, order after ``sensor_capture_hook`` and before ``sensor_render_hook``.
+        self.sensor_capture_hook: HookHandle = self.hooks.add(
+            Phase.FRAME_END, self.render_sensors, name="sensors.capture"
+        )
         self.sensor_render_hook: HookHandle = self.hooks.add(
-            Phase.FRAME_END, self.render_sensors, name="sensors.render"
+            Phase.FRAME_END, self._sensors_rendered, name="sensors.render", after=self.sensor_capture_hook
         )
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
@@ -1057,6 +1061,16 @@ class BaseSimulator:
         observations compute), honoring each sensor's ``update_decimation``. Consumers then do
         cheap cached reads through the camera/LiDAR accessors."""
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
+
+    def _sensors_rendered(self) -> None:
+        """Check that every due remote camera has been given a frame."""
+        due = self.sensor_manager.last_due
+        if unserved := [
+            record.name
+            for record in self.sensor_manager.cameras
+            if record.config.remote and record.name in due and not record.buffers
+        ]:
+            raise RuntimeError(f"Remote cameras {unserved} have no co-simulation renderer")
 
     def rerender_sensors(self, env_ids: torch.Tensor) -> None:
         """Re-render ``env_ids`` for sensors that support partial rendering; other sensors keep their frame.

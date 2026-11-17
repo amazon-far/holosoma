@@ -20,7 +20,8 @@ from holosoma.cosim.cameras import camera_requests
 from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, share
 from holosoma.cosim.render import CosimRenderPlugin, RenderHandler
 from holosoma.envs.render_task import RenderTask
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.sensor_manager import SensorManager
 
 pytestmark = pytest.mark.no_sim
@@ -395,8 +396,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
         sim_device="cuda:0",
         state=SimpleNamespace(names=lambda: list(values), get=values.__getitem__, set_buffer_allocator=lambda _: None),
         sensor_manager=manager,
-        hooks=SimpleNamespace(add=lambda *_args, **_kw: SimpleNamespace(remove=lambda: None), emitting=frozenset()),
-        sensor_render_hook=None,
+        hooks=HookRegistry(),
         dof_names=["a"],
         object_state_names=(),
         scene=SimpleNamespace(env_origins=torch.zeros(2, 3)),
@@ -406,6 +406,11 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
         cosim_cuda,
         "CacheAllocator",
         lambda fields: SimpleNamespace(fields=frozenset(fields), owners=dict.fromkeys(fields), exports=lambda _: []),
+    )
+    fake: Any = sim
+    fake.sensor_capture_hook = fake.hooks.add(Phase.FRAME_END, manager.collect_due, name="sensors.capture")
+    fake.sensor_render_hook = fake.hooks.add(
+        Phase.FRAME_END, lambda: None, name="sensors.render", after=fake.sensor_capture_hook
     )
     source = CosimRenderPlugin(CosimRenderPluginConfig(endpoint="ipc:///unused"), cast("Any", sim))
     return source, manager, images, calls
@@ -418,31 +423,43 @@ def test_remote_due_cameras_get_copies_of_the_receiver_images(plugin: PluginFixt
         ("cam/rgb", (2, 3, 4, 3), "uint8"),
         ("cam/depth", (2, 3, 4, 1), "float32"),
     ]
-    cast("Any", source.simulator).hooks.emitting = frozenset({Phase.FRAME_END})
-    manager.render_remote(manager.collect_due())
-    assert calls[1][1]["frame"]["phase"] == "frame_end"
+    hooks = source.simulator.hooks
     remote = manager.get("cam")
+    seen: list[set[str]] = []
+    hooks.add(Phase.FRAME_END, lambda: seen.append(set(remote.buffers)), after=source.simulator.sensor_render_hook)
+    hooks.emit(Phase.FRAME_END)
+    assert calls[1][0] == "FRAME_AVAILABLE" and calls[1][1]["frame"]["phase"] == "frame_end"
+    assert seen == [{"rgb", "depth"}]  # filled before consumers of the sensor render hook
     for data_type in ("rgb", "depth"):
         buffer = remote.buffers[data_type]
         assert (
             torch.equal(buffer, images[f"cam/{data_type}"])
             and buffer.data_ptr() != images[f"cam/{data_type}"].data_ptr()
         )
-    assert not manager.get("local").buffers and calls[1][0] == "FRAME_AVAILABLE"
+    assert not manager.get("local").buffers
 
     source.close()
     assert calls[-2:] == ["unmap", ("CLOSE", {})]
-    with pytest.raises(RuntimeError, match="no remote renderer"):
-        manager.render_remote(manager.collect_due())
+    hooks.emit(Phase.FRAME_END)
+    assert calls[-1] == ("CLOSE", {})  # no more frames after close
 
 
-def test_rerender_writes_only_the_reset_rows(plugin: PluginFixture) -> None:
-    _source, manager, images, calls = plugin
-    manager.render_remote(manager.collect_due())
+def test_a_due_remote_camera_without_a_renderer_fails_at_the_sensor_render_hook() -> None:
+    manager = SensorManager("cpu", 50.0, num_envs=1)
+    _camera(manager, "cam", remote=True, data_types=["rgb"])
+    manager.collect_due()
+    with pytest.raises(RuntimeError, match=r"Remote cameras \['cam'\] have no co-simulation renderer"):
+        BaseSimulator._sensors_rendered(cast("Any", SimpleNamespace(sensor_manager=manager)))
+
+
+def test_episode_start_rerenders_only_the_reset_rows(plugin: PluginFixture) -> None:
+    source, manager, images, calls = plugin
+    hooks = source.simulator.hooks
+    hooks.emit(Phase.FRAME_END)
     for image in images.values():
         image.fill_(7)
-    manager.rerender(torch.tensor([1]))
-    assert calls[-1] == ("REPEAT", {"sim_time": 0.5, "phase": None})
+    hooks.emit(Phase.EPISODE_START, torch.tensor([1]))
+    assert calls[-1] == ("REPEAT", {"sim_time": 0.5, "phase": "episode_start"})
     for data_type in ("rgb", "depth"):
         buffer = manager.get("cam").buffers[data_type]
         assert bool((buffer[0] == 1).all()) and bool((buffer[1] == 7).all())

@@ -137,8 +137,8 @@ The source holds its caches while the receiver applies state, renders, publishes
 cameras and completes GPU reads. Physics resumes after completion: serialized
 lockstep, with no physics/render overlap or frame pipelining. Startup handles and
 layout travel once; subsequent notifications carry the frame sequence,
-simulation time and the source's hook phase they were sent from (`None` outside
-any hook, as for re-renders after resets). Publisher close obtains an unmap acknowledgment before storage
+simulation time and the source's hook phase they were sent from (`frame_end` for
+camera frames, `episode_start` for re-renders after resets, `None` outside any hook). Publisher close obtains an unmap acknowledgment before storage
 can be released. Failures/timeouts propagate; reconnection and scene changes are
 not implemented. Startup and the first frame exchange may take up to five
 minutes (first-use compilation); later exchanges time out after 30 seconds. On a lost peer, retain exporting allocations until that peer
@@ -169,14 +169,14 @@ source_cameras = {name: replace(camera, remote=True) for name, camera in cameras
 
 The receiver keeps the same cameras with `remote=False`. Backends create no
 native renderer or runtime mount-pose writer for a remote camera, so
-`set_mount_pose()` raises for it. Each frame the backend renders its due local
-cameras and then hands the due remote cameras to the sensor manager's remote
-renderer, all inside sensor rendering, so buffers and `last_due` are final for
-every consumer ordered after `simulator.sensor_render_hook`. A remote camera with
-no remote renderer raises on its first render.
+`set_mount_pose()` raises for it. Sensor rendering is two FRAME_END hooks:
+`simulator.sensor_capture_hook` renders the due local cameras, and
+`simulator.sensor_render_hook` follows it once every camera buffer is final, so
+consumers ordered after `sensor_render_hook` see remote images too. A due remote
+camera that nothing filled raises at `sensor_render_hook`.
 
-The `CosimRenderPlugin` is that remote renderer when the source has remote cameras. It
-requests one buffer per camera output, rgb `uint8 [E, H, W, 3]` and depth
+The `CosimRenderPlugin` fills the remote cameras from a hook ordered after
+`sensor_capture_hook` and before `sensor_render_hook`. It requests one buffer per camera output, rgb `uint8 [E, H, W, 3]` and depth
 `float32 [E, H, W, 1]`, with the camera's mount, field of view, near/far range and
 depth clipping. The render handler rejects any request that differs from its own
 camera's before mapping state, then exports one persistent buffer per request and
@@ -186,11 +186,13 @@ buffer, so earlier frames held by consumers stay valid. Publication follows the
 remote cameras: a frame is published when one of them is due. Without remote
 cameras the source publishes after capture, as above.
 
-Sources reset environments after cameras render. When observations re-render the
-reset environments, the plugin sends `REPEAT` with the current source time;
-the receiver applies the reset state, renders every environment with
-`repeat=True`, and the source takes only the reset rows. Locally rendered
-cameras keep their frame from before the reset for that step.
+Sources reset environments after cameras render. On `EPISODE_START`, which fires
+once per reset batch after the reset state is written, the plugin sends `REPEAT`
+with the current source time; the receiver applies the reset state, renders every
+environment with `repeat=True`, and the source takes only the reset rows. State
+changes that start no episode, such as a motion-tracking command teleporting an
+environment to a new clip, are not re-rendered: remote cameras keep their frame
+from before the change for that step.
 
 Limits: the receiver renders all of its cameras for every published frame, while
 the source updates only its due cameras. Runtime mount-pose changes and episode

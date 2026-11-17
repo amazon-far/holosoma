@@ -4,7 +4,7 @@ usage: cosim_pair_roles.py {source,receiver} --endpoint ipc://... --output DIR [
 The receiver writes ``DIR/ready`` once it accepts connections and exits after the source closes.
 
 With ``--loopback`` both sides add an rgb + depth camera ``loopback`` beside ``overview`` at the same pose; the
-source's is remote. After its frames the source resets env 0 and re-renders it.
+source's is remote. After its frames the source resets env 0, which re-renders it.
 """
 
 from __future__ import annotations
@@ -82,17 +82,14 @@ def source(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bo
     with config(num_envs, loopback, endpoint=endpoint).create_task() as task:
         sim = task.simulator
         cosim = sim.installed_plugins["cosim"]
-        after = sim.sensor_render_hook if loopback else cosim.capture_hook
-        sim.hooks.add(Phase.FRAME_END, lambda: capture(sim, saved), after=after)
+        sim.hooks.add(Phase.FRAME_END, lambda: capture(sim, saved), after=sim.sensor_render_hook)
         task.reset_envs_idx()
         for _ in range(frames):
             task.step()
         saved["frames"] = cosim.publisher.sequence
         if loopback:
-            env_ids = torch.tensor([0], device=sim.sim_device)
-            task.reset_envs_idx(env_ids)
             saved["stale"] = sim.get_camera_data("loopback", "rgb").clone().cpu()
-            sim.rerender_sensors(env_ids)
+            task.reset_envs_idx(torch.tensor([0], device=sim.sim_device))  # Its EPISODE_START re-renders env 0.
             sim.backend.render_cameras([sim.sensor_manager.get("overview")])
             capture(sim, saved.setdefault("reset", {}))
     torch.save(saved, output / "source.pt")

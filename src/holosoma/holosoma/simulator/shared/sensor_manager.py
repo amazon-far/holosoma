@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.sensor import CameraSensorConfig
@@ -116,16 +116,6 @@ class LidarRecord(SensorRecord):
         return self.pattern_provider.pattern_at(sim_time)
 
 
-class RemoteRenderer(Protocol):
-    """Supplies images for cameras configured with ``remote=True``."""
-
-    def render_remote(self, cameras: list[CameraRecord]) -> None:
-        """Set every output buffer of ``cameras`` to a frame of the current state."""
-
-    def rerender_remote(self, cameras: list[CameraRecord], env_ids: torch.Tensor) -> None:
-        """Overwrite the ``env_ids`` rows of every output of ``cameras`` with the current state."""
-
-
 class SensorManager:
     """Cross-backend sensor registry and runtime mounts, available even without configured sensors."""
 
@@ -138,7 +128,6 @@ class SensorManager:
         self._order: list[str] = []
         self._last_camera_due: set[str] = set()
         self._last_lidar_due: set[str] = set()
-        self._remote_renderer: RemoteRenderer | None = None
 
     def _initial_mount_poses(self, config: SensorConfig) -> torch.Tensor:
         mount = config.mount
@@ -282,27 +271,6 @@ class SensorManager:
     def lidars(self) -> list[LidarRecord]:
         return list(self._lidars.values())
 
-    @property
-    def remote_cameras(self) -> list[CameraRecord]:
-        return [record for record in self._cameras.values() if record.config.remote]
-
-    def set_remote_renderer(self, renderer: RemoteRenderer | None) -> None:
-        """Install the renderer for remote cameras, or remove it with ``None``."""
-        self._remote_renderer = renderer
-
-    def _require_remote_renderer(self) -> RemoteRenderer:
-        if self._remote_renderer is None:
-            raise RuntimeError(
-                f"Remote cameras {[record.name for record in self.remote_cameras]} have no remote renderer; "
-                "connect a co-simulation renderer before stepping."
-            )
-        return self._remote_renderer
-
-    def render_remote(self, due: list[CameraRecord]) -> None:
-        """Render the remote cameras in ``due``; backends call this after rendering their local cameras."""
-        if remote := [record for record in due if record.config.remote]:
-            self._require_remote_renderer().render_remote(remote)
-
     @staticmethod
     def _collect_due(records: Sequence[SensorRecordT]) -> list[SensorRecordT]:
         due = []
@@ -326,15 +294,12 @@ class SensorManager:
     def rerender(self, env_ids: torch.Tensor) -> None:
         """Re-render ``env_ids`` for every sensor that supports partial rendering.
 
-        Remote cameras re-render through the remote renderer. Other sensors without a ``rerender``
-        callback keep their last frame, so for one control step these envs observe the state from
-        before their reset or teleport."""
+        Sensors without a ``rerender`` callback keep their last frame, so for one control step
+        these envs observe the state from before their reset or teleport."""
         records: list[SensorRecord] = [*self.cameras, *self.lidars]
         for record in records:
             if record.rerender is not None:
                 record.rerender(env_ids)
-        if (remote := self.remote_cameras) and len(env_ids):
-            self._require_remote_renderer().rerender_remote(remote, env_ids)
 
     @property
     def last_due(self) -> set[str]:

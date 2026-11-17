@@ -752,4 +752,3 @@ def render_sensors(sim: IsaacSim) -> None:
         sim.render_for_sensors()
     render_cameras(sim, local)
     render_lidars(sim)
-    sim.sensor_manager.render_remote(due)
