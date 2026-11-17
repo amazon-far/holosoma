@@ -1,4 +1,8 @@
-"""Owning shared allocations and lifetime of imported CUDA buffers."""
+"""Shared CUDA allocations and the lifetime of imported ones.
+
+Exports are Warp arrays allocated outside Warp's memory pool and shared through CUDA IPC (Warp 1.15 to 1.19).
+An owner must outlive every peer mapping of it. Importing this module loads no GPU SDK.
+"""
 
 from __future__ import annotations
 

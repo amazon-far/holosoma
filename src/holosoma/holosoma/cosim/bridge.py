@@ -1,4 +1,21 @@
-"""Lockstep CUDA-IPC state bridge between a source and a receiver simulator."""
+"""Lockstep CUDA-IPC exchange between a source and a receiver process on the same GPU.
+
+:class:`Publisher` (source) and :class:`Receiver` exchange metadata over a ZeroMQ REQ/REP socket; state and
+exports stay in shared CUDA allocations, ordered by interprocess ready and done events.
+
+- ``OPEN`` -> ``OPENED``: the source sends its exports, requests, ``meta``, ready event, GPU UUID and PID. The
+  receiver's handler accepts ``meta``, picks the fields it reads and allocates exports; the reply carries them
+  and its done event.
+- ``FRAME_AVAILABLE`` -> ``FRAME_COMPLETE``: one per :meth:`Publisher.publish`, numbered consecutively, with
+  the source's time and hook phase.
+- ``CLOSE`` -> ``UNMAPPED``: both sides release their mappings.
+- ``ERROR``: the receiver's failure, raised on the source.
+
+The source waits for each exchange. Startup and the first frame may take up to five minutes (first-use
+compilation); later source exchanges time out after :data:`FRAME_TIMEOUT_MS`. The receiver waits while the
+source process runs, so both must share a PID namespace. There is no reconnection; after losing a peer,
+keep exported allocations until it has exited or unmapped them.
+"""
 
 from __future__ import annotations
 

@@ -4,6 +4,13 @@ usage: python -m holosoma.cosim.render --endpoint ipc://... <run_sim arguments>
 
 The run_sim arguments describe the same scene as the source's, with the source's remote cameras configured
 here as ordinary cameras. Start the renderer before the source; it exits when the source closes.
+
+:class:`RenderTask` also renders supplied state without the bridge::
+
+    with create_render_task(run_sim_config) as task:
+        task.simulator.set_kinematic_time(time)  # what simulator.time() reports
+        task.simulator.apply_state(inputs)        # complete writable SimState fields
+        task.render_frame()
 """
 
 from __future__ import annotations

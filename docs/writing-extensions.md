@@ -208,8 +208,7 @@ simulator.hooks.add(
 
 For physics in one process and camera rendering in another, the `cosim-render` plugin
 (`plugin.<key>:cosim-render`) shares state with a renderer process; see
-[Source-clock rendering and GPU co-simulation](source-clock-rendering.md), which also covers
-render-only tasks, applying external state through SimState and shared SimState cache storage.
+[GPU co-simulation](cosim.md).
 
 **To follow a provider you can't hold**, it publishes a member of its own `Enum` from its constructor and you reference that plus the slot it runs in, which resolves once every plugin is installed:
 

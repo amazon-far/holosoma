@@ -1,8 +1,22 @@
-"""Co-simulation rendering, source side: the plugin and the layout a renderer must match.
+"""Co-simulation rendering, source side: the ``cosim-render`` plugin and the contract a renderer serves.
 
-The source runs any task with ``plugin.<key>:cosim-render``. :mod:`holosoma.cosim.render.renderer` is the
-Holosoma renderer; any process that serves this plugin through :class:`holosoma.cosim.base.BufferHandler`
-can render instead (see "Renderers outside Holosoma" in ``docs/source-clock-rendering.md``).
+A camera with ``remote`` set to the plugin's slot takes its images from the renderer. Any process can serve the
+plugin by subclassing :class:`holosoma.cosim.base.BufferHandler`; :mod:`.renderer` is the Holosoma one.
+
+- Handshake ``meta`` (:func:`scene_layout`): ``dof_names``, ``body_names`` and ``object_names`` give the column
+  order of the joint, robot-body and object fields; ``env_origins`` ``[E, 3]`` is where the source simulated
+  each environment, and the renderer places its environments there.
+- State: every non-empty SimState field. Roots are world-frame ``[pos, quat xyzw, lin vel, ang vel]``;
+  ``_rigid_body_pos`` and ``_rigid_body_rot`` are each body's world position and xyzw orientation.
+- Requests: one per remote-camera output, named :func:`image_name` and decoded by :func:`camera_output`. rgb is
+  ``uint8 [E, H, W, 3]``; depth is ``float32 [E, H, W, 1]``, metric distance to the image plane, ``+inf`` for no
+  return. The source applies the camera's ``depth_clipping_behavior`` when it stores the image.
+- Request ``meta``: ``vertical_fov`` in degrees, ``near`` and ``far`` in meters, ``depth_clipping_behavior``,
+  and ``mount`` (a ``SensorMountConfig``): ``target_kind`` ``robot_link``, ``actor`` or ``world``; ``target``,
+  a ``body_names`` or ``object_names`` entry; and ``position`` and ``orientation`` ``[w, x, y, z]`` in the
+  target's frame, or the environment's for ``world``. Identity looks along ``-Z`` with ``+Y`` up.
+
+Exports are filled after each step; the source copies them before its next exchange.
 """
 
 from __future__ import annotations
