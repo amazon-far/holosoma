@@ -15,6 +15,9 @@ depth against an analytic box intersection, and verifies exclusions and partial-
 ``--check default-selection`` hides the plane terrain's visual and uses the default mesh selection on
 the pelvis-mounted camera: the ground stays selected and visible, and the pelvis is left out.
 
+``--check custom-terrain`` runs the ``frame`` checks on a ``load_obj`` terrain from a terrain term
+that implements only :class:`TerrainTermBase`.
+
 Exits 0 PASS / 1 FAIL / 77 SKIP.
 """
 
@@ -261,7 +264,9 @@ def _check_default_selection(sim):
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--check", required=True, choices=["frame", "rerender", "scene", "dynamic-scene", "default-selection"]
+        "--check",
+        required=True,
+        choices=["frame", "rerender", "scene", "dynamic-scene", "default-selection", "custom-terrain"],
     )
     parser.add_argument("--result-file", default=None, help="write OK/FAIL here before teardown")
     args = parser.parse_args()
@@ -308,6 +313,15 @@ def main() -> int:
     if args.check == "default-selection":
         terrain = dataclasses.replace(config.terrain.terrain_term, hide_visual=True)
         config = dataclasses.replace(config, terrain=dataclasses.replace(config.terrain, terrain_term=terrain))
+    if args.check == "custom-terrain":
+        from holosoma.config_types.terrain import MeshType
+
+        terrain = dataclasses.replace(
+            config.terrain.terrain_term,
+            func="tests.simulators._terrain_presets:FlatMeshTerrain",
+            mesh_type=MeshType.LOAD_OBJ,
+        )
+        config = dataclasses.replace(config, terrain=dataclasses.replace(config.terrain, terrain_term=terrain))
     if args.check == "dynamic-scene":
         objects = dict(config.scene.rigid_objects)
         objects["target"] = dataclasses.replace(objects["target"], fixed=False)
@@ -348,6 +362,7 @@ def main() -> int:
         "scene": _check_scene,
         "dynamic-scene": _check_dynamic_scene,
         "default-selection": _check_default_selection,
+        "custom-terrain": lambda sim: _check_frame(sim) + _check_flat_ground(sim),
     }
     fails = checks[args.check](sim)
     for failure in fails:

@@ -8,7 +8,7 @@ sensor and wire it into the scene.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import isaaclab.sim as sim_utils
 import numpy as np
@@ -26,7 +26,6 @@ if TYPE_CHECKING:
     from isaaclab.scene import InteractiveScene
 
     from holosoma.managers.terrain import TerrainManager
-    from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 
 GROUND_PLANE_SIZE_M = 4.0e3
 """Side length of the plane terrain's ray-cast mesh, in metres. Ray sensors hit it in float32, so it
@@ -148,14 +147,22 @@ def build_terrain_fixtures(
 def register_terrain_mesh_cache(terrain_manager: TerrainManager, scene: InteractiveScene) -> None:
     """Register the ground's ray-cast mesh at ``/World/ground`` in IsaacLab's ray-caster cache.
 
-    Trimesh/OBJ terrain shares the terrain manager's mesh; plane terrain gets a flat square
-    :data:`GROUND_PLANE_SIZE_M` across, centred on the world origin. Call after native sensors are
-    constructed, since IsaacLab's config validator would recurse into a populated
-    ``RayCaster.meshes``, and before they initialize.
+    Trimesh/OBJ terrain reuses :class:`TerrainLocomotion`'s Warp mesh, and any other terrain term's
+    ``terrain.mesh`` is converted; plane terrain gets a flat square :data:`GROUND_PLANE_SIZE_M` across,
+    centred on the world origin. Call after native sensors are constructed, since IsaacLab's config
+    validator would recurse into a populated ``RayCaster.meshes``, and before they initialize.
     """
+    # Module-level import is circular: locomotion -> draw -> the Isaac Sim draw adapter -> isaacsim.
+    from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
+
     terrain_state = terrain_manager.get_state("locomotion_terrain")
     if terrain_state.mesh_type in ["trimesh", "load_obj"]:
-        mesh = cast("TerrainLocomotion", terrain_state).warp_mesh
+        if isinstance(terrain_state, TerrainLocomotion):
+            mesh = terrain_state.warp_mesh
+        else:
+            mesh = convert_to_wp_mesh(
+                terrain_state.terrain.mesh.vertices, terrain_state.terrain.mesh.faces, scene.device
+            )
     elif terrain_state.mesh_type == "plane":
         half = GROUND_PLANE_SIZE_M / 2.0
         vertices = np.array([[-half, -half, 0.0], [half, -half, 0.0], [half, half, 0.0], [-half, half, 0.0]])
