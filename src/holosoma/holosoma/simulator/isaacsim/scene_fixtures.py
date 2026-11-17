@@ -8,7 +8,7 @@ sensor and wire it into the scene.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import isaaclab.sim as sim_utils
 import numpy as np
@@ -26,7 +26,6 @@ if TYPE_CHECKING:
     from isaaclab.scene import InteractiveScene
 
     from holosoma.managers.terrain import TerrainManager
-    from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 
 GROUND_PLANE_SIZE_M = 4.0e3
 """Side length of the plane terrain's ray-cast mesh, in metres. Ray sensors hit it in float32, so it
@@ -155,7 +154,7 @@ def register_terrain_mesh_cache(terrain_manager: TerrainManager, scene: Interact
     """
     terrain_state = terrain_manager.get_state("locomotion_terrain")
     if terrain_state.mesh_type in ["trimesh", "load_obj"]:
-        mesh = cast("TerrainLocomotion", terrain_state).warp_mesh
+        mesh = terrain_state.warp_mesh
     elif terrain_state.mesh_type == "plane":
         half = GROUND_PLANE_SIZE_M / 2.0
         vertices = np.array([[-half, -half, 0.0], [half, -half, 0.0], [half, half, 0.0], [-half, half, 0.0]])

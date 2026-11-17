@@ -210,7 +210,9 @@ def test_camera_obs_pipeline(tmp_path):
     )
 
 
-@pytest.mark.parametrize("check", ["frame", "rerender", "scene", "dynamic-scene", "default-selection"])
+@pytest.mark.parametrize(
+    "check", ["frame", "rerender", "scene", "dynamic-scene", "default-selection", "custom-terrain"]
+)
 def test_raycast_camera(tmp_path, check):
     # Depth without RTX, partial rerenders, shared scene meshes, physics-driven actor motion, and the
     # default selection (hidden ground kept, mount body left out) beside the G1 preset's explicit paths.

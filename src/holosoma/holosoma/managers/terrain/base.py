@@ -10,6 +10,8 @@ import trimesh
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
+    import warp as wp
+
     from holosoma.config_types.terrain import TerrainTermCfg
     from holosoma.simulator.shared.terrain import Terrain
 
@@ -31,6 +33,7 @@ class TerrainTermBase(ABC):
         self.env = env
         self.num_envs = env.num_envs
         self.device = env.device
+        self._warp_mesh: wp.Mesh | None = None
 
     @abstractmethod
     def setup(self) -> None:
@@ -83,6 +86,17 @@ class TerrainTermBase(ABC):
     @abstractmethod
     def mesh(self) -> trimesh.Trimesh | None:
         """Terrain mesh."""
+
+    @property
+    def warp_mesh(self) -> wp.Mesh:
+        """Warp mesh of ``terrain.mesh`` for ray casting, built on first access."""
+        if self._warp_mesh is None:
+            # Imported on use: importing warp before Isaac Sim's extensions breaks their warp import.
+            from holosoma.utils.warp_utils import convert_to_wp_mesh
+
+            mesh = self.terrain.mesh
+            self._warp_mesh = convert_to_wp_mesh(mesh.vertices, mesh.faces, self.device)
+        return self._warp_mesh
 
     @property
     def mesh_type(self) -> str:
