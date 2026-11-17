@@ -4,7 +4,8 @@ The selected backend creates a Lab 2 ``TiledCamera`` or Lab 3 ``Camera`` before
 environment cloning. Camera prims follow their mount bodies through the USD
 transform hierarchy. ``sim.tiled_cameras`` retains the native camera map for both
 versions; the shared sensor manager owns cadence, held observations and depth
-clipping. Native LiDAR sensors follow the same build-before-clone lifecycle.
+clipping. Lab 2 ray-cast cameras reuse its native geometry views. Native LiDAR
+sensors follow the same build-before-clone lifecycle.
 """
 
 from __future__ import annotations
@@ -19,9 +20,16 @@ import isaaclab.sim as sim_utils
 from isaaclab.sensors import patterns
 
 from holosoma.config_types.frequency import resolve_decimation
-from holosoma.config_types.sensor import CameraSensorConfig, IsaacSimLidarConfig, LidarSensorConfig
+from holosoma.config_types.sensor import (
+    CameraSensorConfig,
+    IsaacSimLidarConfig,
+    LidarBodyFilterConfig,
+    LidarSensorConfig,
+    is_isaacsim_raycast_camera,
+)
 from holosoma.simulator.isaacsim.camera_projection import camera_spawn_cfg_for
-from holosoma.simulator.isaacsim.lidar_target_discovery import (
+from holosoma.simulator.isaacsim.raycast_targets import (
+    TERRAIN_PRIM_PATH,
     _is_path_at_or_below,
     assemble_default_mesh_prim_paths,
 )
@@ -35,6 +43,7 @@ from holosoma.simulator.isaacsim.prim_utils import (
 )
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
 from holosoma.simulator.shared.sensor_manager import SensorManager
+from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera, RaycastScene
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig
@@ -55,6 +64,24 @@ def build_cameras(sim: IsaacSim) -> None:
     backend = sim.backend
     for cam_name, cam in sim.sensor_config.items():
         if not isinstance(cam, CameraSensorConfig):
+            continue
+        if is_isaacsim_raycast_camera(cam):
+            if backend.is_isaaclab3:
+                raise ValueError(
+                    "Ray-cast depth cameras currently require isaaclab2; choose a native isaaclab3 renderer."
+                )
+            from isaaclab.sensors import MultiMeshRayCasterCfg
+            from .backends.ray_casters import legacy_scene_mesh_ray_caster_class
+
+            cfg = MultiMeshRayCasterCfg(
+                prim_path=_camera_mount_prim_path(cam.mount, backend=backend),
+                pattern_cfg=patterns.PatternBaseCfg(func=_mesh_view_pattern),
+                mesh_prim_paths=[],
+                debug_vis=False,
+            )
+            sim.scene.sensors[cam_name] = legacy_scene_mesh_ray_caster_class()(
+                cfg, partial(_camera_mesh_prim_paths, sim, cam), sim=sim
+            )
             continue
         parent = _camera_mount_prim_path(cam.mount, backend=backend)
         # Map holosoma data_types -> IsaacLab annotators.
@@ -98,14 +125,50 @@ def _camera_mount_prim_path(mount: SensorMountConfig, *, backend: IsaacLabBacken
 
 
 def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
-    """Register the cameras built before environment cloning with the shared manager."""
+    """Register every camera; ray-cast cameras are created here and can re-render a subset of envs."""
+    from pxr import Sdf
+
+    sim.raycast_cameras = {}
     for name, config in sim.sensor_config.items():
-        if isinstance(config, CameraSensorConfig):
-            manager.register_camera(name, config)
+        if not isinstance(config, CameraSensorConfig):
+            continue
+        record = manager.register_camera(name, config)
+        if is_isaacsim_raycast_camera(config):
+            scene = cast(RaycastScene, sim.scene.sensors[name])
+            sim.raycast_cameras[name] = RayCastDepthCamera(sim, config, scene)
+            record.rerender = partial(sim.raycast_cameras[name].render, record)
+            record.write_mount_pose = sim.raycast_cameras[name].write_mount_pose
+            continue
+        if sim.backend.is_isaaclab3:
+            # Lab 3's different FrameView API is not wired to runtime mount-offset edits here.
+            continue
+        record.write_mount_pose = partial(_write_camera_mount_pose, sim, name)
+        # clone_environments(copy_from_source=False) inherits env_0's USD opinions. Author
+        # only each camera's two local-pose opinions so a later env_0 write cannot move
+        # untouched clones. This is startup-only, before Camera._view exists; copying entire
+        # environments would duplicate their assets. Batch USD notices in one ChangeBlock.
+        camera = sim.tiled_cameras[name]
+        with Sdf.ChangeBlock():
+            for prim in sim_utils.find_matching_prims(camera.cfg.prim_path):
+                for attr_name in ("xformOp:translate", "xformOp:orient"):
+                    attribute = prim.GetAttribute(attr_name)
+                    attribute.Set(attribute.Get())
 
 
-def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
-    """Repair Lab 2 camera Fabric transforms to match their authored mount offsets.
+def _write_camera_mount_pose(sim: IsaacSim, name: str, env_ids: torch.Tensor, poses: torch.Tensor) -> None:
+    camera = sim.tiled_cameras[name]
+    camera._view.set_local_poses(poses[:, :3], poses[:, [6, 3, 4, 5]], env_ids)
+    # Isaac Lab 2.3.2's supported local-pose API writes USD even in Fabric mode. A world-pose
+    # write would lose the mounting offset when the parent moves. Sync the local hierarchy
+    # matrix too, so Fabric rendering follows that parent at the newly authored offset.
+    sync_camera_fabric_transforms(sim, camera_name=name, env_ids=env_ids)
+    camera._is_outdated[env_ids] = True
+
+
+def sync_camera_fabric_transforms(
+    sim: IsaacSim, *, camera_name: str | None = None, env_ids: torch.Tensor | None = None
+) -> None:
+    """Reset each camera's Fabric local transform to its authored mount offset.
 
     Call once after ``sim.reset()``. The renderer places cameras from Fabric. Isaac Lab initializes
     each TiledCamera during the reset; its first pose read syncs the camera into Fabric through an
@@ -116,8 +179,6 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
     wrist camera); which cameras are hit is not explained. The USD offset stays correct, so it is
     copied back into Fabric for every camera.
     """
-    # Lab 3's native FrameView initializes transforms for every backend.
-    # The Kit-less path must not import Fabric's Kit runtime.
     if sim.backend.is_isaaclab3:
         return
     import carb
@@ -134,8 +195,13 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
     ):
         return
     fabric_stage = usdrt.Usd.Stage.Attach(sim_utils.get_current_stage_id())
-    for camera in sim.tiled_cameras.values():
-        for prim in sim_utils.find_matching_prims(camera.cfg.prim_path):
+    cameras = sim.tiled_cameras.values() if camera_name is None else [sim.tiled_cameras[camera_name]]
+    for camera in cameras:
+        # Use the initialized view's cached ordering, matching set_local_poses' env indices.
+        prims = camera._view._prims
+        if env_ids is not None:
+            prims = [prims[i] for i in env_ids.tolist()]
+        for prim in prims:
             local = UsdGeom.Xformable(prim).GetLocalTransformation(Usd.TimeCode.Default())
             fabric_prim = Rt.Xformable(fabric_stage.GetPrimAtPath(str(prim.GetPath())))
             fabric_prim.GetFabricHierarchyLocalMatrixAttr().Set(
@@ -152,6 +218,9 @@ def render_cameras(sim: IsaacSim, due: list[CameraRecord]) -> None:
     Drop alpha and cache ``[N,H,W,3]`` uint8 (rgb) /
     ``[N,H,W,1]`` float32 (depth) outputs at each camera's configured cadence."""
     for camera_record in due:
+        if camera_record.name in sim.raycast_cameras:
+            sim.raycast_cameras[camera_record.name].render(camera_record)
+            continue
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
             rgb = sim.backend.tensor(out["rgb"])[..., :3]  # [N,H,W,3], drop alpha
@@ -175,6 +244,26 @@ def _pattern(
     provider = pattern_config.get_provider_cls()(pattern_config, device=device, publish_hz=publish_hz)
     directions = provider.pattern_at(0.0).directions
     return torch.zeros_like(directions), directions
+
+
+def _mesh_view_pattern(_native_config: Any, device: str) -> tuple[torch.Tensor, torch.Tensor]:
+    """Minimal native bookkeeping pattern; the scene mesh provider does no ray casting."""
+    return torch.zeros(1, 3, device=device), torch.tensor([[0.0, 0.0, -1.0]], device=device)
+
+
+def _mesh_targets(paths: list[str], *, is_shared: bool = True) -> list[Any]:
+    """Configure scene geometry once for both LiDAR and depth views."""
+    from isaaclab.sensors import MultiMeshRayCasterCfg
+
+    return [
+        MultiMeshRayCasterCfg.RaycastTargetCfg(
+            prim_expr=path,
+            # Holosoma clones geometry from env_0, so every env shares env_0's cached mesh.
+            is_shared=is_shared,
+            track_mesh_transforms=not _is_path_at_or_below(path, TERRAIN_PRIM_PATH),
+        )
+        for path in paths
+    ]
 
 
 def _mount_parent_path(mount: SensorMountConfig, *, backend: IsaacLabBackendAdapter) -> str:
@@ -248,12 +337,10 @@ def _visual_mesh_prim_paths(
     return sorted(mesh_paths)
 
 
-def _body_filter_target(lidar: LidarSensorConfig) -> tuple[str, str] | None:
-    body_filter = lidar.body_filter
+def _body_filter_target(body_filter: LidarBodyFilterConfig, mount: SensorMountConfig) -> tuple[str, str] | None:
     if body_filter.target_kind == "none":
         return None
     if body_filter.target_kind == "mount":
-        mount = lidar.mount
         return None if mount.target_kind == "world" else (mount.target_kind, mount.target)
     return body_filter.target_kind, body_filter.target
 
@@ -276,8 +363,8 @@ def _robot_mesh_prim_paths(excluded_link: str | None, *, backend: IsaacLabBacken
     )
 
 
-def _default_mesh_prim_paths(sim: IsaacSim, lidar: LidarSensorConfig) -> list[str]:
-    excluded_target = _body_filter_target(lidar)
+def _default_mesh_prim_paths(sim: IsaacSim, body_filter: LidarBodyFilterConfig, mount: SensorMountConfig) -> list[str]:
+    excluded_target = _body_filter_target(body_filter, mount)
     if excluded_target is not None and excluded_target[0] == "actor":
         actor_name = excluded_target[1]
         if actor_name not in sim.scene.rigid_objects:
@@ -293,7 +380,19 @@ def _default_mesh_prim_paths(sim: IsaacSim, lidar: LidarSensorConfig) -> list[st
         actor_names=sim.scene.rigid_objects,
         discover_mesh_prim_paths=_visual_mesh_prim_paths,
         env_regex_ns=sim.backend.env_regex_ns,
+        terrain_mesh_prim_paths=(
+            _visual_mesh_prim_paths(TERRAIN_PRIM_PATH, TERRAIN_PRIM_PATH)
+            if sim.backend.is_isaaclab3
+            else [TERRAIN_PRIM_PATH]
+        ),
     )
+
+
+def _camera_mesh_prim_paths(sim: IsaacSim, camera: CameraSensorConfig) -> list[str]:
+    """Return the camera's explicit mesh paths, or discover the whole scene."""
+    if camera.isaacsim.mesh_prim_paths is not None:
+        return list(camera.isaacsim.mesh_prim_paths)
+    return _default_mesh_prim_paths(sim, LidarBodyFilterConfig(target_kind="none"), camera.mount)
 
 
 def build_lidars(sim: IsaacSim) -> None:
@@ -330,17 +429,10 @@ def build_lidars(sim: IsaacSim) -> None:
         )
         isaacsim_config = lidar.isaacsim or IsaacSimLidarConfig()
         if isaacsim_config.mesh_prim_paths is None:
-            mesh_paths = _default_mesh_prim_paths(sim, lidar)
+            mesh_paths = _default_mesh_prim_paths(sim, lidar.body_filter, lidar.mount)
         else:
             mesh_paths = isaacsim_config.mesh_prim_paths
-        mesh_targets = [
-            MultiMeshRayCasterCfg.RaycastTargetCfg(
-                prim_expr=path,
-                # Discovery returns exact ground descendants; the whole ground subtree is static.
-                track_mesh_transforms=not (path == "/World/ground" or path.startswith("/World/ground/")),
-            )
-            for path in mesh_paths
-        ]
+        mesh_targets = _mesh_targets(mesh_paths, is_shared=not sim.backend.is_isaaclab3)
         cfg = MultiMeshRayCasterCfg(
             prim_path=mount_path,
             offset=offset,
@@ -358,7 +450,13 @@ def build_lidars(sim: IsaacSim) -> None:
 def register_lidars(sim: IsaacSim, manager: SensorManager) -> None:
     for name, config in sim.sensor_config.items():
         if isinstance(config, LidarSensorConfig):
-            manager.register_lidar(name, config)
+            record = manager.register_lidar(name, config)
+            if not sim.backend.is_isaaclab3:
+                record.write_mount_pose = partial(_write_lidar_mount_pose, sim, name)
+
+
+def _write_lidar_mount_pose(sim: IsaacSim, name: str, env_ids: torch.Tensor, poses: torch.Tensor) -> None:
+    sim.scene.sensors[name].set_mount_pose(env_ids, poses)
 
 
 @contextmanager
@@ -383,8 +481,6 @@ def _app_updates_without_physics(*, uses_kit: bool = True) -> Iterator[None]:
 
 
 def render_lidars(sim: IsaacSim) -> None:
-    if sim.sensor_manager is None:
-        return
     for lidar_record in sim.sensor_manager.collect_lidars_due():
         pattern = lidar_record.pattern_at(sim.time())
         sensor = sim.scene.sensors.get(lidar_record.name)
@@ -400,7 +496,9 @@ def render_lidars(sim: IsaacSim) -> None:
 def build_sensors(sim: IsaacSim) -> None:
     """Build native sensors before environment cloning."""
     needs_expanded_robot = any(
-        isinstance(config, LidarSensorConfig) or config.mount.target_kind == "robot_link"
+        isinstance(config, LidarSensorConfig)
+        or is_isaacsim_raycast_camera(config)
+        or config.mount.target_kind == "robot_link"
         for config in sim.sensor_config.values()
     )
     if needs_expanded_robot:
@@ -432,26 +530,31 @@ def _remove_disabled_rigid_body_markers(stage: Any) -> None:
 
 
 def create_sensors(sim: IsaacSim) -> None:
-    """Create one shared manager and register every configured sensor."""
+    """Register native sensors with the simulator's shared manager."""
     if not sim.sensor_config:
         return
-    cfg = sim.simulator_config.sim
-    manager = SensorManager(sim.sim_device, cfg.fps / cfg.control_decimation_steps)
-    sim.sensor_manager = manager
+    manager = sim.sensor_manager
     register_cameras(sim, manager)
     register_lidars(sim, manager)
 
 
+def initialize_sensors(sim: IsaacSim) -> None:
+    """Bind depth renderers once scene assets, body indices and native sensors are initialized."""
+    for camera in sim.raycast_cameras.values():
+        camera.initialize()
+
+
 def render_sensors(sim: IsaacSim) -> None:
     """Capture when needed, then publish only observations due on the control clock."""
-    due = sim.sensor_manager.collect_due() if sim.sensor_manager is not None else []
+    due = sim.sensor_manager.collect_due()
     recording = sim.video_recorder is not None and sim.video_recorder.is_recording
     recorder = None
-    if due or recording:
+    native_due = [record for record in due if record.name in sim.tiled_cameras]
+    if native_due or recording:
         cameras = (
             list(sim.tiled_cameras.values())
             if sim.backend.shared_camera_rendering
-            else [sim.tiled_cameras[record.name] for record in due]
+            else [sim.tiled_cameras[record.name] for record in native_due]
         )
         if recording:
             from .video_recorder import IsaacSimVideoRecorder

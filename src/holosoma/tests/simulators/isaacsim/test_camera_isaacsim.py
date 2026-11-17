@@ -22,6 +22,8 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("IsaacSim requires a CUDA device", allow_module_level=True)
 
+from tests.simulators._run_harness import run_harness  # noqa: E402
+
 _HARNESS = Path(__file__).resolve().parents[1] / "camera_geometry_assert.py"
 _DEPTH_HARNESS = Path(__file__).resolve().parents[1] / "depth_assert.py"
 _CONTRACT_HARNESS = Path(__file__).resolve().parents[1] / "camera_assert.py"
@@ -187,7 +189,9 @@ def test_camera_obs_pipeline(tmp_path, run_isaacsim_harness):
 
 
 @pytest.mark.parametrize("check", ["frame", "rerender", "scene", "dynamic-scene", "default-selection"])
-def test_raycast_camera(tmp_path, check):
+def test_raycast_camera(tmp_path, check, isaaclab_backend):
+    if isaaclab_backend != "isaaclab2":
+        pytest.skip("The per-camera ray-cast depth adapter currently supports Isaac Lab 2 only.")
     # Depth without RTX, partial rerenders, shared scene meshes, physics-driven actor motion, and the
     # default selection (hidden ground kept, mount body left out) beside the G1 preset's explicit paths.
     result_file = tmp_path / f"raycast_{check}_isaacsim.txt"
@@ -204,7 +208,9 @@ def test_raycast_camera(tmp_path, check):
 
 
 @pytest.mark.parametrize("num_envs", [1, 2])
-def test_camera_renders_at_its_mount_offset(tmp_path, num_envs, run_isaacsim_harness):
+def test_camera_renders_at_its_mount_offset(tmp_path, num_envs, run_isaacsim_harness, isaaclab_backend):
+    if isaaclab_backend != "isaaclab2":
+        pytest.skip("This regression checks Lab 2's TiledCamera/Fabric startup repair.")
     # Cameras on links that move while Isaac Lab initializes sensors must still render from their
     # authored offset: Fabric camera world == mount body world x USD local, after startup and later.
     result_file = tmp_path / f"mount_fabric_isaacsim_{num_envs}.txt"

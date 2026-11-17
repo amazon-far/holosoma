@@ -79,6 +79,12 @@ starting Python; select the runtime before importing Isaac Lab.
   `viewer_update_decimation` controls viewer rendering
   in simulation workflows; `render_interval` is deprecated.
   Rates above the control clock and asynchronous observations are unsupported.
+  The per-camera `isaacsim.renderer="raycast"` depth option is supported by
+  Isaac Lab 2 only; Lab 3 rejects it before starting the SDK. Lab 3's
+  `sim.isaaclab3.renderer="newton_warp"` remains available for native RGB/depth.
+  Runtime local camera/LiDAR mount-offset edits from the shared sensor API
+  currently support Lab 2; Lab 3 retains configured offsets and native tracking
+  of moving mount bodies.
 
 See typed fields/defaults in
 [simulator.py](../src/holosoma/holosoma/config_types/simulator.py),

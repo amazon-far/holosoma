@@ -13,9 +13,10 @@ import pytest
 
 from holosoma.config_types.env import get_run_sim_env_config
 from holosoma.config_types.run_sim import RunSimConfig
-from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
+from holosoma.config_types.sensor import CameraSensorConfig, IsaacSimCameraConfig, SensorMountConfig
 from holosoma.config_types.simulator import IsaacLab3Config
 from holosoma.config_values.run_sim import isaaclab3
+from holosoma.simulator.isaacsim import backends
 from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 from holosoma.utils import sim_utils
 from holosoma.utils.sim_utils import format_simulation_performance
@@ -95,3 +96,20 @@ def test_format_simulation_performance_handles_empty_measurement() -> None:
         )
         == "Simulation performance: unavailable (no wall time elapsed)"
     )
+
+
+def test_lab3_raycast_camera_is_rejected_before_loading_the_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unsupported depth-camera selection must fail before starting native runtimes."""
+    camera = CameraSensorConfig(
+        mount=SensorMountConfig(target_kind="robot_link", target="pelvis"),
+        data_types=["depth"],
+        isaacsim=IsaacSimCameraConfig(renderer="raycast"),
+    )
+    config = get_run_sim_env_config(RunSimConfig(simulator=isaaclab3, sensor={"depth": camera}))
+
+    def unexpected_backend(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("Unsupported ray-cast camera started selecting native runtime dependencies.")
+
+    monkeypatch.setattr(backends, "get_backend", unexpected_backend)
+    with pytest.raises(ValueError, match="Ray-cast depth cameras currently require isaaclab2"):
+        sim_utils.setup_isaaclab_launcher(config, "cuda:0")

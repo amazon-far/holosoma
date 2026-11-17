@@ -62,10 +62,8 @@ class IsaacLabBackendAdapter(ABC):
         sim_utils.create_prim(
             path.replace(self.env_regex_ns, "/World/envs/env_0", 1),
             prim_type="Xform",
-            translation=tuple(position),
-            orientation=self.config_quat_to_native(orientation),
         )
-        return path, MultiMeshRayCasterCfg.OffsetCfg()
+        return path, MultiMeshRayCasterCfg.OffsetCfg(pos=tuple(position), rot=self.config_quat_to_native(orientation))
 
     @property
     def material_channels(self) -> tuple[str, ...]:

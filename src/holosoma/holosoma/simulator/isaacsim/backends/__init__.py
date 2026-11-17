@@ -69,16 +69,23 @@ def get_backend(
 
 def get_backend_for_config(config: EnvConfig | FullSimConfig) -> IsaacLabBackendAdapter:
     """Select the same runtime requirements at launch and frontend construction."""
-    from holosoma.config_types.sensor import CameraSensorConfig
-    from holosoma.config_types.simulator import SimulatorConfig
+    from holosoma.config_types.sensor import CameraSensorConfig, is_isaacsim_raycast_camera
+    from holosoma.config_types.simulator import IsaacLabBackend, SimulatorConfig
 
     simulator = config.simulator
     if isinstance(simulator, SimulatorConfig):
         simulator = simulator.config
+    if simulator.isaaclab_backend == IsaacLabBackend.ISAACLAB3 and any(
+        is_isaacsim_raycast_camera(sensor) for sensor in config.sensors.values()
+    ):
+        raise ValueError("Ray-cast depth cameras currently require isaaclab2; choose a native isaaclab3 renderer.")
     rendering = (
         config.logger.video.enabled
         or config.logger.headless_recording
-        or any(isinstance(sensor, CameraSensorConfig) for sensor in config.sensors.values())
+        or any(
+            isinstance(sensor, CameraSensorConfig) and not is_isaacsim_raycast_camera(sensor)
+            for sensor in config.sensors.values()
+        )
         or not config.training.headless
         or bool(simulator.isaacsim.app_launcher_args())
     )

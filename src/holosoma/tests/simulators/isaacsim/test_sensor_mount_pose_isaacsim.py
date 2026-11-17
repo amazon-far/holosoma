@@ -16,7 +16,9 @@ _HARNESS = Path(__file__).resolve().parents[1] / "sensor_mount_pose_assert.py"
 
 
 @pytest.mark.parametrize("num_envs", [1, 3])
-def test_runtime_sensor_mounts(tmp_path, num_envs):
+def test_runtime_sensor_mounts(tmp_path, num_envs, isaaclab_backend):
+    if isaaclab_backend != "isaaclab2":
+        pytest.skip("Runtime camera/LiDAR mount-offset editing is currently wired for Isaac Lab 2 only.")
     result = tmp_path / "mounts_isaacsim.txt"
     run_harness(
         _HARNESS,
@@ -33,7 +35,9 @@ def test_runtime_sensor_mounts(tmp_path, num_envs):
 
 
 @pytest.mark.parametrize("num_envs", [1, 3])
-def test_mounts_survive_task_and_native_context_resets(tmp_path, num_envs):
+def test_mounts_survive_task_and_native_context_resets(tmp_path, num_envs, isaaclab_backend):
+    if isaaclab_backend != "isaaclab2":
+        pytest.skip("This regression checks Lab 2's mutable sensor offsets through native context resets.")
     result = tmp_path / "mounts_reset_isaacsim.txt"
     run_harness(
         _HARNESS.with_name("sensor_mount_reset_assert.py"),

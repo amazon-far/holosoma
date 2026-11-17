@@ -303,7 +303,7 @@ class IsaacSim(BaseSimulator):
         # empty rig authors nothing, leaving only the scene asset's baked lights.
         light_setup.build_lights(self)
 
-        register_terrain_mesh_cache(self.terrain_manager, self.scene)
+        register_terrain_mesh_cache(self.terrain_manager, self.scene, backend=self.backend)
 
         # clone, filter, and replicate
         self.backend.clone_environments(self.scene)

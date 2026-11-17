@@ -8,23 +8,28 @@ sensor and wire it into the scene.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import isaaclab.sim as sim_utils
+import numpy as np
 from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.utils import create_prim_from_mesh
 from pxr import Usd, UsdGeom
 
 from holosoma.simulator.isaacsim.prim_utils import resolve_robot_link_prim_expression
+from holosoma.simulator.isaacsim.raycast_targets import TERRAIN_PRIM_PATH
+from holosoma.utils.warp_utils import convert_to_wp_mesh
 
 if TYPE_CHECKING:
     from isaaclab.scene import InteractiveScene
 
     from holosoma.managers.terrain import TerrainManager
+    from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
     from holosoma.simulator.isaacsim.backends.base import IsaacLabBackendAdapter
 
-TERRAIN_PRIM_PATH = "/World/ground"
+GROUND_PLANE_SIZE_M = 4.0e3
+"""Side length of Lab 2's finite ray-cast ground mesh; physics uses the infinite plane."""
 
 
 class TerrainFixtures(NamedTuple):
@@ -144,3 +149,30 @@ def build_terrain_fixtures(
         raise ValueError(f"Unsupported terrain mesh type: {terrain_state.mesh_type}")
 
     return TerrainFixtures(global_collision_prims, height_scanner_cfg, terrain)
+
+
+def register_terrain_mesh_cache(
+    terrain_manager: TerrainManager, scene: InteractiveScene, *, backend: IsaacLabBackendAdapter
+) -> None:
+    """Register the ground's ray-cast mesh at ``/World/ground`` in IsaacLab's ray-caster cache.
+
+    Trimesh/OBJ terrain shares the terrain manager's mesh; plane terrain gets a flat square
+    :data:`GROUND_PLANE_SIZE_M` across, centred on the world origin. Call after native sensors are
+    constructed, since IsaacLab's config validator would recurse into a populated
+    ``RayCaster.meshes``, and before they initialize.
+    """
+    if backend.is_isaaclab3:
+        # Lab 3 concrete casters extract/cache the actual ground geometry themselves.
+        return
+    from isaaclab.sensors import RayCaster
+
+    terrain_state = terrain_manager.get_state("locomotion_terrain")
+    if terrain_state.mesh_type in ["trimesh", "load_obj"]:
+        mesh = cast("TerrainLocomotion", terrain_state).warp_mesh
+    elif terrain_state.mesh_type == "plane":
+        half = GROUND_PLANE_SIZE_M / 2.0
+        vertices = np.array([[-half, -half, 0.0], [half, -half, 0.0], [half, half, 0.0], [-half, half, 0.0]])
+        mesh = convert_to_wp_mesh(vertices, np.array([[0, 1, 2], [0, 2, 3]]), scene.device)
+    else:
+        return
+    RayCaster.meshes[TERRAIN_PRIM_PATH] = mesh
