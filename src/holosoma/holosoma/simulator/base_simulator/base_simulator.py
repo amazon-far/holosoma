@@ -226,9 +226,7 @@ class BaseSimulator:
         self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
         self._kinematic_time = 0.0
         self.hooks = HookRegistry(base_rates=self._hook_base_rates())
-        # Egress consumers follow ``sensor_render_hook``, so camera buffers are final when they run,
-        # whatever order they register in. Hooks that fill buffers themselves, such as a remote
-        # renderer, order after ``sensor_capture_hook`` and before ``sensor_render_hook``.
+        # Buffer-filling hooks order between capture and render; egress consumers follow render.
         self.sensor_capture_hook: HookHandle = self.hooks.add(
             Phase.FRAME_END, self.render_sensors, name="sensors.capture"
         )

@@ -143,7 +143,6 @@ def _in_order(calls: list[Any], *expected: Any) -> bool:
 def test_receiver_frame_lifecycle(receiver: ReceiverFixture) -> None:
     worker, calls, replies, _messages = receiver
     worker.run()
-    # Origins are matched before mapping; each frame waits for the source, renders, then signals done.
     assert _in_order(calls, ("place", [[0.0, 0.0, 0.0]]), "map", "ready", ("clock", 0.035), ("apply", True), "capture")
     assert _in_order(calls, "capture", "readonly", "done", "unmap", "close")
     assert replies == [

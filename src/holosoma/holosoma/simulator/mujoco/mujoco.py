@@ -1132,7 +1132,7 @@ class MuJoCo(BaseSimulator):
 
         Static objects are placed in one backend call, so kinematics refreshes once per write.
         """
-        names = [name for name, _ in self._object_state_pairs]
+        names = list(self.object_state_names)
         static = [column for column, name in enumerate(names) if name in self.static_object_body_ids]
         free = [column for column, name in enumerate(names) if name not in self.static_object_body_ids]
         if free:

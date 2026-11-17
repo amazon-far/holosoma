@@ -36,8 +36,8 @@ def _timeouts(env: BaseTask) -> torch.Tensor:
     return torch.tensor([False, False, True], device=env.device)
 
 
-def _task(task_type: type[BaseTask], cfg: TerminationManagerCfg) -> BaseTask:
-    task = object.__new__(task_type)
+def _task(cfg: TerminationManagerCfg) -> SimulationTask:
+    task = object.__new__(SimulationTask)
     task.num_envs = 3
     task.device = "cpu"
     task.robot_config = cast("RobotConfig", SimpleNamespace(init_state=SimpleNamespace(default_joint_angles={})))
@@ -48,7 +48,7 @@ def _task(task_type: type[BaseTask], cfg: TerminationManagerCfg) -> BaseTask:
 
 
 def test_without_terms_frames_clear_masks_without_reset_selection() -> None:
-    task = _task(SimulationTask, TerminationManagerCfg())
+    task = _task(TerminationManagerCfg())
     task.reset_buf.fill_(1)
     task.time_out_buf.fill_(True)
     with _Operators() as operations:
@@ -69,7 +69,7 @@ def test_configured_terms_preserve_failure_timeout_masks_and_reset_selection() -
             "timeout": TerminationTermCfg(func=f"{__name__}:_timeouts", is_timeout=True),
         }
     )
-    task = _task(SimulationTask, cfg)
+    task = _task(cfg)
 
     task._check_termination()
     ids = task._get_reset_env_ids()

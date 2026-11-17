@@ -34,7 +34,6 @@ if TYPE_CHECKING:
 
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
-# Bounds each source exchange after the first frame; startup and the first frame use the startup timeout.
 FRAME_TIMEOUT_MS = 30000
 # How often an idle receiver checks that its source is still running.
 SOURCE_POLL_MS = 1000
@@ -161,7 +160,7 @@ class Publisher:
         self.sim, self.allocator = sim, allocator
         state = sim.state
         for name in sorted(allocator.fields):
-            state.get(name)  # Allocate through the allocator.
+            state.get(name)
         exported = tuple(name for name in state.names() if name in allocator.owners)
         if not exported:
             raise ValueError("The allocator shares no state; install it before simulator state is first read")

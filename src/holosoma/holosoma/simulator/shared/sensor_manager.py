@@ -236,7 +236,7 @@ class SensorManager:
         ids = self._mount_env_ids(env_ids)
         if ids.unique().numel() != ids.numel():
             raise ValueError("env_ids must not contain duplicates when setting sensor mount poses.")
-        remote = isinstance(record, CameraRecord) and record.config.remote is not None
+        remote = isinstance(record, CameraRecord) and bool(record.config.remote)
         if record.mount_poses is None or (record.write_mount_pose is None and not remote):
             raise NotImplementedError(f"Sensor '{name}' has no runtime mount-pose writer.")
         offsets = torch.as_tensor(poses, dtype=torch.float32, device=self.device).detach().clone()
