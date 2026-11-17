@@ -39,7 +39,8 @@ exits when the source closes, including on Ctrl+C.
 - Local and remote cameras mix on one source.
 - Several renderers: give each its own plugin slot and endpoint, and set each remote camera to the slot that
   supplies it.
-- Training works the same way: `cosim-render` is an ordinary plugin under any task.
+- `cosim-render` is an ordinary plugin, so any task that installs plugins can use it; the tested path is
+  `run_sim`.
 
 ## Render with an engine outside Holosoma
 
