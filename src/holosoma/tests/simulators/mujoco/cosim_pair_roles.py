@@ -86,12 +86,12 @@ def source(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bo
         task.reset_envs_idx()
         for _ in range(frames):
             task.step()
-        saved["frames"] = cosim.publisher.sequence
         if loopback:
             saved["stale"] = sim.get_camera_data("loopback", "rgb").clone().cpu()
             task.reset_envs_idx(torch.tensor([0], device=sim.sim_device))  # Its EPISODE_START re-renders env 0.
             sim.backend.render_cameras([sim.sensor_manager.get("overview")])
             capture(sim, saved.setdefault("reset", {}))
+        saved["frames"] = cosim.publisher.sequence
     torch.save(saved, output / "source.pt")
 
 
