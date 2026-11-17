@@ -67,7 +67,7 @@ the source with the `cosim-render` plugin. Configure the source's remote cameras
 ordinary cameras on the renderer:
 
 ```bash
-python -m holosoma.cosim.render.renderer --endpoint ipc:///tmp/$USER/cosim.sock \
+python -m holosoma.cosim.render --endpoint ipc:///tmp/$USER/cosim.sock \
   simulator:isaacsim robot:g1-29dof terrain:terrain-locomotion-mix --training.num-envs 4 \
   sensor.overview:overview
 

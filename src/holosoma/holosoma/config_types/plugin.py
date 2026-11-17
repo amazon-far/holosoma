@@ -109,7 +109,7 @@ class CosimPluginConfig(PluginConfig, abc.ABC):
 class CosimRenderPluginConfig(CosimPluginConfig):
     """Publish this simulator's state to a co-simulation renderer, and take remote cameras' images from it.
 
-    Start the renderer first: ``python -m holosoma.cosim.render.renderer --endpoint <endpoint> <run_sim args>``.
+    Start the renderer first: ``python -m holosoma.cosim.render --endpoint <endpoint> <run_sim args>``.
     """
 
     def get_cls(self) -> Callable[..., Any]:

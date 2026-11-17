@@ -1,6 +1,6 @@
 """Co-simulation rendering, renderer side: render a source's state and export the cameras it requests.
 
-usage: python -m holosoma.cosim.render.renderer --endpoint ipc://... <run_sim arguments>
+usage: python -m holosoma.cosim.render --endpoint ipc://... <run_sim arguments>
 
 The run_sim arguments describe the same scene as the source's, with the source's remote cameras configured
 here as ordinary cameras. Start the renderer before the source; it exits when the source closes.
@@ -142,7 +142,7 @@ def split_endpoint(argv: list[str]) -> tuple[str, list[str]]:
             return arg.partition("=")[2], argv[:index] + argv[index + 1 :]
         if arg == "--endpoint" and index + 1 < len(argv):
             return argv[index + 1], argv[:index] + argv[index + 2 :]
-    raise SystemExit("usage: python -m holosoma.cosim.render.renderer --endpoint ipc://... <run_sim arguments>")
+    raise SystemExit("usage: python -m holosoma.cosim.render --endpoint ipc://... <run_sim arguments>")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -151,10 +151,3 @@ def main(argv: list[str] | None = None) -> None:
     with create_render_task(config) as task:
         Receiver(RenderHandler(task), endpoint=endpoint).run()
         logger.info(f"Co-simulation source closed after {task.frames_rendered} frames")
-
-
-if __name__ == "__main__":
-    # Run as the importable module, so RenderTask is the class its env_class path names.
-    from holosoma.cosim.render.renderer import main as run
-
-    run()
