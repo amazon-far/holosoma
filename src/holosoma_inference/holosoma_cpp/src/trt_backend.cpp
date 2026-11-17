@@ -1,9 +1,9 @@
 // TensorRT execution of the same graphs ONNX Runtime runs, for hosts where the CPU is the budget.
 //
 // Only compiled when NvInfer is found. The engine is built once from the .onnx and cached, keyed
-// on everything that would invalidate it -- the model's bytes, the TensorRT version and the
-// device's compute capability -- because a plan is specific to all three and a stale one either
-// fails to deserialize or, worse, does not.
+// on everything that would invalidate it -- the model's bytes, the TensorRT version, the device's
+// compute capability and the TF32 setting -- because a plan is specific to all four and a stale one
+// either fails to deserialize or, worse, does not.
 #include <NvInfer.h>
 #include <NvOnnxParser.h>
 #include <cuda_runtime_api.h>
@@ -11,12 +11,12 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <functional>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 
 #include "holosoma_cpp/model_signature.hpp"
+#include "holosoma_cpp/trt_cache_key.hpp"
 
 namespace holosoma {
 namespace {
@@ -65,10 +65,8 @@ std::string cache_key(const std::string& path, const ModelSignature& signature) 
     key << ":" << info.name;
     for (int64_t d : info.shape) key << "x" << (d > 0 ? d : 1);
   }
-  std::ostringstream name;
-  name << std::filesystem::path(path).stem().string() << "-" << std::hex << std::hash<std::string>{}(key.str())
-       << ".engine";
-  return name.str();
+  return trt_engine_file_name(std::filesystem::path(path).stem().string(), key.str(),
+                              std::getenv("NVIDIA_TF32_OVERRIDE"));
 }
 
 std::vector<char> read_file(const std::filesystem::path& path) {
