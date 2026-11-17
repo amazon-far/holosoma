@@ -154,4 +154,7 @@ def main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Run as the importable module, so RenderTask is the class its env_class path names.
+    from holosoma.cosim.render.renderer import main as run
+
+    run()
