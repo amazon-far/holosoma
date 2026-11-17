@@ -402,8 +402,7 @@ class BaseSimulator:
         for name, object_type, position, pose, velocity in entries:
             self.object_registry.register_object(name, object_type, position, pose, velocity)
         self.object_registry.finalize_registration()
-        # Resolve the topology once at setup. Full-object cache refreshes must not
-        # read indices back to the host or change ordering at each capture.
+        # Resolved once, so cache refreshes need no host readback and keep one ordering.
         self._object_state_pairs = tuple(
             (name, env_ids) for name, env_ids in self.object_registry.resolved_objects() if name != "robot"
         )

@@ -426,9 +426,8 @@ class WarpBackend(IMujocoBackend):
         ``subtree_com``/``cvel`` the body-velocity read uses, and the renderer's geom/camera poses)
         rather than full ``mjw.forward`` —
         forward's solver/collision stages allocate per call and are useless without a step.
-        Out-of-graph launches into the same mjw_data the step graph uses are safe (same
-        pattern as set_static_body_world_pose / initialize_camera_mounts); ``mjw_data.time`` is
-        untouched (only integrators advance it).
+        The launches run as their own CUDA graph, captured on the first call, and are ordered
+        with Torch's current stream; ``mjw_data.time`` is untouched (only integrators advance it).
         """
         import warp as wp
 

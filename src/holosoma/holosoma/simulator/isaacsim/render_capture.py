@@ -1,8 +1,10 @@
-"""Render applied state through the unchanged Isaac Lab articulation path, with physics held stopped."""
+"""Render applied state through Isaac Lab with physics held stopped."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+import torch
 
 if TYPE_CHECKING:
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
@@ -30,8 +32,6 @@ class RenderCapture:
 
     def initialize_cameras(self) -> None:
         """Complete lazy camera initialization and take the stopped-physics clock; call before :meth:`render`."""
-        import torch
-
         simulator = self.simulator
         try:
             simulator.render()
@@ -42,16 +42,16 @@ class RenderCapture:
             torch.cuda.synchronize(simulator.sim_device)
         finally:
             self.settings.set_bool(_PLAY_SIMULATIONS, False)
-        self.clock = self.native_clock()
+        self.clock = self._native_clock()
 
-    def native_clock(self) -> tuple[float, int]:
+    def _native_clock(self) -> tuple[float, int]:
         context = self.simulator.sim
         return context.current_time, context.current_time_step_index
 
     def render(self, dt: float) -> None:
         """Flush applied state, render it and refresh camera data by ``dt``; raise if physics moved."""
         simulator = self.simulator
-        if self.native_clock() != self.clock:
+        if self._native_clock() != self.clock:
             raise RuntimeError("Isaac physics advanced between rendered frames")
         self.settings.set_bool(_PLAY_SIMULATIONS, False)
         try:
@@ -60,7 +60,7 @@ class RenderCapture:
                 simulator.render()
                 self.settings.set_bool(_PLAY_SIMULATIONS, False)
                 simulator.scene.update(dt=dt)
-            if self.native_clock() != self.clock:
+            if self._native_clock() != self.clock:
                 raise RuntimeError("Rendering applied state advanced Isaac physics")
         finally:
             self.settings.set_bool(_PLAY_SIMULATIONS, False)

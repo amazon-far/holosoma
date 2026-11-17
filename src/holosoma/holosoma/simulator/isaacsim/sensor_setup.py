@@ -748,7 +748,7 @@ def render_sensors(sim: IsaacSim) -> None:
     due = sim.sensor_manager.collect_due()
     local = [record for record in due if not record.config.remote]
     recording = sim.video_recorder is not None and sim.video_recorder.is_recording
-    if any(record.name in sim.tiled_cameras for record in due) or recording:
+    if any(record.name in sim.tiled_cameras for record in local) or recording:
         sim.render_for_sensors()
     render_cameras(sim, local)
     render_lidars(sim)

@@ -58,9 +58,9 @@ scanner; other tasks can disable it with `terrain.terrain_term.height_scanner=Fa
 SimState cache allocations, sends only metadata through ZeroMQ, and uses CUDA
 ready/done events. Scenes, environment placement and process/container deployment
 remain caller-owned. The bridge validates joint/object order and environment
-origins at startup (after the renderer has matched them where it can), and that both processes use the same physical GPU (by UUID,
-since `CUDA_VISIBLE_DEVICES` can renumber devices). It contains no Isaac SDK
-access or simulator-type dispatch.
+origins at startup (after the renderer has matched them where it can), and that
+both processes use the same physical GPU (by UUID, since `CUDA_VISIBLE_DEVICES`
+can renumber devices).
 
 From the command line, start the renderer with the scene's run_sim arguments, then run
 the source with the `cosim-render` plugin. Configure the source's remote cameras as
@@ -110,9 +110,9 @@ publishes when a camera is due and fills remote cameras from the receiver's
 images. `holosoma.cosim.bridge.Publisher` is the channel underneath:
 the handshake at construction, then `publish()`, `repeat()`, its mapped
 `imports` and `close()`, called whenever its owner decides. On the receiving
-side, `Receiver` applies the shared state and hands each frame to a handler;
-`holosoma.cosim.render.RenderHandler` renders it with a `RenderTask` and exports
-the requested camera outputs.
+side, `Receiver` maps the shared state and hands each frame to a handler;
+`holosoma.cosim.render.RenderHandler` applies it to a `RenderTask`, renders it
+and exports the requested camera outputs.
 
 The source shares every non-empty SimState field, writable and derived. When the
 connection opens, each side sends the buffers it exports (name, shape, dtype and
@@ -120,9 +120,10 @@ IPC handle) and the source also sends the buffers it requests from the receiver.
 The receiving handler chooses the exported fields it reads; the receiver maps only
 those, read-only, names them in its reply, and passes them to the handler each frame.
 Each later exchange refreshes only those fields on the source. The render handler
-reads the fields its simulator can write, rejects any whose shape differs from its
-own, and applies them before rendering; other handlers may read any exported field,
-derived ones such as `contact_forces` included, without writing them anywhere. The
+reads the fields its simulator can write, rejects any whose shape or dtype differs
+from its own, and applies them before rendering; other handlers may read any
+exported field, derived ones such as `contact_forces` included, without writing
+them anywhere. The
 receiver rejects a read of a field the source does not share, and any scene layout
 (joint, object and environment order) or GPU that differs. Import CUDA helpers
 after provider startup when they use Warp; importing `CacheAllocator` itself loads
@@ -138,21 +139,23 @@ cameras and completes GPU reads. Physics resumes after completion: serialized
 lockstep, with no physics/render overlap or frame pipelining. Startup handles and
 layout travel once; subsequent notifications carry the frame sequence,
 simulation time and the source's hook phase they were sent from (`frame_end` for
-camera frames, `episode_start` for re-renders after resets, `None` outside any hook). Publisher close obtains an unmap acknowledgment before storage
-can be released. Failures/timeouts propagate; reconnection and scene changes are
-not implemented. Startup and the first frame exchange may take up to five
-minutes (first-use compilation); later exchanges time out after 30 seconds. On a lost peer, retain exporting allocations until that peer
-has exited or confirmed unmapping.
+camera frames, `episode_start` for re-renders after resets, `None` unless exactly
+one phase is emitting). Publisher close obtains an unmap acknowledgment before
+storage can be released. Failures/timeouts propagate; reconnection and scene
+changes are not implemented. Startup and the first frame exchange may take up to
+five minutes (first-use compilation); later exchanges time out after 30 seconds.
+On a lost peer, retain exporting allocations until that peer has exited or
+confirmed unmapping.
 
 Warp's owning allocations use `ScopedMempool(..., False)` and remain GPU memory.
-The caller must retain `CacheAllocator` while SimState or imported tensors refer
-to that storage. Ordinary unselected caches continue using Torch allocations.
-Normal Holosoma use does not require Warp IPC APIs; the export path requires
-Warp's CUDA IPC arrays and events (tested with Warp 1.15 and 1.19).
+`shared_state()` keeps its `CacheAllocator` alive for the simulator's lifetime; a
+caller that installs its own allocator must retain it while SimState or imported
+tensors refer to that storage. Ordinary unselected caches continue using Torch
+allocations. Normal Holosoma use does not require Warp IPC APIs; the export path
+requires Warp's CUDA IPC arrays and events (Warp 1.15 to 1.19).
 
-Sharing caches removes a separate publication copy and CPU payload transfers.
-It does not remove native-to-unified SimState refresh, receiver layout conversion
-or native SDK writes. No promise of end-to-end zero-copy state application is made.
+Sharing caches removes a separate publication copy and CPU payload transfers; the
+native-to-unified SimState refresh and the native writes on the receiver remain.
 
 ## Observation loopback
 
@@ -176,20 +179,22 @@ consumers ordered after `sensor_render_hook` see remote images too. A due remote
 camera that nothing filled raises at `sensor_render_hook`.
 
 The `CosimRenderPlugin` fills the remote cameras from a hook ordered after
-`sensor_capture_hook` and before `sensor_render_hook`. It requests one buffer per camera output, rgb `uint8 [E, H, W, 3]` and depth
+`sensor_capture_hook` and before `sensor_render_hook`. It requests one buffer per
+camera output, rgb `uint8 [E, H, W, 3]` and depth
 `float32 [E, H, W, 1]`, with the camera's mount, field of view, near/far range and
 depth clipping. The render handler rejects any request that differs from its own
 camera's before mapping state, then exports one persistent buffer per request and
 copies its sensor buffers into them before signalling completion. The source
-checks that the exports match its requests. The source then copies each due camera's image into a new
-buffer, so earlier frames held by consumers stay valid. Publication follows the
+checks that the exports match its requests, then copies each due camera's image
+into a new buffer, so earlier frames held by consumers stay valid. Publication follows the
 remote cameras: a frame is published when one of them is due. Without remote
 cameras the source publishes after capture, as above.
 
 Sources reset environments after cameras render. On `EPISODE_START`, which fires
 once per reset batch after the reset state is written, the plugin sends `REPEAT`
 with the current source time; the receiver applies the reset state, renders every
-environment with `repeat=True`, and the source takes only the reset rows. State
+environment with `repeat=True`, and the source takes only the reset rows (the
+whole image if a camera has none yet). State
 changes that start no episode, such as a motion-tracking command teleporting an
 environment to a new clip, are not re-rendered: remote cameras keep their frame
 from before the change for that step.
@@ -212,5 +217,4 @@ world body poses and zero velocities. The classic backend retains its per-actor
 CPU getter. Changing topology requires a new simulator and address plan.
 
 Scene fixtures, process or container launchers, benchmarks and recordings are
-left to callers; the APIs and bridge need no task subclass, scene patch, custom
-state writer, stream fence or camera initialization helper.
+left to callers.

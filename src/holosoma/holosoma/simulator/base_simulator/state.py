@@ -9,7 +9,8 @@ state changed, and ``write`` flushes in-place changes back to the simulation, ro
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
 simulation state. In-place writes reach the simulation before its next physics step, FK pass or any
 state write that would replace them: the changed rows (environments) are flushed through the tensor's
-``write``. A tensor bound without ``write`` is read-only.
+``write``. A tensor bound without ``write`` is read-only. :meth:`SimState.assign` overwrites whole writable
+tensors, written in full at the next flush.
 
 Backends wrap every state mutation in :meth:`SimState.mutation`, which flushes pending writes first and
 marks every tensor stale after.
@@ -149,12 +150,8 @@ class SimState:
         self._buffer_allocator: BufferAllocator | None = None
 
     def set_buffer_allocator(self, allocator: BufferAllocator) -> None:
-        """Select cache storage before the first cached read.
-
-        The allocator receives a field name, fresh native value and selected
-        device, and returns matching float32 storage. Cache refresh and write
-        handling remain registry-owned. Callers retain external allocation
-        owners for as long as the cache or another process uses their storage.
+        """Allocate cache buffers with ``allocator(name, value, device)``, which returns float32 storage shaped
+        like ``value``; call before the first cached read. Callers keep the storage's owner alive while it is used.
         """
         if any(registration.buffers for registration in self._registrations):
             raise RuntimeError("State allocator must be selected before the first cached read")
@@ -213,7 +210,8 @@ class SimState:
             self.mark_stale()
 
     def flush_writes(self) -> None:
-        """Write the rows written in place to the simulation, then mark read-only tensors stale if any were.
+        """Write assigned tensors in full and the rows written in place to the simulation, then mark read-only
+        tensors stale if any were.
 
         Writable tensors stay valid: each is an independent input, so a write changes no other writable
         tensor, and a flushed buffer already holds what the simulation now has.

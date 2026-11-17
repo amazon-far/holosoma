@@ -444,7 +444,7 @@ class BaseTask:
         self._step_managers()
 
     def _get_reset_env_ids(self) -> torch.Tensor:
-        """Select environments that ended this frame before evaluation and reset."""
+        """Return ids of environments whose episodes ended this frame."""
         return self.reset_buf.nonzero(as_tuple=False).flatten()
 
     def _evaluate_frame(self, env_ids: torch.Tensor) -> None:

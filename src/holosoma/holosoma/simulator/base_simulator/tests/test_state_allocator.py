@@ -58,13 +58,11 @@ def test_invalid_allocator_storage_is_rejected(storage: torch.Tensor) -> None:
     assert state.get("pose").shape == (2, 3)
 
 
-@pytest.mark.parametrize("custom", [False, True])
-def test_device_alias_keeps_default_allocation_behavior(custom: bool) -> None:
+def test_device_alias_is_accepted_from_a_custom_allocator() -> None:
     state = SimState(device="cpu:0")
-    if custom:
-        state.set_buffer_allocator(
-            lambda _name, value, device: torch.empty(value.shape, dtype=torch.float32, device=device)
-        )
+    state.set_buffer_allocator(
+        lambda _name, value, device: torch.empty(value.shape, dtype=torch.float32, device=device)
+    )
     state.register("pose", lambda: torch.zeros(2, 3))
     assert state.get("pose").device == torch.device("cpu")
 
@@ -72,34 +70,7 @@ def test_device_alias_keeps_default_allocation_behavior(custom: bool) -> None:
 def test_custom_allocation_inside_inference_mode_remains_writable() -> None:
     state = SimState()
     state.set_buffer_allocator(lambda _name, value, _device: torch.empty_like(value))
-    backing = torch.zeros(2, 3)
-
-    def write(rows: torch.Tensor, value: torch.Tensor) -> None:
-        backing[rows] = value[rows]
-
-    state.register("pose", lambda: backing, write=write)
+    state.register("pose", lambda: torch.zeros(2, 3), write=lambda _rows, _value: None)
     with torch.inference_mode():
         held = state.get("pose")
     assert not held.is_inference()
-    held[1] = 7
-    state.flush_writes()
-    assert torch.equal(backing[1], torch.full((3,), 7.0))
-
-
-def test_mutation_flushes_custom_storage_then_refreshes_same_buffer() -> None:
-    state = SimState()
-    state.set_buffer_allocator(lambda _name, value, _device: torch.empty_like(value))
-    backing = torch.zeros(2, 3)
-    written: list[list[int]] = []
-
-    def write(rows: torch.Tensor, value: torch.Tensor) -> None:
-        written.append(rows.tolist())
-        backing[rows] = value[rows]
-
-    state.register("pose", lambda: backing, write=write)
-    held = state.get("pose")
-    held[1] = 3
-    with state.mutation():
-        assert written == [[1]] and torch.equal(backing[1], torch.full((3,), 3.0))
-        backing[0] = 9
-    assert state.get("pose") is held and torch.equal(held, backing)

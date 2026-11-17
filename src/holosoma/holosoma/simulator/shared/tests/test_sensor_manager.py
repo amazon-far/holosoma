@@ -8,6 +8,10 @@ unsupported data_type.
 
 from __future__ import annotations
 
+import dataclasses
+from types import SimpleNamespace
+from typing import Any, cast
+
 import pytest
 
 from holosoma.config_types.frequency import DecimationLike
@@ -21,6 +25,7 @@ from holosoma.config_types.sensor import (
     LidarSensorConfig,
     SensorMountConfig,
 )
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.shared.lidar_sensor import LidarPatternProvider
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch
@@ -234,3 +239,11 @@ def test_sensor_names_must_be_unique_across_types() -> None:
     sm.register_camera("sensor", _cam())
     with pytest.raises(ValueError, match="already registered"):
         sm.register_lidar("sensor", LidarSensorConfig(mount=_MOUNT))
+
+
+def test_a_due_remote_camera_without_a_renderer_fails_at_the_sensor_render_hook() -> None:
+    manager = SensorManager("cpu", 50.0, num_envs=1)
+    manager.register_camera("cam", dataclasses.replace(_cam(), remote=True))
+    manager.collect_due()
+    with pytest.raises(RuntimeError, match=r"Remote cameras \['cam'\] have no co-simulation renderer"):
+        BaseSimulator._sensors_rendered(cast("Any", SimpleNamespace(sensor_manager=manager)))

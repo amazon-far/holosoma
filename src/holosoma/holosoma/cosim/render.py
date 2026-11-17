@@ -65,7 +65,7 @@ class CosimRenderPlugin:
         self.episode_hook = (
             hooks.add(Phase.EPISODE_START, self._rerender, name="cosim.rerender") if self.remote else None
         )
-        self.close_hook = hooks.add(Phase.CLOSE, self.close, name="cosim.close")
+        hooks.add(Phase.CLOSE, self.close, name="cosim.close")
 
     def _frame(self) -> None:
         """Publish when a camera is due, and fill the due remote cameras from the renderer's images."""
@@ -145,10 +145,13 @@ class RenderHandler:
         owners = {}
         for request in requests:
             camera, _, data_type = request.name.rpartition("/")
-            own = {}
-            if manager.has_camera(camera):
-                own = {output.name: output for output in camera_requests(manager.get(camera), self.task.num_envs)}
-            if request.name not in own:
+            record = manager.get(camera) if manager.has_camera(camera) else None
+            own = (
+                {}
+                if record is None
+                else {output.name: output for output in camera_requests(record, self.task.num_envs)}
+            )
+            if record is None or request.name not in own:
                 raise ValueError(f"Receiver has no camera output {request.name!r} for the source's request")
             if request != own[request.name]:
                 raise ValueError(
@@ -156,7 +159,7 @@ class RenderHandler:
                     f"source {request}, receiver {own[request.name]}"
                 )
             owners[request.name] = allocate_shared(request.shape, request.dtype, self.simulator.sim_device)
-            self._images.append(_Image(manager.get(camera), data_type, wp.to_torch(owners[request.name])))
+            self._images.append(_Image(record, data_type, wp.to_torch(owners[request.name])))
         return owners
 
     def process(self, state: Mapping[str, torch.Tensor], sim_time: float, *, repeat: bool, phase: str | None) -> None:

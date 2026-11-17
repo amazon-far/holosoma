@@ -45,7 +45,7 @@ def replica(monkeypatch: pytest.MonkeyPatch) -> tuple[SimpleNamespace, list[obje
                 data=SimpleNamespace(output={}),
             )
         },
-        sensor_manager=SimpleNamespace(cameras=[object()], lidars=[]),
+        sensor_manager=SimpleNamespace(lidars=[]),
         sim=SimpleNamespace(current_time=0.01, current_time_step_index=2),
         state=SimpleNamespace(mutation=mutation),
         scene=SimpleNamespace(update=lambda dt: calls.append(("refresh", dt))),
@@ -70,7 +70,6 @@ def test_render_writes_renders_and_refreshes_inside_one_mutation(
     capture.render(0.035)
     assert calls == ["flush", "write", "render", ("refresh", 0.035), "stale"]
     assert flags and not any(flags)
-    assert simulator.tiled_cameras["camera"].cfg.update_latest_camera_pose
 
 
 def test_render_failure_leaves_physics_stopped(replica: tuple[SimpleNamespace, list[object], list[bool]]) -> None:

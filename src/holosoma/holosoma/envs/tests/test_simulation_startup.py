@@ -1,4 +1,4 @@
-"""Native startup ordering without simulator SDKs or a custom session adapter."""
+"""RenderTask construction and render_frame clocking against a fake simulator."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.shared.scene_types import EnvOriginsScene
 
 pytestmark = pytest.mark.no_sim
-TaskFixture = tuple[type[base_task.BaseTask], type[RenderTask], list[Any]]
+TaskFixture = tuple[type[RenderTask], list[Any]]
 
 
 @pytest.fixture
@@ -29,13 +29,10 @@ def task_type(monkeypatch: pytest.MonkeyPatch) -> TaskFixture:
         def __init__(self, tyro_config: Any, terrain_manager: Any, device: str) -> None:
             super().__init__(tyro_config, terrain_manager, device)
             self.scene = EnvOriginsScene(torch.tensor([[10.0, 0.0, 0.0], [20.0, 0.0, 0.0]]), device)
-            camera = SimpleNamespace(
-                effective_decimation=1, name="cam", config=SimpleNamespace(remote=False), buffers={}
-            )
+            camera = SimpleNamespace(effective_decimation=1, config=SimpleNamespace(remote=False))
             self.sensor_manager = cast("Any", SimpleNamespace(cameras=[camera], lidars=[], last_due=set()))
 
         def setup(self) -> None:
-            calls.append("setup")
             self.sim_dt = 0.005
 
         def setup_terrain(self) -> None:
@@ -49,7 +46,6 @@ def task_type(monkeypatch: pytest.MonkeyPatch) -> TaskFixture:
             env_config: dict[str, Any] | None = None,
         ) -> None:
             self.env_origins = env_origins
-            calls.append(("origins", env_origins.clone()))
 
         def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
             return torch.zeros(1), torch.zeros(1), torch.zeros(1)
@@ -76,9 +72,6 @@ def task_type(monkeypatch: pytest.MonkeyPatch) -> TaskFixture:
         def _load_assets(self) -> None:
             self.base_init_state = torch.zeros(13)
 
-        def _get_env_origins(self) -> torch.Tensor:
-            return torch.zeros(self.num_envs, 3)
-
         def _setup_robot_body_indices(self) -> None:
             pass
 
@@ -95,12 +88,12 @@ def task_type(monkeypatch: pytest.MonkeyPatch) -> TaskFixture:
             pass
 
     class Render(Task, RenderTask):
-        _get_env_origins = RenderTask._get_env_origins
+        pass
 
     monkeypatch.setattr(base_task, "TerrainManager", lambda *_: object())
     monkeypatch.setattr(base_task, "get_class", lambda _name: Simulator)
     monkeypatch.setattr(base_task, "ResetEventManager", lambda *_: object())
-    return Task, Render, calls
+    return Render, calls
 
 
 def config() -> EnvConfig:
@@ -111,7 +104,7 @@ def config() -> EnvConfig:
 def test_render_task_uses_native_scene_placement_and_rejects_physics_step(
     task_type: TaskFixture,
 ) -> None:
-    _task, render, calls = task_type
+    render, calls = task_type
     constructed = render(config())
     assert torch.equal(constructed.simulator.env_origins, constructed.simulator.scene.env_origins)
     assert calls[-1] == "render-only"
@@ -121,7 +114,7 @@ def test_render_task_uses_native_scene_placement_and_rejects_physics_step(
 
 
 def test_render_frames_run_at_the_external_clock(task_type: TaskFixture) -> None:
-    _task, render, calls = task_type
+    render, calls = task_type
     constructed = render(config())
     constructed.hooks.add(Phase.FRAME_BEGIN, lambda: calls.append("begin"))
     del calls[:]

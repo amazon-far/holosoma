@@ -21,6 +21,10 @@ class BufferSpec:
     handle: str
     dtype: str = "float32"
 
+    @classmethod
+    def from_message(cls, raw: Mapping[str, Any]) -> BufferSpec:
+        return cls(**{**raw, "shape": tuple(raw["shape"])})
+
 
 SHARED_DTYPES = ("float32", "uint8")
 
@@ -48,8 +52,8 @@ class CacheAllocator:
     """Allocate selected SimState caches outside Warp's memory pool.
 
     Retain this owner until the receiver has unmapped its imports. Other caches,
-    and empty selected ones, keep ordinary Torch storage. IPC APIs are checked only
-    when sharing is used.
+    and empty selected ones, keep ordinary Torch storage. Warp is imported only
+    when a selected cache is allocated.
     """
 
     def __init__(self, fields: Iterable[str]) -> None:
@@ -102,15 +106,14 @@ def shared_state(simulator: BaseSimulator) -> CacheAllocator:
 class MappedBuffers:
     """Own imports until SDK and caller views have been released."""
 
-    def __init__(self, descriptions: Iterable[Mapping[str, Any]], *, device: str) -> None:
+    def __init__(self, specs: Iterable[BufferSpec], *, device: str) -> None:
         import warp as wp
 
         self.arrays: dict[str, Any] = {}
         self.tensors: dict[str, torch.Tensor] = {}
         self.versions: dict[str, int] = {}
         self.references: dict[str, tuple[Any, Any]] = {}
-        for raw in descriptions:
-            spec = BufferSpec(**{**raw, "shape": tuple(raw["shape"])})
+        for spec in specs:
             if spec.name in self.arrays:
                 raise ValueError(f"Duplicate IPC buffer: {spec.name}")
             if spec.dtype not in SHARED_DTYPES:

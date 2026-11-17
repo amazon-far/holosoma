@@ -5,7 +5,7 @@ import copy
 import dataclasses
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pathlib
 import trimesh
@@ -51,13 +51,14 @@ from holosoma.simulator.isaacsim.object_spawner import (
 )
 from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures, register_terrain_mesh_cache
 from holosoma.simulator.base_simulator.state import Columns
-from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw
+from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
 from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
 from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
+from holosoma.simulator.isaacsim.render_capture import RenderCapture
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.isaacsim.prim_utils import log_robot_properties, print_prim_tree
 from holosoma.simulator.isaacsim.video_recorder import IsaacSimVideoRecorder
@@ -69,9 +70,6 @@ from holosoma.simulator.shared.virtual_gantry import (
 )
 
 from holosoma.simulator.types import ActorNames, ActorIndices, EnvIds, ActorStates, ActorPoses
-
-if TYPE_CHECKING:
-    from holosoma.simulator.isaacsim.render_capture import RenderCapture
 
 
 class IsaacSim(BaseSimulator):
@@ -330,8 +328,6 @@ class IsaacSim(BaseSimulator):
 
     def prepare_render_only(self) -> None:
         """Stop physics playback and initialize cameras for rendering applied state."""
-        from holosoma.simulator.isaacsim.render_capture import RenderCapture
-
         if self._render_capture is not None:
             raise RuntimeError("Render-only rendering is already prepared")
         self._render_capture = RenderCapture(self)
@@ -719,17 +715,15 @@ class IsaacSim(BaseSimulator):
             self.set_actor_states(free_names, env_ids, torch.cat([poses, vels], dim=1))
 
     def _register_state(self) -> None:
-        """Register the robot state tensors as lazy reads of the articulation and contact sensor buffers.
+        """Register the robot and object state tensors as lazy reads of the Isaac Lab buffers.
 
         Isaac Lab replaces these buffers on update. Body quantities are separate reads because reading
         body link velocity makes PhysX copy body COMs to the host.
         """
         data = self._robot.data
         self.state.device = self.sim_device
-        # State writers go straight to the Isaac Lab handles; writes take effect immediately.
-        xyzw_to_wxyz = torch.tensor([0, 1, 2, 6, 3, 4, 5, 7, 8, 9, 10, 11, 12], device=self.sim_device)
+        # Writers call the Isaac Lab handles, which write to PhysX immediately.
         joint_ids = torch.tensor(self.dof_ids, dtype=torch.long, device=self.sim_device)
-        robot_scratch = torch.empty(self.num_envs, 13, device=self.sim_device)
 
         def env_ids_for(rows: torch.Tensor) -> torch.Tensor | None:
             """``None``, Isaac Lab's all-environments path, when every row is written."""
@@ -737,11 +731,8 @@ class IsaacSim(BaseSimulator):
 
         def write_robot_root_states(rows: torch.Tensor, root: torch.Tensor) -> None:
             env_ids = env_ids_for(rows)
-            if env_ids is None:
-                torch.index_select(root, 1, xyzw_to_wxyz, out=robot_scratch)
-                self._robot.write_root_state_to_sim(robot_scratch)
-            else:
-                self._robot.write_root_state_to_sim(root[rows].index_select(1, xyzw_to_wxyz), env_ids=env_ids)
+            source = root if env_ids is None else root[rows]
+            self._robot.write_root_state_to_sim(fullstate_xyzw_to_wxyz(source), env_ids=env_ids)
 
         def joint_writer(write: Callable[..., None]) -> Callable[[torch.Tensor, torch.Tensor], None]:
             def flush(rows: torch.Tensor, values: torch.Tensor) -> None:
@@ -765,7 +756,6 @@ class IsaacSim(BaseSimulator):
         )
         object_names = self.object_state_names
         object_handles = [self.scene.rigid_objects[name] for name in object_names]
-        object_scratch = torch.empty(len(object_names), self.num_envs, 13, device=self.sim_device)
 
         def read_object_root_states() -> torch.Tensor:
             if not object_handles:
@@ -774,14 +764,9 @@ class IsaacSim(BaseSimulator):
 
         def write_object_root_states(rows: torch.Tensor, states: torch.Tensor) -> None:
             env_ids = env_ids_for(rows)
-            if env_ids is None:
-                torch.index_select(states.transpose(0, 1), 2, xyzw_to_wxyz, out=object_scratch)
-                for handle, object_states in zip(object_handles, object_scratch, strict=True):
-                    handle.write_root_state_to_sim(object_states)
-            else:
-                converted = states[rows].transpose(0, 1).index_select(2, xyzw_to_wxyz)
-                for handle, object_states in zip(object_handles, converted, strict=True):
-                    handle.write_root_state_to_sim(object_states, env_ids=env_ids)
+            source = states if env_ids is None else states[rows]
+            for index, handle in enumerate(object_handles):
+                handle.write_root_state_to_sim(fullstate_xyzw_to_wxyz(source[:, index]), env_ids=env_ids)
 
         self.state.register("object_root_states", read_object_root_states, write=write_object_root_states)
         self.state.register("contact_forces", self._robot_contact_forces)

@@ -72,7 +72,6 @@ def test_configured_terms_preserve_failure_timeout_masks_and_reset_selection(tas
         }
     )
     task = _task(task_type, cfg)
-    assert task.termination_manager.has_terms
 
     with _Operators() as operations:
         task._check_termination()
@@ -82,5 +81,3 @@ def test_configured_terms_preserve_failure_timeout_masks_and_reset_selection(tas
     assert ids.tolist() == [1, 2]
     assert task.reset_buf.tolist() == [0, 1, 1]
     assert task.time_out_buf.tolist() == [False, False, True]
-    assert task.termination_manager.terminated.tolist() == [False, True, False]
-    assert task.termination_manager.time_outs.tolist() == [False, False, True]

@@ -105,7 +105,7 @@ class CosimRenderPluginConfig(PluginConfig):
     """
 
     endpoint: str = ""
-    """ZeroMQ endpoint the renderer listens on, e.g. ``ipc:///path/private/to/you.sock``."""
+    """ZeroMQ endpoint the renderer listens on, e.g. ``ipc:///tmp/$USER/cosim.sock``."""
 
     def get_cls(self) -> Callable[..., Any]:
         from holosoma.cosim.render import CosimRenderPlugin

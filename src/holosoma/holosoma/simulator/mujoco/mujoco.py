@@ -990,7 +990,7 @@ class MuJoCo(BaseSimulator):
         return self._read_actor_states_resolved(resolved_objects)
 
     def _read_actor_states_resolved(self, resolved_objects: Sequence[tuple[str, torch.Tensor]]) -> ActorStates:
-        """Read the exact native unified states after actor topology resolution."""
+        """Unified ``[sum(len(env_ids)), 13]`` states for resolved ``(name, env_ids)`` pairs."""
         all_states: list[torch.Tensor] = []
         for obj_name, env_ids in resolved_objects:
             if obj_name == "robot":

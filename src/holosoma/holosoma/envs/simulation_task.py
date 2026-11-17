@@ -48,9 +48,8 @@ class _PerformanceLog:
 
 
 def simulation_env_origins(task: BaseTask) -> torch.Tensor:
-    """Place a single environment at the world origin, so its poses are world coordinates.
-
-    Several environments keep the terrain's origins so they do not overlap.
+    """Return environment origins: a single environment at the world origin, so its poses are world
+    coordinates; several keep the terrain's origins so they do not overlap.
     """
     if task.num_envs == 1:
         return torch.zeros(1, 3, device=task.device)
@@ -72,15 +71,13 @@ class SimulationTask(BaseTask):
         if self.termination_manager.has_terms:
             super()._check_termination()
             return
-        # Keep the ordinary zero-mask semantics without allocating manager masks every frame.
         self.reset_buf.zero_()
         self.time_out_buf.zero_()
 
     def _get_reset_env_ids(self) -> torch.Tensor:
         if self.termination_manager.has_terms:
             return super()._get_reset_env_ids()
-        # CUDA nonzero must determine the output size on the host. With no termination terms,
-        # the empty result is known without waiting for the queued physics to complete.
+        # Avoids CUDA nonzero's host sync: with no termination terms nothing resets.
         return self._empty_reset_env_ids
 
     def _get_env_origins(self) -> torch.Tensor:

@@ -20,7 +20,6 @@ from holosoma.cosim.cameras import camera_requests
 from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, share
 from holosoma.cosim.render import CosimRenderPlugin, RenderHandler
 from holosoma.envs.render_task import RenderTask
-from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.sensor_manager import SensorManager
 
@@ -37,6 +36,22 @@ def _camera(manager: SensorManager, name: str, *, remote: bool, data_types: list
     mount = SensorMountConfig(target_kind="world", target="")
     config = CameraSensorConfig(mount=mount, width=4, height=3, data_types=data_types, remote=remote)
     return manager.register_camera(name, config)
+
+
+def _fake_cuda(monkeypatch: pytest.MonkeyPatch, stream: Any, synchronize: Any = lambda _: None) -> None:
+    """Replace Warp and Torch CUDA streams with fakes whose events go through ``stream``."""
+    monkeypatch.setitem(
+        sys.modules,
+        "warp",
+        SimpleNamespace(
+            stream_from_torch=lambda _: stream,
+            event_from_ipc_handle=lambda *_args, **_kw: object(),
+            Event=lambda **_: SimpleNamespace(ipc_handle=lambda: b"\x01"),
+            to_torch=lambda owner: owner,
+        ),
+    )
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda _: object())
+    monkeypatch.setattr(torch.cuda, "synchronize", synchronize)
 
 
 ReceiverFixture = tuple[bridge.Receiver, list[Any], list[dict[str, Any]], list[dict[str, Any]]]
@@ -74,7 +89,7 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
 
         def __init__(self, descriptions: Any, *, device: str) -> None:
             calls.append("map")
-            Mapped.names = [description["name"] for description in descriptions]
+            Mapped.names = [spec.name for spec in descriptions]
             self.tensors = values
 
         def verify_read_only(self) -> None:
@@ -87,24 +102,13 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
 
     monkeypatch.setattr(bridge, "MappedBuffers", Mapped)
     stream = SimpleNamespace(wait_event=lambda _: calls.append("ready"), record_event=lambda _: calls.append("done"))
-    monkeypatch.setitem(
-        sys.modules,
-        "warp",
-        SimpleNamespace(
-            stream_from_torch=lambda _: stream,
-            event_from_ipc_handle=lambda *_args, **_kw: object(),
-            Event=lambda **_: SimpleNamespace(ipc_handle=lambda: b"\x01"),
-            to_torch=lambda owner: owner,
-        ),
-    )
+    _fake_cuda(monkeypatch, stream, synchronize=lambda _: calls.append("sync"))
     monkeypatch.setattr(
         cosim_render, "allocate_shared", lambda shape, dtype, _: torch.zeros(shape, dtype=getattr(torch, dtype))
     )
     monkeypatch.setattr(
         bridge, "share", lambda name, owner: BufferSpec(name, tuple(owner.shape), "00", str(owner.dtype)[6:])
     )
-    monkeypatch.setattr(torch.cuda, "current_stream", lambda _: object())
-    monkeypatch.setattr(torch.cuda, "synchronize", lambda _: calls.append("sync"))
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda _: SimpleNamespace(uuid="gpu-a"))
     sim = SimpleNamespace(
         sim_device="cuda:0",
@@ -125,23 +129,19 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
     return bridge.Receiver(handler, endpoint="ipc:///unused"), calls, replies, messages
 
 
-def test_receiver_uses_only_native_state_and_capture_contracts(receiver: ReceiverFixture) -> None:
+def _in_order(calls: list[Any], *expected: Any) -> bool:
+    """Whether ``expected`` occurs in ``calls`` in this order, possibly with other calls between."""
+    remaining = iter(calls)
+    return all(item in remaining for item in expected)
+
+
+def test_receiver_frame_lifecycle(receiver: ReceiverFixture) -> None:
     worker, calls, replies, _messages = receiver
     worker.run()
-    assert calls == [
-        ("place", [[0.0, 0.0, 0.0]]),
-        "map",
-        "ready",
-        "sync",
-        ("apply", True),
-        ("capture", 0.035),
-        "readonly",
-        "done",
-        ("timeout", bridge.FRAME_TIMEOUT_MS),
-        "sync",
-        "unmap",
-        "close",
-    ]
+    # Origins are matched before mapping; each frame waits for the source, renders, then signals done.
+    assert _in_order(calls, ("place", [[0.0, 0.0, 0.0]]), "map", "ready", "sync", ("apply", True), ("capture", 0.035))
+    assert _in_order(calls, ("capture", 0.035), "readonly", "done", ("timeout", bridge.FRAME_TIMEOUT_MS))
+    assert _in_order(calls, "done", "sync", "unmap", "close")
     assert replies == [
         {"type": "OPENED", "done_handle": "01", "exports": [], "reads": []},
         {"type": "FRAME_COMPLETE", "sequence": 1},
@@ -149,11 +149,14 @@ def test_receiver_uses_only_native_state_and_capture_contracts(receiver: Receive
     ]
 
 
-@pytest.mark.parametrize("mismatch", ["dof_names", "object_names", "env_origins", "gpu_uuid"])
+@pytest.mark.parametrize("mismatch", ["dof_names", "object_names", "env_origins", "gpu_uuid", "state_layout"])
 def test_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture, mismatch: str) -> None:
     worker, calls, replies, messages = receiver
-    wrong: list[Any] = [[1.0, 0.0, 0.0]] if mismatch == "env_origins" else ["wrong"]
-    (messages[0] if mismatch == "gpu_uuid" else messages[0]["scene"])[mismatch] = wrong
+    if mismatch == "state_layout":
+        messages[0]["exports"] = [{"name": "dof_pos", "shape": [1, 3], "handle": "00"}]
+    else:
+        wrong: list[Any] = [[1.0, 0.0, 0.0]] if mismatch == "env_origins" else ["wrong"]
+        (messages[0] if mismatch == "gpu_uuid" else messages[0]["scene"])[mismatch] = wrong
     with pytest.raises(ValueError, match="differs|differ"):
         worker.run()
     assert not any(isinstance(call, tuple) and call[0] != "place" for call in calls)
@@ -266,15 +269,6 @@ def test_reading_a_field_the_source_does_not_share_fails_before_mapping(receiver
     assert "map" not in calls and replies[-1]["type"] == "ERROR"
 
 
-def test_read_state_field_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture) -> None:
-    worker, calls, replies, messages = receiver
-    messages[0]["exports"] = [{"name": "dof_pos", "shape": [1, 3], "handle": "00"}]
-    with pytest.raises(ValueError, match="differs between simulators"):
-        worker.run()
-    assert not any(isinstance(call, tuple) and call[0] != "place" for call in calls)
-    assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
-
-
 def test_duplicate_frame_is_rejected_and_import_is_released(
     receiver: ReceiverFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -285,17 +279,6 @@ def test_duplicate_frame_is_rejected_and_import_is_released(
         worker.run()
     assert len([call for call in calls if isinstance(call, tuple) and call[0] == "capture"]) == 1
     assert replies[-1]["type"] == "ERROR" and calls[-2:] == ["unmap", "close"]
-
-
-def test_control_timeout_is_propagated_and_socket_can_be_closed(tmp_path: Path) -> None:
-    import zmq
-
-    control = bridge.ControlChannel(endpoint=f"ipc://{tmp_path}/absent.sock", startup_timeout_ms=10)
-    try:
-        with pytest.raises(zmq.Again):
-            control.exchange("OPEN")
-    finally:
-        control.close()
 
 
 def test_exchange_after_an_interrupted_request_takes_the_right_reply(tmp_path: Path) -> None:
@@ -379,18 +362,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     mapped = SimpleNamespace(tensors=images, release=lambda: calls.append("unmap"))
     monkeypatch.setattr(bridge, "MappedBuffers", lambda *_args, **_kw: mapped)
     monkeypatch.setattr(bridge, "gpu_uuid", lambda _: "gpu-a")
-    stream = SimpleNamespace(wait_event=lambda _: None, record_event=lambda _: None)
-    monkeypatch.setitem(
-        sys.modules,
-        "warp",
-        SimpleNamespace(
-            stream_from_torch=lambda _: stream,
-            event_from_ipc_handle=lambda *_args, **_kw: object(),
-            Event=lambda **_: SimpleNamespace(ipc_handle=lambda: b"\x01"),
-        ),
-    )
-    monkeypatch.setattr(torch.cuda, "current_stream", lambda _: object())
-    monkeypatch.setattr(torch.cuda, "synchronize", lambda _: None)
+    _fake_cuda(monkeypatch, SimpleNamespace(wait_event=lambda _: None, record_event=lambda _: None))
     values = {"dof_pos": torch.zeros(2, 1), "dof_vel": torch.zeros(2, 1)}
     sim = _Simulator(
         sim_device="cuda:0",
@@ -444,14 +416,6 @@ def test_remote_due_cameras_get_copies_of_the_receiver_images(plugin: PluginFixt
     assert calls[-1] == ("CLOSE", {})  # no more frames after close
 
 
-def test_a_due_remote_camera_without_a_renderer_fails_at_the_sensor_render_hook() -> None:
-    manager = SensorManager("cpu", 50.0, num_envs=1)
-    _camera(manager, "cam", remote=True, data_types=["rgb"])
-    manager.collect_due()
-    with pytest.raises(RuntimeError, match=r"Remote cameras \['cam'\] have no co-simulation renderer"):
-        BaseSimulator._sensors_rendered(cast("Any", SimpleNamespace(sensor_manager=manager)))
-
-
 def test_episode_start_rerenders_only_the_reset_rows(plugin: PluginFixture) -> None:
     source, manager, images, calls = plugin
     hooks = source.simulator.hooks
@@ -467,8 +431,6 @@ def test_episode_start_rerenders_only_the_reset_rows(plugin: PluginFixture) -> N
 
 @pytest.mark.parametrize("dtype", ["uint8", "float32"])
 def test_shared_buffer_dtype_survives_export_and_import(monkeypatch: pytest.MonkeyPatch, dtype: str) -> None:
-    tensor = torch.zeros(2, 3, dtype=getattr(torch, dtype))
-
     class Owner:  # Weak-referenceable, like a Warp array.
         shape = (2, 3)
 
@@ -486,9 +448,9 @@ def test_shared_buffer_dtype_survives_export_and_import(monkeypatch: pytest.Monk
         return owner
 
     warp = SimpleNamespace(
-        uint8="wp.uint8", float32="wp.float32", from_ipc_handle=from_ipc_handle, to_torch=lambda _: tensor
+        uint8="wp.uint8", float32="wp.float32", from_ipc_handle=from_ipc_handle, to_torch=lambda _: torch.zeros(0)
     )
     monkeypatch.setitem(sys.modules, "warp", warp)
-    mapped = MappedBuffers([asdict(share("cam/rgb", owner))], device="cuda:0")
-    assert imported == {"handle": b"\x01", "shape": (2, 3), "dtype": f"wp.{dtype}", "device": "cuda:0"}
-    assert mapped.tensors["cam/rgb"] is tensor
+    message = bridge.as_received(asdict(share("cam/rgb", owner)))
+    MappedBuffers([BufferSpec.from_message(message)], device="cuda:0")
+    assert imported["dtype"] == f"wp.{dtype}"

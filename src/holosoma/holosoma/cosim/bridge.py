@@ -1,4 +1,4 @@
-"""Optional lockstep bridge using only native Holosoma state/capture APIs."""
+"""Lockstep CUDA-IPC state bridge between a source and a receiver simulator."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class Frame:
     sequence: int
     sim_time: float
     phase: str | None = None
-    """The source's hook phase the frame was published from, or ``None`` outside any hook."""
+    """The source's hook phase the frame was published from, or ``None`` unless exactly one phase is emitting."""
 
     def __post_init__(self) -> None:
         if self.sequence < 1 or not math.isfinite(self.sim_time) or self.sim_time < 0:
@@ -105,10 +105,6 @@ class BufferRequest:
         return cls(raw["name"], tuple(raw["shape"]), raw["dtype"], dict(raw["meta"]))
 
 
-def buffer_spec(raw: Mapping[str, Any]) -> BufferSpec:
-    return BufferSpec(**{**raw, "shape": tuple(raw["shape"])})
-
-
 def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
     """The joint, object and environment layout both sides' state must share."""
     layout: dict[str, Any] = as_received(
@@ -167,11 +163,12 @@ class Publisher:
             if unknown := sorted(set(reply["reads"]) - set(exported)):
                 raise RuntimeError(f"Receiver reads state fields {unknown} the source does not share")
             self.fields = tuple(reply["reads"])
-            images = {spec.name: (spec.shape, spec.dtype) for spec in map(buffer_spec, reply["exports"])}
+            specs = [BufferSpec.from_message(raw) for raw in reply["exports"]]
+            images = {spec.name: (spec.shape, spec.dtype) for spec in specs}
             requested = {request.name: (request.shape, request.dtype) for request in requests}
             if images != requested:
                 raise RuntimeError(f"Receiver exported {images}, requested {requested}")
-            self._imports = MappedBuffers(reply["exports"], device=sim.sim_device)
+            self._imports = MappedBuffers(specs, device=sim.sim_device)
         except BaseException:
             self.control.close()
             raise
@@ -240,7 +237,7 @@ class FrameHandler(Protocol):
     simulator: BaseSimulator
 
     def reads(self, exports: Sequence[BufferSpec]) -> tuple[str, ...]:
-        """The source's exported state fields to map and refresh each frame, checked as this handler needs."""
+        """Return the exported state fields to map and refresh each frame; raise if one is unusable."""
 
     def allocate(self, requests: list[BufferRequest]) -> dict[str, Any]:
         """Check the source's requests and return one shared array per request, by name."""
@@ -250,7 +247,7 @@ class FrameHandler(Protocol):
 
         ``state`` holds the read fields, read-only and valid only during the call. ``repeat`` processes
         current state again at the previous frame's time, e.g. after the source reset. ``phase`` is the
-        source's hook phase the exchange came from, or ``None`` outside any hook.
+        source's hook phase the exchange came from, or ``None`` unless exactly one phase is emitting.
         """
 
 
@@ -297,7 +294,7 @@ class Receiver:
                             raise ValueError(f"Scene {differing} differs between simulators")
                         if (source_gpu := message["gpu_uuid"]) != (own_gpu := gpu_uuid(self.sim.sim_device)):
                             raise ValueError(f"Source GPU {source_gpu} differs from receiver GPU {own_gpu}")
-                        exported = [buffer_spec(raw) for raw in message["exports"]]
+                        exported = [BufferSpec.from_message(raw) for raw in message["exports"]]
                         reads = self.handler.reads(exported)
                         if unknown := sorted(set(reads) - {spec.name for spec in exported}):
                             raise ValueError(f"Receiver reads state fields {unknown} the source does not share")
@@ -305,7 +302,7 @@ class Receiver:
                             [BufferRequest.from_message(raw) for raw in message["requests"]]
                         )
                         mapped = MappedBuffers(
-                            [raw for raw in message["exports"] if raw["name"] in reads], device=self.sim.sim_device
+                            [spec for spec in exported if spec.name in reads], device=self.sim.sim_device
                         )
                         ready = wp.event_from_ipc_handle(
                             bytes.fromhex(message["ready_handle"]),
