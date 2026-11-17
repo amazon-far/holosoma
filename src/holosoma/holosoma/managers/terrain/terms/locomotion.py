@@ -12,7 +12,6 @@ from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     import trimesh
-    import warp as wp
 
 ATTACHMENT_POS = (0.0, 0.0, 0.25)
 
@@ -58,10 +57,6 @@ class TerrainLocomotion(TerrainTermBase):
     @property
     def mesh(self) -> trimesh.Trimesh:
         return self._terrain.mesh
-
-    @property
-    def warp_mesh(self) -> wp.Mesh:
-        return self._warp_mesh
 
     def setup(self) -> None:
         self._base_heights = torch.zeros(self.num_envs, device=self.device, requires_grad=False)
