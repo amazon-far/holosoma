@@ -13,14 +13,16 @@ primitive runs forward kinematics and renders sensors from it.
 ## Native startup and capture
 
 ```python
-with receiver_config.create_render_task() as task:
+from holosoma.cosim.render.renderer import create_render_task
+
+with create_render_task(receiver_config) as task:
     # inputs maps existing Holosoma field names to read-only GPU tensors.
     task.simulator.set_kinematic_time(source_time)  # what simulator.time() reports
     task.simulator.apply_state(inputs)
     task.render_frame()
 ```
 
-`RunSimConfig.create_render_task()` builds a `RenderTask`: normal startup with
+`holosoma.cosim.render.renderer.create_render_task()` builds a `RenderTask`: normal startup with
 `sim.kinematic_playback`, the backend's native placement where it has one
 (Isaac's clone grid), camera preparation, and every sensor rendering each frame.
 It has no physics step; `task.step()` raises.
@@ -65,7 +67,7 @@ the source with the `cosim-render` plugin. Configure the source's remote cameras
 ordinary cameras on the renderer:
 
 ```bash
-python -m holosoma.cosim.render --endpoint ipc:///tmp/$USER/cosim.sock \
+python -m holosoma.cosim.render.renderer --endpoint ipc:///tmp/$USER/cosim.sock \
   simulator:isaacsim robot:g1-29dof terrain:terrain-locomotion-mix --training.num-envs 4 \
   sensor.overview:overview
 
@@ -84,9 +86,10 @@ so world-frame state, world-mounted cameras and terrain agree.
 Receiver process:
 
 ```python
-with receiver_config.create_render_task() as task:
-    from holosoma.cosim.bridge import Receiver
-    from holosoma.cosim.render import RenderHandler
+from holosoma.cosim.bridge import Receiver
+from holosoma.cosim.render.renderer import RenderHandler, create_render_task
+
+with create_render_task(receiver_config) as task:
     Receiver(RenderHandler(task), endpoint=endpoint).run()
 ```
 
@@ -108,7 +111,7 @@ images. `holosoma.cosim.bridge.Publisher` is the channel underneath:
 the handshake at construction, then `publish()`, its mapped
 `imports` and `close()`, called whenever its owner decides. On the receiving
 side, `Receiver` maps the shared state and hands each frame to a handler;
-`holosoma.cosim.render.RenderHandler` applies it to a `RenderTask`, renders it
+`holosoma.cosim.render.renderer.RenderHandler` applies it to a `RenderTask`, renders it
 and exports the requested camera outputs.
 
 Other co-simulations build on `holosoma.cosim.base`, which assumes nothing about
@@ -208,7 +211,7 @@ renders every environment, and the source takes only the reset rows (the whole
 image if a camera has none yet). A plugin that writes state at `EPISODE_START`
 orders itself before this re-render with
 `before=HookRef(<cosim slot>, CosimRenderHook.RERENDER)`, using
-`holosoma.cosim.render.CosimRenderHook`. State
+`holosoma.cosim.render.source.CosimRenderHook`. State
 changes that start no episode, such as a motion-tracking command teleporting an
 environment to a new clip, are not re-rendered: remote cameras keep their frame
 from before the change for that step.

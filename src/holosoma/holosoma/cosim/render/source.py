@@ -1,0 +1,131 @@
+"""Co-simulation rendering, source side: the plugin and the layout a renderer must match.
+
+The source runs any task with ``plugin.<key>:cosim-render``; see :mod:`holosoma.cosim.render.renderer` for the
+renderer process.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from dataclasses import asdict
+from enum import Enum
+from typing import TYPE_CHECKING, Any
+
+import torch
+
+from holosoma.cosim.base import CosimPlugin
+from holosoma.cosim.bridge import BufferRequest, as_received
+from holosoma.simulator.base_simulator.hooks import Phase
+
+if TYPE_CHECKING:
+    from holosoma.config_types.plugin import CosimRenderPluginConfig
+    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.simulator.base_simulator.hooks import HookHandle, HookRegistry
+    from holosoma.simulator.shared.sensor_manager import CameraRecord
+
+
+def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
+    """The joint, object and environment layout both simulators' state must share."""
+    layout: dict[str, Any] = as_received(
+        {
+            "dof_names": list(sim.dof_names),
+            "object_names": list(sim.object_state_names),
+            "env_origins": sim.scene.env_origins.cpu().tolist(),
+        }
+    )
+    return layout
+
+
+def image_name(camera: str, data_type: str) -> str:
+    return f"{camera}/{data_type}"
+
+
+def camera_requests(record: CameraRecord, num_envs: int) -> list[BufferRequest]:
+    """One request per output of ``record``: rgb ``uint8 [E, H, W, 3]``, depth ``float32 [E, H, W, 1]``."""
+    config = record.config
+    meta = as_received(
+        {
+            "mount": asdict(config.mount),
+            "vertical_fov": config.vertical_fov,
+            "near": config.near,
+            "far": config.far,
+            "depth_clipping_behavior": config.depth_clipping_behavior,
+        }
+    )
+    return [
+        BufferRequest(
+            image_name(record.name, data_type),
+            (num_envs, config.height, config.width, 3 if data_type == "rgb" else 1),
+            "uint8" if data_type == "rgb" else "float32",
+            meta,
+        )
+        for data_type in config.data_types
+    ]
+
+
+class CosimRenderHook(Enum):
+    """Hooks :class:`CosimRenderPlugin` publishes, for ordering with ``HookRef(<slot>, member)``."""
+
+    RERENDER = "rerender"
+    """The ``EPISODE_START`` re-render of reset environments; order state writers before it."""
+
+
+class CosimRenderPlugin(CosimPlugin):
+    """Share ``simulator``'s state with a renderer and publish a frame whenever a camera is due.
+
+    Remote cameras take the renderer's images: each frame they are filled after local sensors render
+    and before consumers read them, and after resets the renderer re-renders the reset envs. Without
+    remote cameras, state is published after local cameras render.
+    """
+
+    def __init__(self, cfg: CosimRenderPluginConfig, simulator: BaseSimulator) -> None:
+        manager = simulator.sensor_manager
+        if not manager.cameras:
+            raise ValueError("The source publishes when its cameras are due; configure at least one camera")
+        self.remote = [record for record in manager.cameras if record.config.remote]
+        super().__init__(cfg, simulator)
+
+    def requests(self) -> list[BufferRequest]:
+        num_envs = self.simulator.sensor_manager.num_envs
+        return [request for record in self.remote for request in camera_requests(record, num_envs)]
+
+    def meta(self) -> dict[str, Any]:
+        return scene_layout(self.simulator)
+
+    def install(self, hooks: HookRegistry) -> Iterable[HookHandle]:
+        yield hooks.add(
+            Phase.FRAME_END,
+            self._frame,
+            name="cosim.frame",
+            after=self.simulator.sensor_capture_hook,
+            before=self.simulator.sensor_render_hook,
+        )
+        if self.remote:
+            yield hooks.add(Phase.EPISODE_START, self._rerender, name="cosim.rerender", key=CosimRenderHook.RERENDER)
+
+    def _frame(self) -> None:
+        """Publish when a camera is due, and fill the due remote cameras from the renderer's images."""
+        due = self.simulator.sensor_manager.last_due
+        if self.remote:
+            cameras = [record for record in self.remote if record.name in due]
+            if not cameras:
+                return
+            self.publisher.publish()
+            images = self.publisher.imports
+            for record in cameras:
+                for data_type in record.config.data_types:
+                    record.set_buffer(data_type, images[image_name(record.name, data_type)].clone())
+        elif due:
+            self.publisher.publish()
+
+    def _rerender(self, env_ids: torch.Tensor) -> None:
+        """Have the renderer render the reset envs' state at the current time, and take their rows."""
+        self.publisher.publish()
+        images = self.publisher.imports
+        for record in self.remote:
+            for data_type in record.config.data_types:
+                image = images[image_name(record.name, data_type)]
+                if data_type in record.buffers:
+                    record.set_buffer_rows(data_type, env_ids, image[env_ids])
+                else:
+                    record.set_buffer(data_type, image.clone())

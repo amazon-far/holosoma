@@ -19,10 +19,9 @@ from holosoma.cosim import base as cosim_base
 from holosoma.cosim import bridge
 from holosoma.cosim import cuda as cosim_cuda
 from holosoma.cosim.base import BufferHandler
-from holosoma.cosim.cameras import camera_requests
 from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, share
-from holosoma.cosim.render import CosimRenderPlugin, RenderHandler
-from holosoma.envs.render_task import RenderTask
+from holosoma.cosim.render.renderer import RenderHandler, RenderTask
+from holosoma.cosim.render.source import CosimRenderPlugin, camera_requests
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.sensor_manager import SensorManager
 

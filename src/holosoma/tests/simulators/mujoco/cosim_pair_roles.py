@@ -54,7 +54,7 @@ def receiver(endpoint: str, output: Path, num_envs: int, loopback: bool) -> None
     import torch
 
     from holosoma.cosim.bridge import Receiver
-    from holosoma.cosim.render import RenderHandler
+    from holosoma.cosim.render.renderer import RenderHandler, create_render_task
     from holosoma.simulator.base_simulator.hooks import Phase
 
     captures: list[dict[str, Any]] = []
@@ -63,7 +63,7 @@ def receiver(endpoint: str, output: Path, num_envs: int, loopback: bool) -> None
         captures[:] = [*captures[-1:], {}]
         capture(sim, captures[-1])
 
-    with config(num_envs, loopback).create_render_task() as task:
+    with create_render_task(config(num_envs, loopback)) as task:
         sim = task.simulator
         sim.hooks.add(Phase.FRAME_END, keep, after=sim.sensor_render_hook)
         receiver_loop = Receiver(RenderHandler(task), endpoint=endpoint)

@@ -11,8 +11,8 @@ import torch
 
 from holosoma.config_types.env import EnvConfig, get_run_sim_env_config
 from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.cosim.render.renderer import RenderTask
 from holosoma.envs.base_task import base_task
-from holosoma.envs.render_task import RenderTask
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.shared.scene_types import EnvOriginsScene
