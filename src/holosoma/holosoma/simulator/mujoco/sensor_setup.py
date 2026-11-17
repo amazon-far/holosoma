@@ -280,10 +280,19 @@ def _warp_workspace(
     return workspace
 
 
-def _render_cpu(sim: MuJoCo, sensor_record: LidarRecord) -> None:
+def _scan_directions(sensor_record: LidarRecord, sim_time: float, env_ids: torch.Tensor | None) -> torch.Tensor:
+    """This scan's directions: the pattern at ``sim_time``, or the held scan's when re-rendering ``env_ids``."""
+    if env_ids is None:
+        return sensor_record.pattern_at(sim_time).directions
+    if sensor_record.scan_directions is None:
+        raise RuntimeError(f"LiDAR '{sensor_record.name}' has no scan to re-render.")
+    return sensor_record.scan_directions
+
+
+def _render_cpu(sim: MuJoCo, sensor_record: LidarRecord, *, env_ids: torch.Tensor | None = None) -> None:
     assert sim.root_model is not None
-    pattern = sensor_record.pattern_at(sim.time())
-    directions_local = pattern.directions.to("cpu")
+    directions = _scan_directions(sensor_record, sim.time(), env_ids)
+    directions_local = directions.to("cpu")
     site_id = sensor_record.backend_cache["mujoco_site_id"]
     if not isinstance(site_id, int):
         raise RuntimeError(f"LiDAR '{sensor_record.name}' has no resolved MuJoCo mount-site id.")
@@ -295,7 +304,7 @@ def _render_cpu(sim: MuJoCo, sensor_record: LidarRecord) -> None:
     distances_by_env = []
     geom_ids_by_env = []
     local_np = directions_local.numpy().astype(np.float64, copy=False)
-    for env_id in range(sim.num_envs):
+    for env_id in range(sim.num_envs) if env_ids is None else env_ids.tolist():
         data = sim.backend.get_render_data(world_id=env_id)
         origin = data.site_xpos[site_id].copy()
         if sensor_record.config.mount.target_kind == "world":
@@ -316,9 +325,10 @@ def _render_cpu(sim: MuJoCo, sensor_record: LidarRecord) -> None:
         geom_ids_by_env.append(torch.from_numpy(geom_ids))
     finalize_lidar_returns(
         sensor_record,
-        pattern.directions,
+        directions,
         torch.stack(distances_by_env).to(sim.sim_device),
         geom_ids=torch.stack(geom_ids_by_env).to(sim.sim_device),
+        env_ids=env_ids,
     )
 
 
@@ -328,13 +338,14 @@ def _render_warp(
     backend: WarpBackend,
     ray_context: Any,
     sim_time: float,
+    *,
+    env_ids: torch.Tensor | None = None,
 ) -> None:
     import mujoco_warp as mjw
     import warp as wp
 
     assert sim.root_model is not None
-    pattern = sensor_record.pattern_at(sim_time)
-    directions_local = pattern.directions
+    directions_local = _scan_directions(sensor_record, sim_time, env_ids)
     ray_count = directions_local.shape[0]
     site_id = sensor_record.backend_cache["mujoco_site_id"]
     if not isinstance(site_id, int):
@@ -367,7 +378,23 @@ def _render_warp(
             workspace.graph = capture.graph
         wp.capture_launch(workspace.graph)
     consumer_stream.wait_stream(workspace.torch_stream)
-    finalize_lidar_returns(sensor_record, directions_local, workspace.distances, geom_ids=workspace.geom_ids)
+    distances, geom_ids = workspace.distances, workspace.geom_ids
+    if env_ids is not None:
+        rows = env_ids.to(distances.device)
+        distances, geom_ids = distances[rows], geom_ids[rows]
+    finalize_lidar_returns(sensor_record, directions_local, distances, geom_ids=geom_ids, env_ids=env_ids)
+
+
+def _warp_ray_context(sim: MuJoCo, backend: WarpBackend) -> Any:
+    enabled_geom_groups = sorted(
+        {
+            group
+            for sensor_record in sim.sensor_manager.lidars
+            for group, enabled in enumerate(_effective_geom_groups(sensor_record.config))
+            if enabled
+        }
+    )
+    return backend.prepare_lidar_ray_context(enabled_geom_groups or [0, 1, 2])
 
 
 def render_lidars(sim: MuJoCo) -> None:
@@ -375,21 +402,38 @@ def render_lidars(sim: MuJoCo) -> None:
     if isinstance(sim.backend, WarpBackend):
         if not due:
             return
-        enabled_geom_groups = sorted(
-            {
-                group
-                for sensor_record in sim.sensor_manager.lidars
-                for group, enabled in enumerate(_effective_geom_groups(sensor_record.config))
-                if enabled
-            }
-        )
-        ray_context = sim.backend.prepare_lidar_ray_context(enabled_geom_groups or [0, 1, 2])
+        ray_context = _warp_ray_context(sim, sim.backend)
         sim_time = sim.time()
         for sensor_record in due:
             _render_warp(sim, sensor_record, sim.backend, ray_context, sim_time)
         return
     for sensor_record in due:
         _render_cpu(sim, sensor_record)
+
+
+def rerender_sensors(sim: MuJoCo, env_ids: torch.Tensor) -> None:
+    """Re-render ``env_ids`` for every camera and LiDAR once, leaving other envs' rows unchanged.
+
+    LiDARs reuse their last scan's pattern. A LiDAR with no scan yet is captured for every env."""
+    manager = sim.sensor_manager
+    if not manager.cameras and not manager.lidars:
+        return
+    backend = sim.backend
+    if isinstance(backend, WarpBackend):
+        # The reset moved geometry since this frame's BVH refit.
+        backend.begin_sensor_render()
+    if manager.cameras:
+        backend.render_cameras(manager.cameras, env_ids)
+    if not manager.lidars:
+        return
+    ray_context = _warp_ray_context(sim, backend) if isinstance(backend, WarpBackend) else None
+    sim_time = sim.time()
+    for sensor_record in manager.lidars:
+        ids = env_ids if sensor_record.scan_directions is not None else None
+        if isinstance(backend, WarpBackend):
+            _render_warp(sim, sensor_record, backend, ray_context, sim_time, env_ids=ids)
+        else:
+            _render_cpu(sim, sensor_record, env_ids=ids)
 
 
 def create_sensors(sim: MuJoCo) -> None:

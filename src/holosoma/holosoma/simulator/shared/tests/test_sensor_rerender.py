@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -69,6 +70,7 @@ def test_simulator_rerender_with_empty_sensor_manager_is_a_no_op() -> None:
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
     sim: Any = object.__new__(BaseSimulator)
+    sim.simulator_config = SimpleNamespace(sim=SimpleNamespace(num_rerenders_on_reset=0))
     sim.sensor_manager = SensorManager("cpu", 50.0)
     sim.rerender_sensors(torch.tensor([0]))
 

@@ -51,6 +51,14 @@ class SensorRecord:
         self.buffers[output] = buffer
         self._drop_device_cache(output)
 
+    def set_frame(self, output: str, frame: torch.Tensor, env_ids: torch.Tensor | None = None) -> None:
+        """Store an every-env ``frame``, or only its ``env_ids`` rows once ``output`` has a buffer."""
+        if env_ids is None or output not in self.buffers:
+            self.set_buffer(output, frame)
+        else:
+            rows = env_ids.to(frame.device)
+            self.set_buffer_rows(output, rows, frame[rows])
+
     def _drop_device_cache(self, output: str) -> None:
         for key in [key for key in self._device_cache if key[0] == output]:
             del self._device_cache[key]
@@ -103,6 +111,8 @@ class LidarRecord(SensorRecord):
     pattern_provider: LidarPatternProvider | None = None
     backend_cache: dict[str, Any] = field(default_factory=dict)
     """Backend-owned fixed-shape query buffers and compiled work for this LiDAR."""
+    scan_directions: torch.Tensor | None = None
+    """Optical-frame ``[R, 3]`` directions of the scan held in :attr:`buffers`; re-renders reuse them."""
 
     @property
     def pattern_shape(self) -> tuple[int, int]:

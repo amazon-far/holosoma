@@ -630,7 +630,7 @@ class WarpBackend(IMujocoBackend):
         self._torch_render_stream = None
         self._cam_ids.clear()
 
-    def render_cameras(self, cameras: list[CameraRecord]) -> None:
+    def render_cameras(self, cameras: list[CameraRecord], env_ids: torch.Tensor | None = None) -> None:
         assert self._torch_render_stream is not None
         consumer_stream = torch.cuda.current_stream(self.device)
         with wp.ScopedDevice(self.mjw_device):
@@ -677,7 +677,7 @@ class WarpBackend(IMujocoBackend):
                     if "rgb" in cam.config.data_types:
                         mjw.get_rgb(self._render_context, cam_id, self._render_rgb_out[cam_id])
                         rgb_f = wp.to_torch(self._render_rgb_out[cam_id])  # [N,H,W,3] float32 in [0,1]
-                        cam.set_buffer("rgb", (rgb_f.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8))
+                        cam.set_frame("rgb", (rgb_f.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8), env_ids)
                     if "depth" in cam.config.data_types:
                         # mjw.get_depth writes clamp(val/depth_scale, 0, 1): a normalized [0,1] image,
                         # NOT meters. Pass depth_scale=depth_far so [0,far]->[0,1], then multiply back by
@@ -686,7 +686,7 @@ class WarpBackend(IMujocoBackend):
                         mjw.get_depth(self._render_context, cam_id, self._depth_far, self._render_depth_out[cam_id])
                         dep = wp.to_torch(self._render_depth_out[cam_id]) * self._depth_far  # [N,H,W] meters
                         dep = torch.where(dep <= 0, float("inf"), dep)
-                        cam.set_buffer("depth", dep.unsqueeze(-1))  # [N,H,W,1]
+                        cam.set_frame("depth", dep.unsqueeze(-1), env_ids)  # [N,H,W,1]
         consumer_stream.wait_stream(self._torch_render_stream)
 
     def get_ctrl_tensor(self) -> torch.Tensor:

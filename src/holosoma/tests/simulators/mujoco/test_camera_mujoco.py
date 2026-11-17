@@ -28,6 +28,7 @@ _ACTOR_HARNESS = Path(__file__).resolve().parents[1] / "camera_actor_mount_asser
 _WORLD_HARNESS = Path(__file__).resolve().parents[1] / "world_camera_assert.py"
 _ORIENT_HARNESS = Path(__file__).resolve().parents[1] / "camera_orientation_assert.py"
 _OBS_HARNESS = Path(__file__).resolve().parents[1] / "camera_obs_assert.py"
+_RERENDER_HARNESS = Path(__file__).resolve().parents[1] / "sensor_rerender_assert.py"
 _PROJECTION_HARNESS = Path(__file__).resolve().parents[1] / "camera_projection_assert.py"
 
 
@@ -377,5 +378,37 @@ def test_camera_follow_multi_env_warp(tmp_path):
         str(result_file),
         label="mjwarp/camera-follow (num_envs=4)",
         timeout=500,
+        result_file=result_file,
+    )
+
+
+@pytest.mark.mujoco_classic
+def test_sensor_rerender_on_reset_classic(tmp_path):
+    # Depth camera and LiDAR re-render the reset env, and only with num_rerenders_on_reset > 0.
+    result_file = tmp_path / "rerender_mujoco.txt"
+    run_harness(
+        _RERENDER_HARNESS,
+        "--simulator",
+        "mujoco",
+        "--result-file",
+        str(result_file),
+        label="mujoco/sensor-rerender-on-reset",
+        timeout=300,
+        result_file=result_file,
+    )
+
+
+@pytest.mark.mujoco_warp
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="MuJoCo-Warp requires a CUDA device")
+def test_sensor_rerender_on_reset_warp(tmp_path):
+    result_file = tmp_path / "rerender_mjwarp.txt"
+    run_harness(
+        _RERENDER_HARNESS,
+        "--simulator",
+        "mjwarp",
+        "--result-file",
+        str(result_file),
+        label="mjwarp/sensor-rerender-on-reset",
+        timeout=400,
         result_file=result_file,
     )

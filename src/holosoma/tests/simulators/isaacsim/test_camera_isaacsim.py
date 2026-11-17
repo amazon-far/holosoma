@@ -33,6 +33,7 @@ _ACTOR_HARNESS = Path(__file__).resolve().parents[1] / "camera_actor_mount_asser
 _WORLD_HARNESS = Path(__file__).resolve().parents[1] / "world_camera_assert.py"
 _ORIENT_HARNESS = Path(__file__).resolve().parents[1] / "camera_orientation_assert.py"
 _OBS_HARNESS = Path(__file__).resolve().parents[1] / "camera_obs_assert.py"
+_RERENDER_HARNESS = Path(__file__).resolve().parents[1] / "sensor_rerender_assert.py"
 _PROJECTION_HARNESS = Path(__file__).resolve().parents[1] / "camera_projection_assert.py"
 _RAYCAST_HARNESS = Path(__file__).resolve().parents[1] / "raycast_camera_assert.py"
 _MOUNT_FABRIC_HARNESS = Path(__file__).resolve().parents[1] / "camera_mount_fabric_assert.py"
@@ -205,6 +206,21 @@ def test_camera_obs_pipeline(tmp_path):
         "--result-file",
         str(result_file),
         label="isaacsim/camera-obs-pipeline",
+        timeout=700,
+        result_file=result_file,
+    )
+
+
+def test_sensor_rerender_on_reset(tmp_path):
+    # RTX depth camera and LiDAR re-render only the reset envs, and only with num_rerenders_on_reset > 0.
+    result_file = tmp_path / "rerender_isaacsim.txt"
+    run_harness(
+        _RERENDER_HARNESS,
+        "--simulator",
+        "isaacsim",
+        "--result-file",
+        str(result_file),
+        label="isaacsim/sensor-rerender-on-reset",
         timeout=700,
         result_file=result_file,
     )
