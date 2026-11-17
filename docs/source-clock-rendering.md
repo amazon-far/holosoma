@@ -73,7 +73,7 @@ python -m holosoma.cosim.render --endpoint ipc:///tmp/$USER/cosim.sock \
 
 python -m holosoma.run_sim \
   simulator:mjwarp robot:g1-29dof terrain:terrain-locomotion-mix --training.num-envs 4 \
-  sensor.overview:overview --sensor.overview.remote True \
+  sensor.overview:overview --sensor.overview.remote cosim \
   plugin.cosim:cosim-render --plugin.cosim.endpoint ipc:///tmp/$USER/cosim.sock
 ```
 
@@ -173,18 +173,19 @@ native-to-unified SimState refresh and the native writes on the receiver remain.
 
 ## Observation loopback
 
-A source camera with `remote=True` takes its images from the receiver, so
+A source camera with `remote` set to a `cosim-render` plugin's slot takes its images from
+that plugin's receiver, so
 `get_camera_data()`, observation terms and camera plugins on the source read the
-receiver's frames unchanged. Local and remote cameras can mix on one source;
-LiDARs stay local.
+receiver's frames unchanged. Local and remote cameras can mix on one source, and each
+`cosim-render` plugin fills only the cameras that name its slot; LiDARs stay local.
 
 ```python
 from dataclasses import replace
 
-source_cameras = {name: replace(camera, remote=True) for name, camera in cameras.items()}
+source_cameras = {name: replace(camera, remote="cosim") for name, camera in cameras.items()}
 ```
 
-The receiver keeps the same cameras with `remote=False`. Backends create no
+The receiver keeps the same cameras without `remote`. Backends create no
 native renderer or runtime mount-pose writer for a remote camera, so
 `set_mount_pose()` raises for it. Sensor rendering is two FRAME_END hooks:
 `simulator.sensor_capture_hook` renders the due local cameras, and
@@ -211,7 +212,7 @@ renders every environment, and the source takes only the reset rows (the whole
 image if a camera has none yet). A plugin that writes state at `EPISODE_START`
 orders itself before this re-render with
 `before=HookRef(<cosim slot>, CosimRenderHook.RERENDER)`, using
-`holosoma.cosim.render.source.CosimRenderHook`. State
+`holosoma.cosim.render.plugin.CosimRenderHook`. State
 changes that start no episode, such as a motion-tracking command teleporting an
 environment to a new clip, are not re-rendered: remote cameras keep their frame
 from before the change for that step.

@@ -35,7 +35,7 @@ def config(num_envs: int, loopback: bool = False, *, endpoint: str | None = None
     cameras: dict[str, Any] = {"overview": camera}
     if loopback:
         camera = replace(camera, data_types=["rgb", "depth"])
-        cameras = {"overview": camera, "loopback": replace(camera, remote=endpoint is not None)}
+        cameras = {"overview": camera, "loopback": replace(camera, remote=None if endpoint is None else "cosim")}
     plugins: dict[str, PluginConfig] = {} if endpoint is None else {"cosim": CosimRenderPluginConfig(endpoint=endpoint)}
     run = replace(run, training=replace(run.training, num_envs=num_envs, headless=True), sensor=cameras, plugin=plugins)
     set_simulator_type(run.simulator)

@@ -1061,12 +1061,12 @@ class BaseSimulator:
     def _sensors_rendered(self) -> None:
         """Check that every due remote camera has been given a frame."""
         due = self.sensor_manager.last_due
-        if unserved := [
-            record.name
+        if unserved := {
+            record.name: record.config.remote
             for record in self.sensor_manager.cameras
             if record.config.remote and record.name in due and not record.buffers
-        ]:
-            raise RuntimeError(f"Remote cameras {unserved} are due but nothing filled their buffers")
+        }:
+            raise RuntimeError(f"Remote cameras are due but their plugins did not fill them: {unserved}")
 
     def rerender_sensors(self, env_ids: torch.Tensor) -> None:
         """Re-render ``env_ids`` for sensors that support partial rendering; other sensors keep their frame.

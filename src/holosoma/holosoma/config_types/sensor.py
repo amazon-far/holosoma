@@ -604,10 +604,10 @@ class CameraSensorConfig:
     mujoco: MujocoCameraConfig = field(default_factory=MujocoCameraConfig)
     """MuJoCo camera settings. Unset fields retain native defaults."""
 
-    remote: bool = False
-    """Take this camera's images from a co-simulation renderer instead of rendering locally. The backend
-    creates no renderer for it, and it has no runtime mount-pose writer. Requires a remote renderer such
-    as ``holosoma.cosim.render.source.CosimRenderPlugin``."""
+    remote: str | None = None
+    """Plugin slot (the ``<key>`` in ``plugin.<key>:<preset>``) that supplies this camera's images instead of
+    rendering it locally, such as a ``cosim-render`` plugin. The backend creates no renderer for a remote camera,
+    and it has no runtime mount-pose writer."""
 
     @model_validator(mode="after")
     def validate_camera(self) -> CameraSensorConfig:

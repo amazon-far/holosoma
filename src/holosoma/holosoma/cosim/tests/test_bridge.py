@@ -20,8 +20,8 @@ from holosoma.cosim import bridge
 from holosoma.cosim import cuda as cosim_cuda
 from holosoma.cosim.base import BufferHandler
 from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, share
+from holosoma.cosim.render.plugin import CosimRenderPlugin, camera_requests
 from holosoma.cosim.render.renderer import RenderHandler, RenderTask
-from holosoma.cosim.render.source import CosimRenderPlugin, camera_requests
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.sensor_manager import SensorManager
 
@@ -34,7 +34,7 @@ def test_invalid_frame_is_rejected(frame: tuple[int, float]) -> None:
         bridge.Frame(*frame)
 
 
-def _camera(manager: SensorManager, name: str, *, remote: bool, data_types: list[Any]) -> Any:
+def _camera(manager: SensorManager, name: str, *, remote: str | None, data_types: list[Any]) -> Any:
     mount = SensorMountConfig(target_kind="world", target="")
     config = CameraSensorConfig(mount=mount, width=4, height=3, data_types=data_types, remote=remote)
     return manager.register_camera(name, config)
@@ -178,7 +178,7 @@ def test_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture, mismatc
 )
 def test_remote_camera_mismatch_fails_before_mapping(receiver: ReceiverFixture, change: dict[str, Any]) -> None:
     worker, calls, replies, messages = receiver
-    record = _camera(cast("Any", worker.handler).simulator.sensor_manager, "cam", remote=False, data_types=["rgb"])
+    record = _camera(cast("Any", worker.handler).simulator.sensor_manager, "cam", remote=None, data_types=["rgb"])
     (request,) = camera_requests(record, 1)
     if "meta" in change:
         change = {"meta": {**request.meta, **change["meta"]}}
@@ -194,7 +194,7 @@ def test_receiver_exports_its_images_after_each_render(
 ) -> None:
     worker, calls, replies, messages = receiver
     record = _camera(
-        cast("Any", worker.handler).simulator.sensor_manager, "cam", remote=False, data_types=["rgb", "depth"]
+        cast("Any", worker.handler).simulator.sensor_manager, "cam", remote=None, data_types=["rgb", "depth"]
     )
     messages[0]["requests"] = [bridge.as_received(asdict(request)) for request in camera_requests(record, 1)]
     messages.insert(2, {"type": "FRAME_AVAILABLE", "frame": {"sequence": 2, "sim_time": 0.035}})
@@ -348,8 +348,9 @@ PluginFixture = tuple[CosimRenderPlugin, SensorManager, dict[str, torch.Tensor],
 @pytest.fixture
 def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     manager = SensorManager("cpu", 50.0, num_envs=2)
-    _camera(manager, "local", remote=False, data_types=["rgb"])
-    _camera(manager, "cam", remote=True, data_types=["rgb", "depth"])
+    _camera(manager, "local", remote=None, data_types=["rgb"])
+    _camera(manager, "cam", remote="cosim", data_types=["rgb", "depth"])
+    _camera(manager, "elsewhere", remote="other", data_types=["rgb"])  # another plugin's camera
     images = {"cam/rgb": torch.ones(2, 3, 4, 3, dtype=torch.uint8), "cam/depth": torch.ones(2, 3, 4, 1)}
     calls: list[Any] = []
     replies: dict[str, dict[str, Any]] = {

@@ -243,7 +243,7 @@ def test_sensor_names_must_be_unique_across_types() -> None:
 
 def test_a_due_remote_camera_without_a_renderer_fails_at_the_sensor_render_hook() -> None:
     manager = SensorManager("cpu", 50.0, num_envs=1)
-    manager.register_camera("cam", dataclasses.replace(_cam(), remote=True))
+    manager.register_camera("cam", dataclasses.replace(_cam(), remote="cosim"))
     manager.collect_due()
-    with pytest.raises(RuntimeError, match=r"Remote cameras \['cam'\] are due but nothing filled their buffers"):
+    with pytest.raises(RuntimeError, match=r"did not fill them: \{'cam': 'cosim'\}"):
         BaseSimulator._sensors_rendered(cast("Any", SimpleNamespace(sensor_manager=manager)))

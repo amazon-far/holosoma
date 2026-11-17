@@ -82,7 +82,8 @@ class CosimRenderPlugin(CosimPlugin):
         manager = simulator.sensor_manager
         if not manager.cameras:
             raise ValueError("The source publishes when its cameras are due; configure at least one camera")
-        self.remote = [record for record in manager.cameras if record.config.remote]
+        slot = simulator.hooks.installing_slot
+        self.remote = [record for record in manager.cameras if slot is not None and record.config.remote == slot]
         super().__init__(cfg, simulator)
 
     def requests(self) -> list[BufferRequest]:

@@ -22,7 +22,7 @@ from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.cosim.base import BufferHandler
 from holosoma.cosim.bridge import BufferRequest, Frame, Receiver
 from holosoma.cosim.cuda import BufferSpec
-from holosoma.cosim.render.source import camera_requests, scene_layout
+from holosoma.cosim.render.plugin import camera_requests, scene_layout
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.envs.simulation_task import simulation_env_origins
 from holosoma.simulator.base_simulator.hooks import Phase

@@ -113,7 +113,7 @@ class CosimRenderPluginConfig(CosimPluginConfig):
     """
 
     def get_cls(self) -> Callable[..., Any]:
-        from holosoma.cosim.render.source import CosimRenderPlugin
+        from holosoma.cosim.render.plugin import CosimRenderPlugin
 
         return CosimRenderPlugin
 
