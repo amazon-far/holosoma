@@ -245,5 +245,5 @@ def test_a_due_remote_camera_without_a_renderer_fails_at_the_sensor_render_hook(
     manager = SensorManager("cpu", 50.0, num_envs=1)
     manager.register_camera("cam", dataclasses.replace(_cam(), remote=True))
     manager.collect_due()
-    with pytest.raises(RuntimeError, match=r"Remote cameras \['cam'\] have no co-simulation renderer"):
+    with pytest.raises(RuntimeError, match=r"Remote cameras \['cam'\] are due but nothing filled their buffers"):
         BaseSimulator._sensors_rendered(cast("Any", SimpleNamespace(sensor_manager=manager)))

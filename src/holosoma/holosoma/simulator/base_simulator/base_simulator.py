@@ -1066,7 +1066,7 @@ class BaseSimulator:
             for record in self.sensor_manager.cameras
             if record.config.remote and record.name in due and not record.buffers
         ]:
-            raise RuntimeError(f"Remote cameras {unserved} have no co-simulation renderer")
+            raise RuntimeError(f"Remote cameras {unserved} are due but nothing filled their buffers")
 
     def rerender_sensors(self, env_ids: torch.Tensor) -> None:
         """Re-render ``env_ids`` for sensors that support partial rendering; other sensors keep their frame.
