@@ -49,7 +49,7 @@ class NativePolicy:
     """
 
     def __init__(self, config: InferenceConfig, *, backend="cpu", autostart=True):
-        """``backend`` is "cpu", "cuda" or "tensorrt"; a build without it raises rather than falls back."""
+        """``backend`` is "cpu", "cuda", "tensorrt" or "executorch"; a build without it raises, never falls back."""
         from holosoma_inference import _native
 
         self.config = config

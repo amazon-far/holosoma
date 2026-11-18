@@ -144,6 +144,12 @@ bool backend_available(Backend backend) {
 #else
       return false;
 #endif
+    case Backend::kExecuTorch:
+#ifdef HOLOSOMA_WITH_EXECUTORCH
+      return true;
+#else
+      return false;
+#endif
     case Backend::kCuda: {
       const auto providers = Ort::GetAvailableProviders();
       return std::find(providers.begin(), providers.end(), "CUDAExecutionProvider") != providers.end();
@@ -174,6 +180,11 @@ OnnxModel::OnnxModel(const std::string& path, Backend backend, int intra_op_thre
     signature = read_onnx_signature(path);
     if (!profile_prefix.empty()) throw std::runtime_error("ONNX Runtime profiling needs the cpu or cuda backend");
     backend_ = make_tensorrt_backend(path, signature);
+#endif
+  } else if (backend == Backend::kExecuTorch) {
+#ifdef HOLOSOMA_WITH_EXECUTORCH
+    if (!profile_prefix.empty()) throw std::runtime_error("ONNX Runtime profiling needs the cpu or cuda backend");
+    backend_ = make_executorch_backend(path, signature);
 #endif
   } else {
     backend_ = std::make_unique<OrtBackend>(path, backend, intra_op_threads, profile_prefix, signature);

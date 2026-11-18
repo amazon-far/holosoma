@@ -29,6 +29,53 @@ Use `-DONNXRUNTIME_ROOT=/path/to/onnxruntime` for a local ONNX Runtime and
 `-DHOLOSOMA_FETCH_DEPENDENCIES=OFF` to forbid downloads. On macOS only the core library and the
 tests build (Unitree SDK2 ships Linux binaries only).
 
+### ExecuTorch backend (optional)
+
+`--runtime.backend executorch` runs `.pte` programs written by
+`holosoma.utils.inference_helpers.export_policy_as_pte`. A `.pte` carries the input and output names and the
+metadata (gains, joint names), so no `.onnx` is needed beside it. Export with `backend="xnnpack"` for the CPU,
+or `backend="tensorrt"`, where TensorRT runs what it supports and ExecuTorch's CUDA backend runs the rest (that
+part needs a CUDA toolkit at export, and its weights go to a `.ptd` file that must stay beside the `.pte`). Like a
+TensorRT engine, a TensorRT program only runs on the GPU model and TensorRT version it was exported with. A `.pte`
+can carry compiled GPU code that is loaded at run time, so only load programs from a source you trust.
+
+The backend applies to every model the process loads, so export the preset's secondary policy as well and pass
+it with `--secondary.task.model-path` (`--secondary none` also works, but turns off that safety policy). The
+exporter writes one `actor_obs` input and one `action` output, like `export_policy_as_onnx`, so it covers those
+policies and not the whole-body tracking exports. Inference runs on one thread.
+
+ExecuTorch needs numpy 2 and torch 2.15, and `holosoma` pins numpy below 2, so export in a separate environment.
+There, install `holosoma` without its dependencies plus what its imports need, and load the training
+checkpoint. Export the same module the agent gives `export_policy_as_onnx` (its `actor_onnx_wrapper`, which
+includes the observation normalizer), copy the metadata from the `.onnx` the training run wrote, and check that
+both files give the same actions before deploying:
+
+```bash
+# from the repository root
+pip install "torch_tensorrt[executorch]"  # `executorch` alone is enough for XNNPACK
+pip install --no-deps -e src/holosoma
+pip install onnx onnxruntime loguru pydantic "tyro>=1.0.0" easydict termcolor tensordict tensorboard trimesh
+```
+
+```python
+metadata = {p.key: json.loads(p.value) for p in onnx.load("policy.onnx").metadata_props}
+export_policy_as_pte(algo.actor_onnx_wrapper.eval(), "policy.pte", {"actor_obs": torch.zeros(1, obs_dim)}, metadata)
+```
+
+The C++ package ships in the wheels (CMake 3.28+). Build in that environment, from this directory, so the test
+fixtures can be exported too. The installed library keeps run paths into that environment:
+
+```bash
+SITE=$(python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])")
+cmake -S . -B build -DPython_EXECUTABLE="$(which python)" \
+    -DCMAKE_PREFIX_PATH="$SITE/executorch;$SITE/torch_tensorrt_executorch_runtime"
+```
+
+TensorRT `.pte` programs need ExecuTorch's TensorRT delegate, which is not linked when the TensorRT backend is
+also enabled (two TensorRT libraries in one process clash). On a host with a system TensorRT, add
+`-DHOLOSOMA_WITH_TENSORRT=OFF` to run them. With both backends and a TensorRT SDK outside the system library
+path, put its `lib` directory on `LD_LIBRARY_PATH`, as NVIDIA's tar install asks.
+
 ## Run
 
 The binary takes the Python presets and flags (`inference:<preset>`, `--task.*`, `--robot.*`,
