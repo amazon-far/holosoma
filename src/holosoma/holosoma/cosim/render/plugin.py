@@ -10,15 +10,11 @@ plugin by subclassing :class:`holosoma.cosim.base.PeerHandler`; :mod:`.renderer`
   ``_rigid_body_pos`` and ``_rigid_body_rot`` are each body's world position and xyzw orientation;
   ``mount_pose/<sensor>`` ``[E, 7]`` is a sensor's current offset from its mount, XYZ + XYZW. A renderer
   must apply it for remote cameras to follow ``set_mount_pose()``; the head warns once if one moves unread.
-- ``meta["sensors"]`` (:func:`sensor_settings`): per remote camera, ``vertical_fov`` in degrees, ``near`` and
-  ``far`` in meters, ``depth_clipping_behavior``, and ``mount`` (a ``SensorMountConfig``): ``target_kind``
-  ``robot_link``, ``actor`` or ``world``; ``target``, a ``body_names`` or ``object_names`` entry; and
-  ``position`` and ``orientation`` ``[w, x, y, z]`` in the target's frame, or the environment's for ``world``.
-  Identity looks along ``-Z`` with ``+Y`` up. The renderer replies with the settings it applies, which must
-  match.
 - Requests (:func:`output_fields`): the remote cameras' SimState output fields, ``camera/<name>/rgb``
   ``uint8 [E, H, W, 3]`` and ``camera/<name>/depth`` ``float32 [E, H, W, 1]``, metric distance to the image
-  plane with the camera's ``depth_clipping_behavior`` applied.
+  plane with the camera's ``depth_clipping_behavior`` applied. Each camera's settings (field of view, near/far,
+  clipping, mount target) are its config's on both sides; the renderer writes the frames the head's cameras
+  would, from the state it receives.
 
 The remote cameras' outputs on the head are linked onto the exports, read in place until the next exchange;
 exports are final, since both sides' settings (clipping included) match. Head consumers that read them on
@@ -27,8 +23,7 @@ another CUDA stream synchronise before the next exchange.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import asdict
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -57,21 +52,6 @@ def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
         }
     )
     return layout
-
-
-def sensor_settings(record: CameraRecord) -> dict[str, Any]:
-    """The settings of camera ``record`` a renderer must match beyond its output fields: optics, clipping, mount."""
-    config = record.config
-    settings: dict[str, Any] = as_received(
-        {
-            "vertical_fov": config.vertical_fov,
-            "near": config.near,
-            "far": config.far,
-            "depth_clipping_behavior": config.depth_clipping_behavior,
-            "mount": asdict(config.mount),
-        }
-    )
-    return settings
 
 
 def output_fields(record: CameraRecord) -> list[FieldSpec]:
@@ -114,14 +94,7 @@ class CosimRenderPlugin(HeadPlugin):
         return [spec for record in self.remote for spec in output_fields(record)]
 
     def meta(self) -> dict[str, Any]:
-        return {**scene_layout(self.simulator), "sensors": self._sensors()}
-
-    def accept(self, meta: Mapping[str, Any]) -> None:
-        if meta.get("sensors") != (sent := self._sensors()):
-            raise ValueError(f"The renderer applies sensor settings {meta.get('sensors')}, the head sent {sent}")
-
-    def _sensors(self) -> dict[str, Any]:
-        return {record.name: sensor_settings(record) for record in self.remote}
+        return scene_layout(self.simulator)
 
     def install(self, hooks: HookRegistry) -> Iterable[HookHandle]:
         yield hooks.add(

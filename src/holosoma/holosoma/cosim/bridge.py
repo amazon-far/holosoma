@@ -5,8 +5,8 @@ exports stay in shared CUDA allocations, ordered by interprocess ready and done 
 
 - ``OPEN_REQUEST`` -> ``OPEN_REPLY``: the head sends its shared ``state``, the ``requests`` (fields it wants
   the peer to own), ``meta``, ready event, GPU UUID and PID. The peer's handler accepts ``meta``, picks the
-  state fields it reads and allocates one export per request; the reply carries the reads, the exports, the
-  peer's own ``meta`` (which the head accepts in turn) and its done event.
+  state fields it reads and allocates one export per request; the reply carries the reads, the exports and
+  its done event.
 - ``EXCHANGE_REQUEST`` -> ``EXCHANGE_REPLY``: one per :meth:`HeadBridge.publish`, with a :class:`Snapshot`
   numbered consecutively. Each hands over every shared buffer: the side receiving it bumps the versions
   of everything it maps, as if each were written locally.
@@ -200,7 +200,6 @@ class HeadBridge:
             requested = {request.name: (request.shape, request.dtype) for request in requests}
             if images != requested:
                 raise RuntimeError(f"Peer exported {images}, requested {requested}")
-            self.peer_meta: dict[str, Any] = reply["meta"]
             self._imports = MappedBuffers(specs, device=simulator.sim_device)
             # Requested SimState outputs are served from the peer's memory directly.
             outputs = set(simulator.state.output_names())
@@ -294,9 +293,6 @@ class PeerHandlerProtocol(Protocol):
     ) -> tuple[str, ...]:
         """Accept the head, allocate :attr:`allocations` and return the state fields to read; raise to refuse."""
 
-    def meta(self) -> Mapping[str, Any]:
-        """JSON metadata sent back to the head, once :meth:`open` returns."""
-
     def link(self, imports: Mapping[str, torch.Tensor]) -> Mapping[str, torch.Tensor]:
         """Link tensors of the handler's own onto the mapped head fields ``imports``; they then serve as ``state``."""
 
@@ -368,7 +364,6 @@ class PeerBridge:
                                     for name, allocation in self.handler.allocations.items()
                                 ],
                                 "reads": list(reads),
-                                "meta": as_received(dict(self.handler.meta())),
                             }
                         )
                     elif command == MessageType.EXCHANGE_REQUEST and mapped is not None:

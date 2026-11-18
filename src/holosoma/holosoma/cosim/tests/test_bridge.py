@@ -20,7 +20,7 @@ from holosoma.cosim import bridge
 from holosoma.cosim import cuda as cosim_cuda
 from holosoma.cosim.base import PeerHandler
 from holosoma.cosim.cuda import BufferSpec, SharedStateAllocator
-from holosoma.cosim.render.plugin import CosimRenderPlugin, output_fields, sensor_settings
+from holosoma.cosim.render.plugin import CosimRenderPlugin, output_fields
 from holosoma.cosim.render.renderer import RenderHandler, RenderTask
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.sensor_manager import SensorManager
@@ -159,7 +159,7 @@ def test_peer_frame_lifecycle(peer: PeerFixture) -> None:
     assert cast("Any", worker.handler).simulator.kinematic_time == 0.035
     assert _in_order(calls, "capture", "readonly", "done", "readonly", ("unlink", []), "unmap", "close")
     assert replies == [
-        {"type": "OPEN_REPLY", "done_handle": "01", "exports": [], "reads": [], "meta": {"sensors": {}}},
+        {"type": "OPEN_REPLY", "done_handle": "01", "exports": [], "reads": []},
         {"type": "EXCHANGE_REPLY", "sequence": 1},
         {"type": "CLOSE_REPLY"},
     ]
@@ -181,26 +181,13 @@ def test_layout_mismatch_fails_before_mapping(peer: PeerFixture, mismatch: str) 
 
 @pytest.mark.parametrize(
     "change",
-    [
-        {"name": "camera/missing/rgb"},
-        {"name": "camera/cam/depth"},
-        {"shape": (1, 3, 8, 3)},
-        {"dtype": "float32"},
-        {"vertical_fov": 90.0},
-        {"camera": "missing"},
-    ],
+    [{"name": "camera/missing/rgb"}, {"name": "camera/cam/depth"}, {"shape": (1, 3, 8, 3)}, {"dtype": "float32"}],
 )
 def test_remote_camera_mismatch_fails_before_mapping(peer: PeerFixture, change: dict[str, Any]) -> None:
     worker, calls, replies, messages = peer
     record = _camera(cast("Any", worker.handler).simulator.sensor_manager, "cam", remote=None, data_types=["rgb"])
     (request,) = output_fields(record)
-    settings = sensor_settings(record)
-    if "vertical_fov" in change:
-        settings = {**settings, **change}
-    sensors = {change.get("camera", "cam"): settings}
-    fields = {key: value for key, value in change.items() if key in ("name", "shape", "dtype")}
-    messages[0]["meta"]["sensors"] = sensors
-    messages[0]["requests"] = [bridge.as_received(asdict(replace(request, **fields)))]
+    messages[0]["requests"] = [bridge.as_received(asdict(replace(request, **change)))]
     with pytest.raises(ValueError, match="differs|has no"):
         worker.run()
     assert "map" not in calls
@@ -375,7 +362,6 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
                 for name, image in images.items()
             ],
             "reads": ["dof_pos"],
-            "meta": {"sensors": {"cam": sensor_settings(manager.get("cam"))}},
         },
         "CLOSE_REQUEST": {"type": "CLOSE_REPLY"},
     }

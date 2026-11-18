@@ -47,11 +47,6 @@ class HeadPlugin:
             requests=self.requests(),
             meta=self.meta(),
         )
-        try:
-            self.accept(self.bridge.peer_meta)
-        except BaseException:
-            self.bridge.close()
-            raise
         self._hooks = list(self.install(simulator.hooks))
         simulator.hooks.add(Phase.CLOSE, self.close, name=f"{self.name}.close")
 
@@ -62,9 +57,6 @@ class HeadPlugin:
     def meta(self) -> dict[str, Any]:
         """JSON metadata sent to the peer at the handshake."""
         return {}
-
-    def accept(self, meta: Mapping[str, Any]) -> None:
-        """Check the peer's handshake metadata; raise to refuse it."""
 
     def install(self, hooks: HookRegistry) -> Iterable[HookHandle]:
         """Register the hooks that publish; they are removed on close."""
@@ -125,10 +117,6 @@ class PeerHandler:
 
     def accept(self, meta: Mapping[str, Any]) -> None:
         """Check the head's handshake metadata; raise to refuse it."""
-
-    def meta(self) -> Mapping[str, Any]:
-        """JSON metadata sent back to the head once the handshake is accepted."""
-        return {}
 
     def reads(self, state: Mapping[str, BufferSpec]) -> tuple[str, ...]:
         """The head's shared state fields to map and receive each exchange."""

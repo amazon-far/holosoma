@@ -29,7 +29,7 @@ from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.cosim.base import PeerHandler
 from holosoma.cosim.bridge import PeerBridge, Snapshot
 from holosoma.cosim.cuda import BufferSpec, FieldSpec
-from holosoma.cosim.render.plugin import scene_layout, sensor_settings
+from holosoma.cosim.render.plugin import scene_layout
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.envs.simulation_task import simulation_env_origins
 from holosoma.simulator.base_simulator.hooks import Phase
@@ -106,7 +106,6 @@ class RenderHandler(PeerHandler):
         self.task = task
         self.simulator = task.simulator
         self._linked: tuple[str, ...] = ()
-        self._sensors: dict[str, Any] = {}
 
     def accept(self, meta: Mapping[str, Any]) -> None:
         """Adopt the head's origins and reject a different joint or object order; body state is not applied."""
@@ -115,16 +114,6 @@ class RenderHandler(PeerHandler):
         own = scene_layout(self.simulator)
         if differing := [key for key in ("dof_names", "object_names", "env_origins") if meta.get(key) != own[key]]:
             raise ValueError(f"Scene {differing} differs between simulators")
-        manager = self.simulator.sensor_manager
-        for name, settings in meta.get("sensors", {}).items():
-            if not manager.has_camera(name):
-                raise ValueError(f"Peer has no camera {name!r} for the head's remote camera")
-            if (applied := sensor_settings(manager.get(name))) != settings:
-                raise ValueError(f"Camera {name!r} differs between simulators: head {settings}, peer {applied}")
-            self._sensors[name] = applied
-
-    def meta(self) -> Mapping[str, Any]:
-        return {"sensors": self._sensors}
 
     def reads(self, state: Mapping[str, BufferSpec]) -> tuple[str, ...]:
         own_state = self.simulator.state

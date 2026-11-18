@@ -34,8 +34,8 @@ python -m holosoma.run_sim \
 Each time a camera is due, the head publishes after its local cameras render. The renderer applies the
 state and renders its cameras straight into shared memory; the head's remote cameras read those images in
 place (`camera/<name>/<rgb|depth>`), filled before `simulator.sensor_render_hook`, so observation terms and
-camera plugins read them unchanged. The renderer checks the cameras' settings against its own at the
-handshake. It exits when the head closes, including on Ctrl+C.
+camera plugins read them unchanged. Each camera renders with its own config on each side, so configure
+them the same. The renderer exits when the head closes, including on Ctrl+C.
 
 - Local and remote cameras mix on one head.
 - `set_mount_pose()` works on a remote camera: the pose travels with the state, as `mount_pose/<camera>`.
@@ -56,11 +56,8 @@ from holosoma.cosim.bridge import PeerBridge
 
 
 class EngineRenderer(PeerHandler):
-    def accept(self, meta):  # joint, body and object order; environment origins; meta["sensors"]
-        self.sensors = self.engine.load_layout(meta)
-
-    def meta(self):  # the camera settings the engine applies; the head checks them
-        return {"sensors": self.sensors}
+    def accept(self, meta):  # joint, body and object order; environment origins
+        self.engine.load_layout(meta)
 
     def reads(self, state):  # head state fields to receive each exchange
         return ("_rigid_body_pos", "_rigid_body_rot", "object_root_states")
