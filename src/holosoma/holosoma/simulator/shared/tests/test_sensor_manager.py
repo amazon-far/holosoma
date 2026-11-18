@@ -147,6 +147,8 @@ def test_camera_depth_uses_the_shared_range_clipping_policy(
         CameraSensorConfig(
             mount=_MOUNT,
             data_types=["depth"],
+            width=6,
+            height=1,
             near=0.2,
             far=4.0,
             depth_clipping_behavior=behavior,

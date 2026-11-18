@@ -421,7 +421,7 @@ def test_remote_due_cameras_get_copies_of_the_peer_images(plugin: PluginFixture)
     hooks = head.simulator.hooks
     remote = manager.get("cam")
     seen: list[set[str]] = []
-    hooks.add(Phase.FRAME_END, lambda: seen.append(set(remote.buffers)), after=head.simulator.sensor_render_hook)
+    hooks.add(Phase.FRAME_END, lambda: seen.append(set(remote.written)), after=head.simulator.sensor_render_hook)
     hooks.emit(Phase.FRAME_END)
     assert calls[1:4] == ["readonly", calls[2], "record_exchange"]
     assert calls[2][0] == "EXCHANGE_REQUEST" and calls[2][1]["snapshot"]["phase"] == "frame_end"
@@ -432,7 +432,7 @@ def test_remote_due_cameras_get_copies_of_the_peer_images(plugin: PluginFixture)
             torch.equal(buffer, images[f"cam/{data_type}"])
             and buffer.data_ptr() != images[f"cam/{data_type}"].data_ptr()
         )
-    assert not manager.get("local").buffers and not manager.get("elsewhere").buffers
+    assert not manager.get("local").written and not manager.get("elsewhere").written
 
     head.close()
     assert calls[-2:] == ["unmap", ("CLOSE_REQUEST", {})]

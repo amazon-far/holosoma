@@ -256,7 +256,10 @@ class BaseSimulator:
         # The registry stays available even without sensors; native resources are created at setup.
         sim_cfg = self.simulator_config.sim
         self.sensor_manager = SensorManager(
-            device, sim_cfg.fps / sim_cfg.control_decimation_steps, num_envs=self.training_config.num_envs
+            device,
+            sim_cfg.fps / sim_cfg.control_decimation_steps,
+            num_envs=self.training_config.num_envs,
+            state=self.state,
         )
 
         # To be overridden by subclasses
@@ -1073,7 +1076,7 @@ class BaseSimulator:
         if unserved := {
             record.name: record.config.remote
             for record in self.sensor_manager.cameras
-            if record.config.remote and record.name in due and not record.buffers
+            if record.config.remote and record.name in due and not record.written
         }:
             raise RuntimeError(f"Remote cameras are due but their plugins did not fill them: {unserved}")
 
@@ -1115,11 +1118,11 @@ class BaseSimulator:
             Absolute environment indices into ``[0, num_envs)`` to return (every camera renders
             all envs, so these index the full buffer); ``None`` returns all environments.
         device : torch.device | str | None, default=None
-            Where to return the tensor. ``None`` keeps the sim device (no copy). Any other device
-            (e.g. ``"cpu"``) returns a cached cross-device copy of the FULL buffer: the first caller
-            per ``(data_type, device)`` this render pays the transfer, later callers reuse it (so
-            several egress consumers reading the same camera on host cost one device->host sync, not
-            one each). The returned tensor is **read-only** — do not mutate it in place; it is shared.
+            Where to return the tensor. ``None`` returns the camera's output itself (SimState
+            ``camera/<name>/<data_type>``), rewritten in place every frame; clone a frame that must
+            outlive the step. A device (even the sim device) returns a snapshot of the current frame
+            there, cached per ``(data_type, device)`` until the next frame, so several consumers share
+            one transfer and a snapshot never changes. Either is **read-only**.
 
         Raises
         ------
@@ -1130,10 +1133,10 @@ class BaseSimulator:
             created = self.sensor_manager.camera_names
             raise NotImplementedError(f"{type(self).__name__} has no camera '{name}'. Created cameras: {created}.")
         record = self.sensor_manager.get(name)
-        if data_type not in record.buffers:
+        if data_type not in record.rendered:
             raise RuntimeError(
                 f"Camera '{name}' has no '{data_type}' frame. Ensure '{data_type}' is in the camera's "
-                f"data_types and render_sensors() has run. Buffered: {sorted(record.buffers)}."
+                f"data_types and render_sensors() has run. Rendered: {sorted(record.rendered)}."
             )
         buf = record.buffer_on(data_type, device)
         return buf if env_ids is None else buf[env_ids]
@@ -1154,16 +1157,18 @@ class BaseSimulator:
         ``points`` is ``float32 [N, R, 3]`` in the sensor optical frame (``-Z`` forward,
         ``+Y`` up). ``ranges`` is ``float32 [N, R]`` in meters. No-return values follow the
         LiDAR's ``range_clipping_behavior``: the default ``"none"`` uses XYZ NaNs and ``+inf``;
-        ``"max"`` uses the ray endpoint at ``far``; and ``"zero"`` uses the sensor origin.
+        ``"max"`` uses the ray endpoint at ``far``; and ``"zero"`` uses the sensor origin. ``device``
+        behaves as in :meth:`get_camera_data`: ``None`` returns the output itself (``lidar/<name>/<output>``),
+        a device returns a per-frame snapshot.
         """
         if not self.sensor_manager.has_lidar(name):
             created = self.sensor_manager.lidar_names
             raise NotImplementedError(f"{type(self).__name__} has no LiDAR '{name}'. Created LiDARs: {created}.")
         record = self.sensor_manager.get_lidar(name)
-        if data_type not in record.buffers:
+        if data_type not in record.rendered:
             raise RuntimeError(
                 f"LiDAR '{name}' has no '{data_type}' output. Ensure render_sensors() has run. "
-                f"Buffered: {sorted(record.buffers)}."
+                f"Rendered: {sorted(record.rendered)}."
             )
         buf = record.buffer_on(data_type, device)
         return buf if env_ids is None else buf[env_ids]

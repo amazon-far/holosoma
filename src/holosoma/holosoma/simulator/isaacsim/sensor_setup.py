@@ -223,15 +223,14 @@ def render_cameras(sim: IsaacSim, due: list[CameraRecord]) -> None:
             continue
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
-            rgb = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
-            if rgb.dtype != torch.uint8:
-                rgb = rgb.clamp(0, 255).to(torch.uint8)
-            camera_record.set_buffer("rgb", rgb)
+            with camera_record.writing("rgb") as rgb:  # [N,H,W,3], drop alpha
+                rgb.copy_(out["rgb"][..., :3].clamp(0, 255) if out["rgb"].dtype != torch.uint8 else out["rgb"][..., :3])
         if "depth" in camera_record.config.data_types:
-            # distance_to_image_plane is float32 meters, image-plane. Ensure a trailing channel
-            # dim; CameraRecord applies the configured cross-backend no-return convention.
-            depth = out["distance_to_image_plane"].to(torch.float32)
-            camera_record.set_buffer("depth", depth if depth.ndim == 4 else depth.unsqueeze(-1))
+            # distance_to_image_plane is float32 meters, image-plane; CameraRecord applies the configured
+            # cross-backend no-return convention in place.
+            with camera_record.writing("depth") as depth:  # [N,H,W,1]
+                native = out["distance_to_image_plane"]
+                depth.copy_(native if native.ndim == 4 else native.unsqueeze(-1))
 
 
 def _pattern(

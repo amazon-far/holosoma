@@ -1,97 +1,49 @@
-"""Unit tests for CameraRecord's cross-device buffer cache (pure, no simulator, CPU-only).
-
-``set_buffer`` is the single write path for a rendered frame and co-locates cache invalidation with
-the mutation; ``buffer_on`` serves cross-device copies, caching the first transfer per
-``(data_type, device)`` so several consumers reading the same frame on host cost one copy. These pin
-the caching + invalidation contract without a GPU by counting ``.to`` calls on a wrapper tensor.
-"""
+"""Camera outputs: one fixed buffer per data type, and per-frame snapshots on request (CPU-only)."""
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 import pytest
 
-from holosoma.simulator.shared.sensor_manager import CameraRecord
+from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
+from holosoma.simulator.shared.sensor_manager import CameraRecord, SensorManager
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
 
 
-class _CountingTensor(torch.Tensor):
-    """A Tensor that counts ``.to(device)`` calls, to assert cross-device copies happen once.
-
-    ``.to("cpu")`` on a cpu tensor is normally a no-op that returns self; here we force it to mint a
-    fresh (plain) tensor and bump a counter so a test in a CPU-only env can still prove the cache
-    collapses N reads into one copy. The returned copy is a plain Tensor, so it is not itself counted.
-    """
-
-    to_calls: int
-
-    @staticmethod
-    def wrap(data: torch.Tensor) -> _CountingTensor:
-        t = cast("_CountingTensor", data.as_subclass(_CountingTensor))
-        t.to_calls = 0
-        return t
-
-    def to(self, *args: Any, **kwargs: Any) -> torch.Tensor:
-        self.to_calls += 1
-        # Return a distinct plain tensor so identity checks distinguish "the copy" from "the buffer".
-        return torch.Tensor.clone(torch.Tensor.as_subclass(self, torch.Tensor))
+def _camera() -> tuple[SensorManager, CameraRecord]:
+    manager = SensorManager("cpu", 50.0, num_envs=2)
+    config = CameraSensorConfig(
+        mount=SensorMountConfig(target_kind="world", target=""), width=2, height=2, data_types=["rgb", "depth"]
+    )
+    return manager, manager.register_camera("c", config)
 
 
-def _rt(buf: torch.Tensor) -> CameraRecord:
-    rt = CameraRecord(name="c", config=None)  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
-    rt.set_buffer("rgb", buf)
-    return rt
+def test_frames_are_written_into_the_served_output() -> None:
+    manager, record = _camera()
+    served = record.buffer_on("rgb")
+    assert manager.state.get("camera/c/rgb") is served and served.dtype == torch.uint8
+    record.set_buffer("rgb", torch.full((2, 2, 2, 3), 9, dtype=torch.uint8))
+    assert record.buffer_on("rgb") is served and int(served[0, 0, 0, 0]) == 9
 
 
-def test_device_none_returns_buffer_without_copy() -> None:
-    buf = _CountingTensor.wrap(torch.zeros(1, 2, 2, 3, dtype=torch.uint8))
-    rt = _rt(buf)
-    assert rt.buffer_on("rgb", None) is buf
-    assert buf.to_calls == 0
-    assert rt._device_cache == {}
+def test_a_snapshot_is_shared_within_a_frame_and_kept_after_the_next() -> None:
+    _, record = _camera()
+    record.set_buffer("rgb", torch.full((2, 2, 2, 3), 1, dtype=torch.uint8))
+    first = record.buffer_on("rgb", "cpu")
+    assert record.buffer_on("rgb", "cpu") is first and first.data_ptr() != record.buffers["rgb"].data_ptr()
+
+    record.set_buffer("depth", torch.zeros(2, 2, 2, 1))  # another output keeps its snapshot
+    assert record.buffer_on("rgb", "cpu") is first
+    record.set_buffer("rgb", torch.full((2, 2, 2, 3), 2, dtype=torch.uint8))
+    assert int(first[0, 0, 0, 0]) == 1 and int(record.buffer_on("rgb", "cpu")[0, 0, 0, 0]) == 2
 
 
-def test_cross_device_copy_is_cached_across_reads() -> None:
-    # Force a "different device" path via a fake device str so .to() actually fires in a CPU env.
-    buf = _CountingTensor.wrap(torch.zeros(1, 2, 2, 3, dtype=torch.uint8))
-    rt = CameraRecord(name="c", config=None)  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
-    rt.set_buffer("rgb", buf)
-    a = rt.buffer_on("rgb", "meta")  # a non-cpu device string -> triggers .to
-    b = rt.buffer_on("rgb", "meta")  # second read reuses the cache
-    assert buf.to_calls == 1  # only the first read paid the copy
-    assert a is b  # same cached object handed to both consumers
-
-
-def test_set_buffer_invalidates_stale_cross_device_copies() -> None:
-    buf1 = _CountingTensor.wrap(torch.zeros(1, 2, 2, 3, dtype=torch.uint8))
-    rt = CameraRecord(name="c", config=None)  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
-    rt.set_buffer("rgb", buf1)
-    first = rt.buffer_on("rgb", "meta")
-    assert buf1.to_calls == 1
-
-    # A fresh render replaces the buffer -> the old host copy must be dropped, next read re-copies.
-    buf2 = _CountingTensor.wrap(torch.ones(1, 2, 2, 3, dtype=torch.uint8))
-    rt.set_buffer("rgb", buf2)
-    assert rt._device_cache == {}  # invalidated at the write site
-    second = rt.buffer_on("rgb", "meta")
-    assert buf2.to_calls == 1  # copied from the NEW buffer
-    assert second is not first
-
-
-def test_set_buffer_only_invalidates_its_own_modality() -> None:
-    # A depth render must not evict a cached rgb copy (different data_type keys).
-    rgb = _CountingTensor.wrap(torch.zeros(1, 2, 2, 3, dtype=torch.uint8))
-    depth = _CountingTensor.wrap(torch.zeros(1, 2, 2, 1, dtype=torch.float32))
-    rt = CameraRecord(name="c", config=None)  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
-    rt.set_buffer("rgb", rgb)
-    rt.set_buffer("depth", depth)
-    rt.buffer_on("rgb", "meta")
-    rt.buffer_on("depth", "meta")
-    assert set(rt._device_cache) == {("rgb", "meta"), ("depth", "meta")}
-
-    # Re-render ONLY depth: rgb's cached copy survives, depth's is dropped.
-    rt.set_buffer("depth", _CountingTensor.wrap(torch.ones(1, 2, 2, 1, dtype=torch.float32)))
-    assert set(rt._device_cache) == {("rgb", "meta")}
+def test_a_consumer_write_into_an_output_is_rejected() -> None:
+    manager, record = _camera()
+    record.buffer_on("rgb")[0] = 5
+    with pytest.raises(RuntimeError, match="read-only"):
+        record.set_buffer("rgb", torch.zeros(2, 2, 2, 3, dtype=torch.uint8))
+    record.buffer_on("rgb")[0] = 6
+    with pytest.raises(RuntimeError, match="read-only"):
+        manager.state.flush_writes()

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.config_types.value_types import UNIT_QUATERNION_NORM_TOLERANCE
+from holosoma.simulator.base_simulator.state import SimState
 from holosoma.simulator.shared.lidar_sensor import (
     LidarPatternProvider,
     ResolvedRayPattern,
@@ -24,7 +26,11 @@ SensorRecordT = TypeVar("SensorRecordT", bound="SensorRecord")
 
 @dataclass
 class SensorRecord:
-    """Bookkeeping shared by every mounted sensor type."""
+    """Bookkeeping shared by every mounted sensor type.
+
+    Each output is one fixed buffer, ``buffers[output]``, served as the SimState output
+    :meth:`field_name` and written in place every frame inside :meth:`writing`.
+    """
 
     name: str
     config: SensorConfig
@@ -38,34 +44,66 @@ class SensorRecord:
     """Runtime offsets ``[N, 7]`` in XYZ + XYZW order, independent of the immutable config."""
     write_mount_pose: Callable[[torch.Tensor, torch.Tensor], None] | None = None
     """Backend writer taking environment ids and validated XYZ + XYZW offsets."""
+    state: SimState = field(default_factory=SimState, repr=False)
+    """The state that serves the outputs."""
+    written: set[str] = field(default_factory=set)
+    """Outputs written since the sensor was last due."""
+    rendered: set[str] = field(default_factory=set)
+    """Outputs written at least once."""
     _device_cache: dict[tuple[str, str], torch.Tensor] = field(default_factory=dict)
 
-    def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
-        self.buffers[output] = tensor
+    kind: ClassVar[str] = "sensor"
+
+    def field_name(self, output: str) -> str:
+        """The SimState output serving ``output``."""
+        return f"{self.kind}/{self.name}/{output}"
+
+    def allocate(self, output: str, shape: tuple[int, ...], dtype: torch.dtype, device: str) -> None:
+        """Allocate ``output``'s fixed buffer, zero-filled, and serve it as :meth:`field_name`."""
+        with torch.inference_mode(False):
+            buffer = torch.zeros(shape, dtype=dtype, device=device)
+        self.buffers[output] = buffer
+        self.state.register_output(self.field_name(output), buffer)
+
+    @contextmanager
+    def writing(self, output: str, env_ids: torch.Tensor | None = None) -> Iterator[torch.Tensor]:
+        """Write a new frame of ``output`` (its ``env_ids`` rows, or all) into the yielded buffer, in place."""
+        with self.state.producing(self.field_name(output)):
+            yield self.buffers[output]
+            self._finish(output, env_ids)
+        self.written.add(output)
+        self.rendered.add(output)
         self._drop_device_cache(output)
 
+    def _finish(self, output: str, env_ids: torch.Tensor | None) -> None:
+        """Post-process a frame just written into ``output``'s buffer."""
+
+    def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
+        """Copy a finished frame into ``output``'s buffer."""
+        with self.writing(output) as buffer:
+            if tensor.shape != buffer.shape:
+                raise ValueError(f"{self.name} {output} must be {tuple(buffer.shape)}, got {tuple(tensor.shape)}")
+            buffer.copy_(tensor)
+
     def set_buffer_rows(self, output: str, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
-        """Overwrite the ``env_ids`` rows of an existing output, e.g. after a partial re-render."""
-        buffer = self.buffers[output].clone()
-        buffer[env_ids] = rows
-        self.buffers[output] = buffer
-        self._drop_device_cache(output)
+        """Copy frames for ``env_ids`` into ``output``'s buffer, e.g. after a partial re-render."""
+        with self.writing(output, env_ids) as buffer:
+            buffer[env_ids] = rows
 
     def _drop_device_cache(self, output: str) -> None:
         for key in [key for key in self._device_cache if key[0] == output]:
             del self._device_cache[key]
 
     def buffer_on(self, output: str, device: torch.device | str | None = None) -> torch.Tensor:
+        """``output``'s buffer, or with ``device``, a snapshot of the current frame there (cached per frame)."""
         buf = self.buffers[output]
         if device is None:
             return buf
         dev = torch.device(device)
-        if buf.device == dev:
-            return buf
         key = (output, str(dev))
         cached = self._device_cache.get(key)
         if cached is None:
-            cached = buf.to(dev)
+            cached = buf.clone() if buf.device == dev else buf.to(dev)
             self._device_cache[key] = cached
         return cached
 
@@ -74,32 +112,33 @@ class SensorRecord:
 class CameraRecord(SensorRecord):
     config: CameraSensorConfig
 
-    def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
-        """Store a camera output, applying configured depth no-return semantics at the shared boundary."""
-        if output == "depth" and isinstance(self.config, CameraSensorConfig):
-            tensor = clip_sensor_ranges(
-                tensor,
-                near=self.config.near,
-                far=self.config.far,
-                behavior=self.config.depth_clipping_behavior,
-            ).ranges
-        super().set_buffer(output, tensor)
+    kind: ClassVar[str] = "camera"
 
-    def set_buffer_rows(self, output: str, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
-        """Overwrite camera output rows, applying the same depth no-return semantics as :meth:`set_buffer`."""
-        if output == "depth" and isinstance(self.config, CameraSensorConfig):
-            rows = clip_sensor_ranges(
-                rows,
-                near=self.config.near,
-                far=self.config.far,
-                behavior=self.config.depth_clipping_behavior,
-            ).ranges
-        super().set_buffer_rows(output, env_ids, rows)
+    def allocate_outputs(self, num_envs: int, device: str) -> None:
+        """Allocate rgb ``uint8 [E, H, W, 3]`` and depth ``float32 [E, H, W, 1]`` for the configured types."""
+        config = self.config
+        for data_type in config.data_types:
+            rgb = data_type == "rgb"
+            shape = (num_envs, config.height, config.width, 3 if rgb else 1)
+            self.allocate(data_type, shape, torch.uint8 if rgb else torch.float32, device)
+
+    def _finish(self, output: str, env_ids: torch.Tensor | None) -> None:
+        """Apply the configured depth no-return semantics in place."""
+        if output != "depth":
+            return
+        buffer = self.buffers[output]
+        near, far, behavior = self.config.near, self.config.far, self.config.depth_clipping_behavior
+        if env_ids is None:
+            clip_sensor_ranges(buffer, near=near, far=far, behavior=behavior, out=buffer)
+        else:
+            buffer[env_ids] = clip_sensor_ranges(buffer[env_ids], near=near, far=far, behavior=behavior).ranges
 
 
 @dataclass
 class LidarRecord(SensorRecord):
     config: LidarSensorConfig
+
+    kind: ClassVar[str] = "lidar"
     pattern_provider: LidarPatternProvider | None = None
     backend_cache: dict[str, Any] = field(default_factory=dict)
     """Backend-owned fixed-shape query buffers and compiled work for this LiDAR."""
@@ -126,8 +165,10 @@ def _unit_quaternions(quaternions: torch.Tensor) -> torch.Tensor:
 class SensorManager:
     """Cross-backend sensor registry and runtime mounts, available even without configured sensors."""
 
-    def __init__(self, device: str, control_hz: float, *, num_envs: int = 1) -> None:
+    def __init__(self, device: str, control_hz: float, *, num_envs: int = 1, state: SimState | None = None) -> None:
         self.device = device
+        self.state = state if state is not None else SimState()
+        """The state that serves sensor outputs, as ``camera/<name>/<output>`` and ``lidar/<name>/<output>``."""
         self.control_hz = control_hz
         self.num_envs = num_envs
         self._cameras: dict[str, CameraRecord] = {}
@@ -159,12 +200,18 @@ class SensorManager:
             config=config,
             effective_decimation=effective,
             mount_poses=self._initial_mount_poses(config),
+            state=self.state,
         )
+        record.allocate_outputs(self.num_envs, self.device)
         self._cameras[name] = record
         self._order.append(name)
         return record
 
-    def register_lidar(self, name: str, config: LidarSensorConfig) -> LidarRecord:
+    def register_lidar(
+        self, name: str, config: LidarSensorConfig, *, outputs: Sequence[str] = ("ranges", "points")
+    ) -> LidarRecord:
+        """Register a LiDAR with fixed buffers for ``outputs``: ``ranges`` float32 ``[E, R]``, ``points``
+        float32 ``[E, R, 3]`` and ``geom_ids`` int32 ``[E, R]``, for backends that report hit geometry."""
         self._assert_name_available(name)
         effective = resolve_decimation(
             config.update_decimation, self.control_hz, field=f"LiDAR '{name}' update_decimation"
@@ -181,7 +228,16 @@ class SensorManager:
             effective_decimation=effective,
             pattern_provider=pattern_provider,
             mount_poses=self._initial_mount_poses(config),
+            state=self.state,
         )
+        rays = pattern_provider.ray_count
+        shapes = {
+            "ranges": ((self.num_envs, rays), torch.float32),
+            "points": ((self.num_envs, rays, 3), torch.float32),
+            "geom_ids": ((self.num_envs, rays), torch.int32),
+        }
+        for output in outputs:
+            record.allocate(output, *shapes[output], self.device)
         self._lidars[name] = record
         self._order.append(name)
         return record
@@ -294,6 +350,7 @@ class SensorManager:
         for record in records:
             record.step_counter += 1
             if record.step_counter % record.effective_decimation == 0:
+                record.written.clear()
                 due.append(record)
         return due
 

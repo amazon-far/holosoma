@@ -104,7 +104,9 @@ def test_live_window_displays_offscreen_render_through_opencv(monkeypatch) -> No
 
     config = LidarVizPluginConfig(live_window=True)
     config.get_cls()(config, simulator)
-    points = np.array([[[0.0, 1.0, -1.0], [1.0, 2.0, -2.0], [4.0, 5.0, -5.0]]], dtype=np.float32)
+    points = np.array(
+        [[[0.0, 1.0, -1.0], [1.0, 2.0, -2.0], [4.0, 5.0, -5.0], [np.nan, np.nan, np.nan]]], dtype=np.float32
+    )
     _emit_fresh_scan(simulator, points)
 
     assert len(shown) == 1

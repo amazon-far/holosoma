@@ -428,7 +428,6 @@ def test_mjwarp_lidar_reuses_camera_bvh_without_duplicate_same_frame_refit(
     backend._torch_render_stream = render_stream
     backend._cam_ids = {"camera": 0}
     backend._render_rgb_out = {}
-    backend._render_depth_out = {}
     backend._lidar_render_context = None
     backend._lidar_render_context_groups = None
     backend._sensor_refit_graphs = {}

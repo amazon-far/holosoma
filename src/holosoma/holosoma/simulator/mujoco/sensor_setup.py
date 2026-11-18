@@ -138,7 +138,7 @@ def register_lidars(sim: MuJoCo, manager: SensorManager) -> None:
     for name, lidar in sim.sensor_config.items():
         if not isinstance(lidar, LidarSensorConfig):
             continue
-        sensor_record = manager.register_lidar(name, lidar)
+        sensor_record = manager.register_lidar(name, lidar, outputs=("ranges", "points", "geom_ids"))
         site_name = f"{LIDAR_MOUNT_SITE_PREFIX}{name}"
         site_id = mujoco.mj_name2id(sim.root_model, mujoco.mjtObj.mjOBJ_SITE, site_name)
         if site_id < 0:

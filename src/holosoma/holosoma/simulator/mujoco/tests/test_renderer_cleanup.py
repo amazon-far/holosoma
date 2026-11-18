@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, cast
 
 import numpy as np
 import pytest
+import torch
 
 pytest.importorskip("mujoco")
 
@@ -205,18 +207,19 @@ def test_sensor_scene_flags_show_robot_visual_group_only() -> None:
 
 
 def test_classic_camera_render_uses_configured_sensor_scene_option() -> None:
-    frame = np.zeros((2, 3, 3), dtype=np.uint8)
+    frame = np.full((2, 3, 3), 4, dtype=np.uint8)
     render_data = object()
     scene_option = object()
     update_calls: list[tuple[Any, int, Any]] = []
-    buffers: dict[str, Any] = {}
+    buffers: dict[str, Any] = {"rgb": torch.zeros(1, 2, 3, 3, dtype=torch.uint8)}
 
     class _CameraRenderer:
         def update_scene(self, data: Any, *, camera: int, scene_option: Any) -> None:
             update_calls.append((data, camera, scene_option))
 
-        def render(self) -> Any:
-            return frame
+        def render(self, out: Any = None) -> Any:
+            out[...] = frame  # renders straight into the camera's host buffer
+            return out
 
     backend = object.__new__(ClassicBackend)
     backend.model = SimpleNamespace(
@@ -229,19 +232,15 @@ def test_classic_camera_render_uses_configured_sensor_scene_option() -> None:
     backend._mj_renderers = {"head": {"rgb": _CameraRenderer()}}
     backend._sensor_scene_option = scene_option
 
-    def _set_buffer(data_type: str, value: Any) -> None:
-        buffers[data_type] = value
-
     camera = SimpleNamespace(
         name="head",
         config=SimpleNamespace(data_types=["rgb"]),
-        set_buffer=_set_buffer,
+        writing=lambda data_type: nullcontext(buffers[data_type]),
     )
 
     backend.render_cameras(cast("Any", [camera]))
 
     assert update_calls == [(render_data, 7, scene_option)]
-    assert buffers["rgb"].shape == (1, 2, 3, 3)
     assert np.array_equal(buffers["rgb"].numpy()[0], frame)
 
 

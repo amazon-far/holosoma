@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import numpy as np
@@ -375,9 +376,13 @@ def test_range_finalizer_never_attributes_synthetic_points_to_geometry(
             far=4.0,
             range_clipping_behavior=behavior,
         ),
-        buffers={},
+        buffers={
+            "ranges": torch.zeros(2, 2),
+            "points": torch.zeros(2, 2, 3),
+            "geom_ids": torch.zeros(2, 2, dtype=torch.int32),
+        },
     )
-    record.set_buffer = record.buffers.__setitem__
+    record.writing = lambda output, _env_ids=None: nullcontext(record.buffers[output])
     directions = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
     distances = torch.tensor([[2.0, float("inf")], [0.1, 5.0]])
     geom_ids = torch.tensor([[7, -1], [8, 9]], dtype=torch.int32)
