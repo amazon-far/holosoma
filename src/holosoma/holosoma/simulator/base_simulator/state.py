@@ -254,9 +254,10 @@ class SimState:
     def link(self, sources: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Serve writable tensors from ``sources``' memory (``set_``), written outside the simulation; return them.
 
-        Linked tensors are never re-read. Whoever writes ``sources`` reports each write as a version bump on the
-        returned tensor (``torch.autograd.graph.increment_version``); the next flush then writes the changed
-        rows. Each registration's names are linked together.
+        Linked tensors are never re-read, and their versions do not follow writes made through ``sources``: the
+        writer must bump the returned tensor after each write (``torch.autograd.graph.increment_version``) for
+        the next flush to write the changed rows. The co-simulation bridge bumps every linked tensor each
+        exchange; any other link must do this itself. Each registration's names are linked together.
         """
         registrations = {id(self._by_name.get(name)): self._by_name.get(name) for name in sources}
         for registration in registrations.values():

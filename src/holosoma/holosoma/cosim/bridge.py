@@ -7,8 +7,8 @@ exports stay in shared CUDA allocations, ordered by interprocess ready and done 
   GPU UUID and PID. The peer's handler accepts ``meta``, picks the state fields it reads and allocates one
   export per request; the reply carries the reads, the exports and its done event.
 - ``EXCHANGE_REQUEST`` -> ``EXCHANGE_REPLY``: one per :meth:`HeadBridge.publish`, with a :class:`Snapshot`
-  numbered consecutively. Each carries ``written``, the buffers its sender wrote since the last exchange
-  (all on the first), and the other side bumps their versions as if written locally.
+  numbered consecutively. Each hands over every shared buffer: the side receiving it bumps the versions
+  of everything it maps, as if each were written locally.
 - ``CLOSE_REQUEST`` -> ``CLOSE_REPLY``: both sides release their mappings.
 - ``ERROR``: the peer's failure, raised on the head.
 
@@ -33,7 +33,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from holosoma.cosim.cuda import BufferSpec, MappedBuffers, SharedStateAllocator, WriteTracker, share
+from holosoma.cosim.cuda import BufferSpec, MappedBuffers, SharedStateAllocator, share
 
 if TYPE_CHECKING:
     import torch
@@ -214,7 +214,6 @@ class HeadBridge:
             if images != requested:
                 raise RuntimeError(f"Peer exported {images}, requested {requested}")
             self._imports = MappedBuffers(specs, device=simulator.sim_device)
-            self._written = WriteTracker({name: allocator.tensors[name] for name in self.reads})
         except BaseException:
             self.control.close()
             raise
@@ -258,10 +257,10 @@ class HeadBridge:
         self.refresh()
         self.sequence += 1
         snapshot = Snapshot(self.sequence, self.simulator.time(), self._phase())
-        reply = self._exchange(MessageType.EXCHANGE_REQUEST, snapshot=asdict(snapshot), written=self._written())
+        reply = self._exchange(MessageType.EXCHANGE_REQUEST, snapshot=asdict(snapshot))
         if reply["type"] != MessageType.EXCHANGE_REPLY or reply["sequence"] != snapshot.sequence:
             raise RuntimeError("Peer completed the wrong exchange")
-        self._imports.record_writes(reply["written"])
+        self._imports.record_exchange()
         if snapshot.sequence == 1:
             self.control.set_timeout(self.exchange_timeout_ms)
 
@@ -309,9 +308,6 @@ class PeerHandlerProtocol(Protocol):
 
         ``state`` holds the read fields, read-only and valid only during the call.
         """
-
-    def written(self) -> list[str]:
-        """Exports written since the last call."""
 
     def unlink(self) -> None:
         """Move what :meth:`link` linked off the mapping; called before the mapping is released."""
@@ -382,18 +378,12 @@ class PeerBridge:
                         if snapshot.sequence != sequence + 1:
                             raise ValueError("Snapshots must be consecutive")
                         stream.wait_event(ready)
-                        mapped.record_writes(message["written"])
+                        mapped.record_exchange()
                         self.handler.process(snapshot, mapped.tensors)
                         mapped.verify_read_only()
                         stream.record_event(done)
                         sequence = snapshot.sequence
-                        self.control.socket.send_json(
-                            {
-                                "type": MessageType.EXCHANGE_REPLY,
-                                "sequence": sequence,
-                                "written": self.handler.written(),
-                            }
-                        )
+                        self.control.socket.send_json({"type": MessageType.EXCHANGE_REPLY, "sequence": sequence})
                     elif command == MessageType.CLOSE_REQUEST and mapped is not None:
                         torch.cuda.synchronize(device)
                         mapped.verify_read_only()

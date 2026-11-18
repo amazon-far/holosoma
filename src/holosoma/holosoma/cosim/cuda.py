@@ -111,7 +111,8 @@ class MappedBuffers:
     """Own imports until SDK and caller views have been released.
 
     Each import is served as one tensor: Warp's view, or one :meth:`serve` substitutes for it. Its version moves
-    for local in-place writes and for :meth:`record_writes`, which records the owner's writes.
+    for local in-place writes and for :meth:`record_exchange`, which records
+    that the owner may have written them.
     """
 
     def __init__(self, specs: Iterable[BufferSpec], *, device: str) -> None:
@@ -156,16 +157,12 @@ class MappedBuffers:
                 f"Borrowed IPC buffers {written} were written in place; only their allocating process writes them"
             )
 
-    def record_writes(self, names: Iterable[str]) -> None:
-        """Record that the owner wrote ``names``: bump each version as an in-place write would."""
+    def record_exchange(self) -> None:
+        """Record that the owner may have written every import: bump each version as an in-place write would."""
         import torch
 
         self.verify_read_only()
-        names = list(names)
-        if unknown := sorted(set(names) - set(self.tensors)):
-            raise RuntimeError(f"The peer wrote buffers {unknown} that are not mapped here")
-        for name in names:
-            tensor = self.tensors[name]
+        for name, tensor in self.tensors.items():
             torch.autograd.graph.increment_version(tensor)
             self.versions[name] = tensor._version
 
@@ -177,17 +174,3 @@ class MappedBuffers:
         retained = [name for name, refs in self.references.items() if any(ref() is not None for ref in refs)]
         if retained:
             raise RuntimeError(f"IPC mappings are still referenced: {retained}")
-
-
-class WriteTracker:
-    """Report which of ``tensors`` were written in place since the last call; the first call reports all."""
-
-    def __init__(self, tensors: Mapping[str, torch.Tensor]) -> None:
-        self.tensors = dict(tensors)
-        self.versions = dict.fromkeys(self.tensors, -1)
-
-    def __call__(self) -> list[str]:
-        written = [name for name, tensor in self.tensors.items() if tensor._version != self.versions[name]]
-        for name in written:
-            self.versions[name] = self.tensors[name]._version
-        return written

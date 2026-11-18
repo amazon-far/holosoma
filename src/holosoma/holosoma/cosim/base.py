@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 
 from holosoma.cosim.bridge import BufferRequest, HeadBridge, Snapshot
-from holosoma.cosim.cuda import BufferSpec, WriteTracker, allocate_shared, shared_state_allocator
+from holosoma.cosim.cuda import BufferSpec, allocate_shared, shared_state_allocator
 from holosoma.simulator.base_simulator.hooks import Phase
 
 if TYPE_CHECKING:
@@ -82,7 +82,6 @@ class PeerHandler:
         self.device = device
         self.allocations: dict[str, Any] = {}
         self._exports: list[tuple[torch.Tensor, Callable[[], torch.Tensor]]] = []
-        self._written = WriteTracker({})
 
     def open(
         self, state: Sequence[BufferSpec], requests: Sequence[BufferRequest], meta: Mapping[str, Any]
@@ -97,9 +96,6 @@ class PeerHandler:
             allocation = allocate_shared(request.shape, request.dtype, self.device)
             self.allocations[request.name] = allocation
             self._exports.append((wp.to_torch(allocation), source))
-        self._written = WriteTracker(
-            {request.name: export for request, (export, _) in zip(requests, self._exports, strict=True)}
-        )
         return reads
 
     def process(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:
@@ -107,10 +103,6 @@ class PeerHandler:
         self.step(snapshot, state)
         for export, source in self._exports:
             export.copy_(source())
-
-    def written(self) -> list[str]:
-        """Exports written since the last call."""
-        return self._written()
 
     def accept(self, meta: Mapping[str, Any]) -> None:
         """Check the head's handshake metadata; raise to refuse it."""

@@ -74,7 +74,7 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
             "head_pid": os.getpid(),
             "meta": {"dof_names": ["a", "b"], "object_names": [], "env_origins": [[0.0, 0.0, 0.0]]},
         },
-        {"type": "EXCHANGE_REQUEST", "snapshot": {"sequence": 1, "sim_time": 0.035}, "written": ["dof_pos"]},
+        {"type": "EXCHANGE_REQUEST", "snapshot": {"sequence": 1, "sim_time": 0.035}},
         {"type": "CLOSE_REQUEST"},
     ]
     socket = SimpleNamespace(send_json=replies.append, poll=lambda _ms: True)
@@ -98,8 +98,8 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
         def serve(self, tensors: Any) -> None:
             calls.append(("serve", sorted(tensors)))
 
-        def record_writes(self, names: list[str]) -> None:
-            calls.append(("record_writes", names))
+        def record_exchange(self) -> None:
+            calls.append("record_exchange")
 
         def verify_read_only(self) -> None:
             calls.append("readonly")
@@ -153,12 +153,12 @@ def test_peer_frame_lifecycle(peer: PeerFixture) -> None:
     worker, calls, replies, _messages = peer
     worker.run()
     place = ("place", [[0.0, 0.0, 0.0]])
-    assert _in_order(calls, place, "map", ("serve", []), "ready", ("record_writes", ["dof_pos"]), "capture")
+    assert _in_order(calls, place, "map", ("serve", []), "ready", "record_exchange", "capture")
     assert cast("Any", worker.handler).simulator.kinematic_time == 0.035
     assert _in_order(calls, "capture", "readonly", "done", "readonly", ("unlink", []), "unmap", "close")
     assert replies == [
         {"type": "OPEN_REPLY", "done_handle": "01", "exports": [], "reads": []},
-        {"type": "EXCHANGE_REPLY", "sequence": 1, "written": []},
+        {"type": "EXCHANGE_REPLY", "sequence": 1},
         {"type": "CLOSE_REPLY"},
     ]
 
@@ -318,13 +318,13 @@ def test_mapped_buffers_serve_linked_tensors_and_tell_owner_writes_from_local_on
         mapped.serve({"x": torch.zeros(2, 3)})
 
     version = linked._version
-    mapped.record_writes(["x"])  # the owner wrote it
+    mapped.record_exchange()  # the owner may have written it
     mapped.verify_read_only()
     assert linked._version == version + 1
 
     linked.add_(1)  # a local write
     with pytest.raises(RuntimeError, match=r"\['x'\] were written in place"):
-        mapped.record_writes(["x"])
+        mapped.record_exchange()
 
 
 def test_publisher_without_shared_state_fails_before_connecting(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -372,7 +372,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     def exchange(command: str, **fields: Any) -> dict[str, Any]:
         calls.append((command, fields))
         if command == "EXCHANGE_REQUEST":
-            return {"type": "EXCHANGE_REPLY", "sequence": fields["snapshot"]["sequence"], "written": list(images)}
+            return {"type": "EXCHANGE_REPLY", "sequence": fields["snapshot"]["sequence"]}
         return replies[command]
 
     control = SimpleNamespace(exchange=exchange, set_timeout=lambda _: None, close=lambda: None)
@@ -380,7 +380,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     mapped = SimpleNamespace(
         tensors=images,
         verify_read_only=lambda: calls.append("readonly"),
-        record_writes=lambda names: calls.append(("record_writes", names)),
+        record_exchange=lambda: calls.append("record_exchange"),
         release=lambda: calls.append("unmap"),
     )
     monkeypatch.setattr(bridge, "MappedBuffers", lambda *_args, **_kw: mapped)
@@ -423,9 +423,8 @@ def test_remote_due_cameras_get_copies_of_the_peer_images(plugin: PluginFixture)
     seen: list[set[str]] = []
     hooks.add(Phase.FRAME_END, lambda: seen.append(set(remote.buffers)), after=head.simulator.sensor_render_hook)
     hooks.emit(Phase.FRAME_END)
-    assert calls[1:4] == ["readonly", calls[2], ("record_writes", ["cam/rgb", "cam/depth"])]
+    assert calls[1:4] == ["readonly", calls[2], "record_exchange"]
     assert calls[2][0] == "EXCHANGE_REQUEST" and calls[2][1]["snapshot"]["phase"] == "frame_end"
-    assert calls[2][1]["written"] == ["dof_pos"]  # the first exchange reports every field the peer reads
     assert seen == [{"rgb", "depth"}]  # filled before consumers of the sensor render hook
     for data_type in ("rgb", "depth"):
         buffer = remote.buffers[data_type]
