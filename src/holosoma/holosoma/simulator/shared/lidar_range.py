@@ -42,7 +42,11 @@ def finalize_lidar_returns(
     config = sensor_record.config
     with sensor_record.writing("ranges") as ranges:
         hit_mask = clip_sensor_ranges(
-            distances, near=config.near, far=config.far, behavior=config.range_clipping_behavior, out=ranges
+            distances.to(ranges.dtype),
+            near=config.near,
+            far=config.far,
+            behavior=config.range_clipping_behavior,
+            out=ranges,
         ).hit_mask
     with sensor_record.writing("points") as points:
         torch.mul(ranges.unsqueeze(-1), directions.unsqueeze(0), out=points)
