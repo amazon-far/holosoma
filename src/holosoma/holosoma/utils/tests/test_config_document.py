@@ -113,3 +113,8 @@ def test_rejects_invalid_documents(tmp_path: Path, content: dict[str, Any] | str
 def test_json_document(tmp_path: Path) -> None:
     path = _write(tmp_path, json.dumps(DOCUMENT, indent="\t"), name="run.json")
     assert parse_config(RunSimConfig, args=["--config", path]) == parse_config(RunSimConfig, args=EQUIVALENT_CLI)
+
+
+def test_packaged_example_parses() -> None:
+    config = parse_config(RunSimConfig, args=["--config", "@holosoma/examples/configs/g1_lidar.yaml"])
+    assert "scan" in config.sensor

@@ -4,12 +4,15 @@
 with `--config`:
 
 ```bash
-python -m holosoma.run_sim --config g1_lidar.yaml
-python -m holosoma.run_sim --config g1_lidar.yaml terrain:terrain-locomotion-mix --training.seed 7
+python -m holosoma.run_sim --config @holosoma/examples/configs/g1_lidar.yaml
+python -m holosoma.run_sim --config @holosoma/examples/configs/g1_lidar.yaml terrain:terrain-locomotion-mix --training.seed 7
 ```
 
+The example ships with the package as
+[`src/holosoma/holosoma/examples/configs/g1_lidar.yaml`](../src/holosoma/holosoma/examples/configs/g1_lidar.yaml);
+copy it as a starting point:
+
 ```yaml
-# g1_lidar.yaml
 version: 2
 arguments:
   simulator: mujoco              # <group>:<preset>
