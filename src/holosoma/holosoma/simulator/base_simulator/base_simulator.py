@@ -897,7 +897,11 @@ class BaseSimulator:
                     manager.set_mount_pose(record.name, poses[rows], rows, notify=False)
                 finally:
                     # The buffer holds what the sensor stores: normalised, or unchanged after a rejected write.
-                    poses[rows] = record.mount_poses[rows]
+                    # Only differing rows are written, so a buffer served from elsewhere stays untouched.
+                    stored = record.mount_poses[rows]
+                    differs = (poses[rows] != stored).any(-1)
+                    if differs.any():
+                        poses[rows[differs]] = stored[differs]
 
             state.register(f"mount_pose/{record.name}", lambda: record.mount_poses, write=write)
 
