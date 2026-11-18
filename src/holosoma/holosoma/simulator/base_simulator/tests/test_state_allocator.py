@@ -15,9 +15,9 @@ def test_allocator_receives_each_name_once_and_keeps_storage() -> None:
     source = (torch.ones(2, 3, dtype=torch.float64), torch.full((2, 4), 2.0))
     owners: dict[str, torch.Tensor] = {}
 
-    def allocate(name: str, value: torch.Tensor, device: torch.device | str | None) -> torch.Tensor:
+    def allocate(name: str, value: torch.Tensor, device: torch.device | str | None, dtype: torch.dtype) -> torch.Tensor:
         assert name not in owners and device == "cpu"
-        owners[name] = torch.empty(value.shape, dtype=torch.float32, device=device)
+        owners[name] = torch.empty(value.shape, dtype=dtype, device=device)
         return owners[name]
 
     state.set_buffer_allocator(allocate)
@@ -36,7 +36,7 @@ def test_allocator_must_precede_first_cached_read() -> None:
     state.register("pose", lambda: torch.zeros(2, 3))
     state.get("pose")
     with pytest.raises(RuntimeError, match="before the first cached read"):
-        state.set_buffer_allocator(lambda _name, value, _device: torch.empty_like(value))
+        state.set_buffer_allocator(lambda _name, value, _device, _dtype: torch.empty_like(value))
 
 
 @pytest.mark.parametrize(
@@ -50,27 +50,31 @@ def test_allocator_must_precede_first_cached_read() -> None:
 )
 def test_invalid_allocator_storage_is_rejected(storage: torch.Tensor) -> None:
     state = SimState(device="cpu")
-    state.set_buffer_allocator(lambda _name, _value, _device: storage)
+    state.set_buffer_allocator(lambda _name, _value, _device, _dtype: storage)
     state.register("pose", lambda: torch.zeros(2, 3))
-    with pytest.raises(ValueError, match="shape, float32 dtype and device"):
+    with pytest.raises(ValueError, match="shape, the field's dtype and device"):
         state.get("pose")
-    state.set_buffer_allocator(lambda _name, value, _device: torch.empty_like(value))
+    state.set_buffer_allocator(lambda _name, value, _device, _dtype: torch.empty_like(value))
     assert state.get("pose").shape == (2, 3)
 
 
 def test_device_alias_is_accepted_from_a_custom_allocator() -> None:
     state = SimState(device="cpu:0")
-    state.set_buffer_allocator(
-        lambda _name, value, device: torch.empty(value.shape, dtype=torch.float32, device=device)
-    )
+    state.set_buffer_allocator(lambda _name, value, device, dtype: torch.empty(value.shape, dtype=dtype, device=device))
     state.register("pose", lambda: torch.zeros(2, 3))
     assert state.get("pose").device == torch.device("cpu")
 
 
 def test_custom_allocation_inside_inference_mode_remains_writable() -> None:
     state = SimState()
-    state.set_buffer_allocator(lambda _name, value, _device: torch.empty_like(value))
+    state.set_buffer_allocator(lambda _name, value, _device, _dtype: torch.empty_like(value))
     state.register("pose", lambda: torch.zeros(2, 3), write=lambda _rows, _value: None)
     with torch.inference_mode():
         held = state.get("pose")
     assert not held.is_inference()
+
+
+def test_a_field_keeps_its_dtype() -> None:
+    state = SimState()
+    state.register("ids", lambda: torch.tensor([[1, -1]]), dtype=torch.int32)
+    assert state.get("ids").dtype == torch.int32 and state._read_fresh("ids").dtype == torch.int32

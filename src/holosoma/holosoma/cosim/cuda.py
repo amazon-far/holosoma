@@ -65,16 +65,17 @@ class SharedStateAllocator:
         self.allocations: dict[str, Any] = {}
         self.tensors: dict[str, torch.Tensor] = {}
 
-    def __call__(self, name: str, value: torch.Tensor, device: Any) -> torch.Tensor:
+    def __call__(self, name: str, value: torch.Tensor, device: Any, dtype: torch.dtype) -> torch.Tensor:
         import torch
         import warp as wp
 
         selected = torch.device(device or value.device)
-        if name not in self.fields or not value.numel():
-            return torch.empty(value.shape, dtype=torch.float32, device=selected)
+        shared_dtype = str(dtype).removeprefix("torch.")
+        if name not in self.fields or not value.numel() or shared_dtype not in SHARED_DTYPES:
+            return torch.empty(value.shape, dtype=dtype, device=selected)
         if name in self.allocations:
             raise RuntimeError(f"Published cache allocation was replaced: {name}")
-        allocation = allocate_shared(tuple(value.shape), "float32", selected)
+        allocation = allocate_shared(tuple(value.shape), shared_dtype, selected)
         tensor = wp.to_torch(allocation)
         self.allocations[name], self.tensors[name] = allocation, tensor
         return tensor

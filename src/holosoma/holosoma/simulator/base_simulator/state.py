@@ -3,8 +3,8 @@
 A backend binds each state quantity once, in ``prepare_sim``, with :meth:`SimState.register`. Its read
 returns the current value: a function returning a tensor (or a tuple of tensors, one per name), or a
 :class:`Columns` spec, a column selection of a backend tensor. The registry copies each value into a
-float32 buffer on ``device``, allocated on the first read, on the first access after the simulation
-state changed, and ``write`` flushes in-place changes back to the simulation, row by row.
+buffer of the field's dtype (float32 by default) on ``device``, allocated on the first read, on the first
+access after the simulation state changed, and ``write`` flushes in-place changes back to the simulation, row by row.
 
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
 simulation state. In-place writes reach the simulation before its next physics step, FK pass or any
@@ -30,7 +30,7 @@ from typing import Any, overload
 import torch
 
 Read = Callable[[], "torch.Tensor | tuple[torch.Tensor, ...]"]
-BufferAllocator = Callable[[str, torch.Tensor, torch.device | str | None], torch.Tensor]
+BufferAllocator = Callable[[str, torch.Tensor, torch.device | str | None, torch.dtype], torch.Tensor]
 
 DYNAMICS = "dynamics"
 """Fired when the simulation state changes: a physics step or a state write."""
@@ -39,7 +39,18 @@ KINEMATICS = "kinematics"
 
 
 class _Registration:
-    __slots__ = ("buffers", "clean", "invalidated_by", "invalidates", "linked", "names", "read", "valid", "write")
+    __slots__ = (
+        "buffers",
+        "clean",
+        "dtype",
+        "invalidated_by",
+        "invalidates",
+        "linked",
+        "names",
+        "read",
+        "valid",
+        "write",
+    )
 
     def __init__(
         self,
@@ -48,8 +59,10 @@ class _Registration:
         write: Callable[..., None] | None,
         invalidated_by: frozenset[str],
         invalidates: frozenset[str],
+        dtype: torch.dtype,
     ) -> None:
         self.names = names
+        self.dtype = dtype
         self.read = read
         self.write = write
         self.invalidated_by = invalidated_by | frozenset(names)
@@ -70,18 +83,18 @@ class _Registration:
     def allocate(
         self, values: Sequence[torch.Tensor], device: torch.device | str | None, allocator: BufferAllocator | None
     ) -> None:
-        """Allocate float32 buffers shaped like ``values`` on ``device`` (each value's, if None)."""
+        """Allocate buffers of the field's dtype shaped like ``values`` on ``device`` (each value's, if None)."""
         # Normal tensors even when first read inside inference mode: they are written in place later.
         with torch.inference_mode(False):
             buffers = tuple(
-                allocator(name, value, device)
+                allocator(name, value, device, self.dtype)
                 if allocator is not None
-                else torch.empty(value.shape, dtype=torch.float32, device=device or value.device)
+                else torch.empty(value.shape, dtype=self.dtype, device=device or value.device)
                 for name, value in zip(self.names, values, strict=True)
             )
         for buffer, value in zip(buffers, values, strict=True):
-            if buffer.shape != value.shape or buffer.dtype != torch.float32 or buffer.device != _device(device, value):
-                raise ValueError("State allocator must preserve shape, float32 dtype and device")
+            if buffer.shape != value.shape or buffer.dtype != self.dtype or buffer.device != _device(device, value):
+                raise ValueError("State allocator must preserve shape, the field's dtype and device")
         self.buffers = buffers
 
     def refresh(self, device: torch.device | str | None, allocator: BufferAllocator | None = None) -> None:
@@ -161,8 +174,9 @@ class SimState:
         self._buffer_allocator: BufferAllocator | None = None
 
     def set_buffer_allocator(self, allocator: BufferAllocator) -> None:
-        """Allocate cache buffers with ``allocator(name, value, device)``, which returns float32 storage shaped
-        like ``value``; call before the first cached read. Callers keep the storage's owner alive while it is used.
+        """Allocate cache buffers with ``allocator(name, value, device, dtype)``, which returns ``dtype`` storage
+        shaped like ``value``; call before the first cached read. Callers keep the storage's owner alive while it
+        is used.
         """
         if any(registration.buffers for registration in self._registrations):
             raise RuntimeError("State allocator must be selected before the first cached read")
@@ -177,6 +191,7 @@ class SimState:
         write: Callable[[torch.Tensor, torch.Tensor], None] | None = None,
         invalidated_by: Iterable[str] | None = None,
         invalidates: Iterable[str] | None = None,
+        dtype: torch.dtype = torch.float32,
     ) -> None: ...
 
     @overload
@@ -188,6 +203,7 @@ class SimState:
         write: Callable[..., None] | None = None,
         invalidated_by: Iterable[str] | None = None,
         invalidates: Iterable[str] | None = None,
+        dtype: torch.dtype = torch.float32,
     ) -> None: ...
 
     def register(
@@ -198,18 +214,19 @@ class SimState:
         write: Callable[..., None] | None = None,
         invalidated_by: Iterable[str] | None = None,
         invalidates: Iterable[str] | None = None,
+        dtype: torch.dtype = torch.float32,
     ) -> None:
         """Serve ``read``'s values as ``names``, re-read after a state change and flushed by ``write(rows, *buffers)``.
 
         ``read`` returns one tensor per name. Without ``write`` the tensors are read-only. ``invalidated_by``
-        and ``invalidates`` override the default tags (see the module docstring).
+        and ``invalidates`` override the default tags (see the module docstring); buffers have ``dtype``.
         """
         names = (names,) if isinstance(names, str) else tuple(names)
         if invalidated_by is None:
             invalidated_by = (DYNAMICS,) if write is not None else (DYNAMICS, KINEMATICS)
         if invalidates is None:
             invalidates = (KINEMATICS,) if write is not None else ()
-        registration = _Registration(names, read, write, frozenset(invalidated_by), frozenset(invalidates))
+        registration = _Registration(names, read, write, frozenset(invalidated_by), frozenset(invalidates), dtype)
         for name in names:
             self._unbind(name)
             self._by_name[name] = registration
@@ -348,6 +365,10 @@ class SimState:
     def names(self) -> list[str]:
         return [*self._by_name, *self._tensors]
 
+    def dtype(self, name: str) -> torch.dtype:
+        """The dtype of registered tensor ``name``'s buffer."""
+        return self._by_name[name].dtype
+
     def writable_names(self) -> list[str]:
         """Names of registered tensors whose in-place writes flush to the simulation."""
         return [name for name, registration in self._by_name.items() if registration.write is not None]
@@ -357,7 +378,7 @@ class SimState:
         registration = self._by_name.get(name)
         if registration is None:
             return torch.as_tensor(self._tensors[name][:]).clone()
-        return registration.values()[registration.names.index(name)].to(torch.float32).clone()
+        return registration.values()[registration.names.index(name)].to(registration.dtype).clone()
 
     def _unbind(self, name: str) -> None:
         self._tensors.pop(name, None)
