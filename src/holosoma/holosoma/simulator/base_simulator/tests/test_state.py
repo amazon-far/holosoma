@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from holosoma.simulator.base_simulator.state import DYNAMICS, KINEMATICS, Columns, SimState, StateTensor
+from holosoma.simulator.base_simulator.state import DERIVED, STATE, Columns, SimState, StateTensor
 
 pytestmark = pytest.mark.no_sim
 
@@ -195,7 +195,7 @@ def test_mutation_flushes_first_and_marks_stale_after_even_on_error() -> None:
         pass
 
     def failing_mutation() -> None:
-        with state.mutation(DYNAMICS):
+        with state.mutation(STATE):
             flushed_on_entry.append(bool(torch.all(backing[0] == -1.0)))
             raise MutationError
 
@@ -211,13 +211,13 @@ def test_linked_tensor_is_never_re_read_and_flushes_outside_writes() -> None:
     state, backing, reads, flushed = _counting_state(rows=3)
     outside = torch.zeros(3, 3)  # memory another writer owns
     linked = state.link({"x": outside})["x"]
-    with state.mutation(DYNAMICS):
+    with state.mutation(STATE):
         pass
     assert flushed == [[0, 1, 2]] and state.get("x") is linked and len(reads) == 2  # first read, changed rows
 
     outside[1] = 7.0  # the writer's change, then the version bump that reports it
     torch.autograd.graph.increment_version(linked)
-    with state.mutation(DYNAMICS):
+    with state.mutation(STATE):
         pass
     assert flushed[-1] == [1] and torch.equal(backing[1], torch.full((3,), 7.0))
     assert state.get("x") is linked and torch.equal(linked, outside)
@@ -236,7 +236,7 @@ def test_only_writable_tensors_link() -> None:
 
 @pytest.mark.parametrize(
     ("event", "joint_reread", "pose_reread"),
-    [("dynamics", True, True), ("kinematics", False, True), ("pose write", False, False), ("joint write", False, True)],
+    [("state", True, True), ("derived", False, True), ("pose write", False, False), ("joint write", False, True)],
 )
 def test_tags_decide_what_goes_stale(event: str, joint_reread: bool, pose_reread: bool) -> None:
     state = SimState()
@@ -255,8 +255,8 @@ def test_tags_decide_what_goes_stale(event: str, joint_reread: bool, pose_reread
     state.register("mount", lambda: mount, write=lambda _rows, out: mount.copy_(out), invalidates=())
     for name in ("joints", "poses", "mount"):
         state.get(name)
-    if event in ("dynamics", "kinematics"):
-        with state.mutation(DYNAMICS if event == "dynamics" else KINEMATICS):
+    if event in ("state", "derived"):
+        with state.mutation(STATE if event == "state" else DERIVED):
             pass
     else:
         state.get("mount" if event == "pose write" else "joints")[0, 0] = 1.0

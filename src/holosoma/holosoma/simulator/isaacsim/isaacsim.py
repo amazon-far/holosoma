@@ -50,7 +50,7 @@ from holosoma.simulator.isaacsim.object_spawner import (
     physics_material_cfg,
 )
 from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures, register_terrain_mesh_cache
-from holosoma.simulator.base_simulator.state import DYNAMICS, Columns
+from holosoma.simulator.base_simulator.state import STATE, Columns
 from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
 from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
 from holosoma.simulator.shared.external_wrench import WrenchTarget
@@ -801,7 +801,7 @@ class IsaacSim(BaseSimulator):
 
     def _advance_substep(self) -> None:
         self._sim_step_counter += 1
-        with self.state.mutation(DYNAMICS):
+        with self.state.mutation(STATE):
             if self.kinematic_playback:
                 # sim.current_time does not advance.
                 self._forward_kinematics()
@@ -940,7 +940,7 @@ class IsaacSim(BaseSimulator):
         flag). ``write_updates=True`` (default) flushes via :meth:`write_state_updates`
         (``scene.write_data_to_sim``); ``False`` defers for batching.
         """
-        with self.state.mutation(DYNAMICS):
+        with self.state.mutation(STATE):
             self._state_adapter.write_states_by_index(indices, states)
         if write_updates:
             self.write_state_updates()

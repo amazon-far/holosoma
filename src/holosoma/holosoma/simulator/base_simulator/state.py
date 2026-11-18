@@ -13,11 +13,11 @@ state write that would replace them: the changed rows (environments) are flushed
 written from outside: they are never re-read, and their changed rows flush like in-place writes.
 
 Fields go stale by tag. Each is invalidated by its own name and by its ``invalidated_by`` tags; by default
-writable fields by :data:`DYNAMICS` and read-only (derived) fields by :data:`DYNAMICS` and :data:`KINEMATICS`.
+writable fields by :data:`STATE` and read-only (derived) fields by :data:`DERIVED`, which :data:`STATE` implies.
 Backends wrap every state mutation in :meth:`SimState.mutation`, which flushes pending writes first and fires
-its tag after: :data:`DYNAMICS` when the simulation state changes, :data:`KINEMATICS` when only quantities
+its tag after: :data:`STATE` when the simulation state changes, :data:`DERIVED` when only quantities
 derived from it are recomputed. A flush that writes rows of a field fires that field's ``invalidates`` tags
-(by default :data:`KINEMATICS` for writable fields).
+(by default :data:`DERIVED` for writable fields).
 """
 
 from __future__ import annotations
@@ -32,10 +32,10 @@ import torch
 Read = Callable[[], "torch.Tensor | tuple[torch.Tensor, ...]"]
 BufferAllocator = Callable[[str, torch.Tensor, torch.device | str | None, torch.dtype], torch.Tensor]
 
-DYNAMICS = "dynamics"
-"""Fired when the simulation state changes: a physics step or a state write."""
-KINEMATICS = "kinematics"
-"""Fired when quantities derived from the simulation's inputs change: an FK pass, or a flushed input write."""
+STATE = "state"
+"""Fired when the simulation's state changes (a physics step or a backend state write); implies :data:`DERIVED`."""
+DERIVED = "derived"
+"""Fired when only quantities derived from the simulation's inputs change: an FK pass or a flushed input write."""
 
 
 class _Registration:
@@ -245,9 +245,9 @@ class SimState:
         """
         names = (names,) if isinstance(names, str) else tuple(names)
         if invalidated_by is None:
-            invalidated_by = (DYNAMICS,) if write is not None else (DYNAMICS, KINEMATICS)
+            invalidated_by = (STATE,) if write is not None else (DERIVED,)
         if invalidates is None:
-            invalidates = (KINEMATICS,) if write is not None else ()
+            invalidates = (DERIVED,) if write is not None else ()
         registration = _Registration(names, read, write, frozenset(invalidated_by), frozenset(invalidates), dtype)
         for name in names:
             self._unbind(name)
@@ -347,6 +347,8 @@ class SimState:
     def invalidate(self, tags: Iterable[str]) -> None:
         """Mark stale every tensor invalidated by one of ``tags``; linked tensors are never stale."""
         tags = set(tags)
+        if STATE in tags:
+            tags.add(DERIVED)
         for registration in self._registrations:
             if not registration.linked and not tags.isdisjoint(registration.invalidated_by):
                 registration.valid = False
