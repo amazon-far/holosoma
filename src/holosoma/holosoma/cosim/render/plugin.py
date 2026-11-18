@@ -13,8 +13,9 @@ plugin by subclassing :class:`holosoma.cosim.base.PeerHandler`; :mod:`.renderer`
 - ``meta["sensors"]`` (:func:`sensor_settings`): per remote camera, ``vertical_fov`` in degrees, ``near`` and
   ``far`` in meters, ``depth_clipping_behavior``, and ``mount`` (a ``SensorMountConfig``): ``target_kind``
   ``robot_link``, ``actor`` or ``world``; ``target``, a ``body_names`` or ``object_names`` entry; and
-  ``position`` and ``orientation`` ``[w, x, y, z]`` in the target's frame, or the environment's for ``world``. Identity looks along ``-Z`` with ``+Y`` up. The renderer replies with the
-  settings it applies, which must match.
+  ``position`` and ``orientation`` ``[w, x, y, z]`` in the target's frame, or the environment's for ``world``.
+  Identity looks along ``-Z`` with ``+Y`` up. The renderer replies with the settings it applies, which must
+  match.
 - Requests (:func:`output_fields`): the remote cameras' SimState output fields, ``camera/<name>/rgb``
   ``uint8 [E, H, W, 3]`` and ``camera/<name>/depth`` ``float32 [E, H, W, 1]``, metric distance to the image
   plane with the camera's ``depth_clipping_behavior`` applied.
