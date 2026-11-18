@@ -18,7 +18,7 @@ marks every tensor stale after.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, overload
@@ -251,33 +251,48 @@ class SimState:
             if not registration.linked and (selected is None or not selected.isdisjoint(registration.names)):
                 registration.valid = False
 
-    def link(self, names: Iterable[str]) -> dict[str, torch.Tensor]:
-        """Serve the writable tensors ``names`` from memory written outside the simulation, and return them.
+    def link(self, sources: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Serve writable tensors from ``sources``' memory (``set_``), written outside the simulation; return them.
 
-        The caller moves each returned tensor onto that memory (``set_``). Linked tensors are never re-read;
-        in-place writes, including version bumps for outside writes, flush their changed rows. Each
-        registration's names are linked together.
+        Linked tensors are never re-read. Whoever writes ``sources`` reports each write as a version bump on the
+        returned tensor (``torch.autograd.graph.increment_version``); the next flush then writes the changed
+        rows. Each registration's names are linked together.
         """
-        names = list(names)
-        registrations = {id(self._by_name.get(name)): self._by_name.get(name) for name in names}
+        registrations = {id(self._by_name.get(name)): self._by_name.get(name) for name in sources}
         for registration in registrations.values():
             if registration is None or registration.write is None:
-                raise ValueError(f"Simulator state {names} must all be writable to link")
-            if missing := [name for name in registration.names if name not in names]:
+                raise ValueError(f"Simulator state {sorted(sources)} must all be writable to link")
+            if missing := [name for name in registration.names if name not in sources]:
                 raise ValueError(f"Simulator state {', '.join(registration.names)} must be linked together: {missing}")
-        tensors = {name: self.get(name) for name in names}
+        tensors = {name: self.get(name) for name in sources}
+        for name, source in sources.items():
+            tensor = tensors[name]
+            if (source.shape, source.dtype, source.device) != (tensor.shape, tensor.dtype, tensor.device):
+                raise ValueError(
+                    f"Simulator state {name!r} is {tensor.dtype} {tuple(tensor.shape)} on {tensor.device}, "
+                    f"cannot link {source.dtype} {tuple(source.shape)} on {source.device}"
+                )
+        with torch.inference_mode(False):
+            for name, source in sources.items():
+                tensors[name].set_(source)
         for registration in registrations.values():
             assert registration is not None
             registration.linked = True
         return tensors
 
     def unlink(self, names: Iterable[str]) -> None:
-        """Serve ``names`` from the simulation again, re-read at the next access; unflushed writes are dropped."""
-        for name in names:
-            registration = self._by_name[name]
-            registration.linked = False
-            registration.valid = False
-            registration.mark_clean()
+        """Move ``names`` onto their own memory, holding the last values, and re-read them from the simulation.
+
+        Writes not yet flushed are dropped.
+        """
+        with torch.inference_mode(False):
+            for name in names:
+                registration = self._by_name[name]
+                buffer = registration.buffers[registration.names.index(name)]
+                buffer.set_(buffer.clone())
+                registration.linked = False
+                registration.valid = False
+                registration.mark_clean()
 
     def get(self, name: str) -> Any:
         registration = self._by_name.get(name)

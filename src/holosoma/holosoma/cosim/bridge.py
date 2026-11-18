@@ -274,7 +274,10 @@ class HeadBridge:
         try:
             # Unmap imports before the peer may free them.
             torch.cuda.synchronize(self.simulator.sim_device)
-            self._imports.release()
+            try:
+                self._imports.verify_read_only()
+            finally:
+                self._imports.release()
             if not self.failed:
                 reply = self.control.exchange(MessageType.CLOSE_REQUEST)
                 if reply["type"] != MessageType.CLOSE_REPLY:
@@ -298,8 +301,8 @@ class PeerHandlerProtocol(Protocol):
     ) -> tuple[str, ...]:
         """Accept the head, allocate :attr:`allocations` and return the state fields to read; raise to refuse."""
 
-    def targets(self, reads: Sequence[str]) -> Mapping[str, torch.Tensor]:
-        """Tensors to move onto the mapped head fields in ``reads``, by name; they then serve as ``state``."""
+    def link(self, imports: Mapping[str, torch.Tensor]) -> Mapping[str, torch.Tensor]:
+        """Link tensors of the handler's own onto the mapped head fields ``imports``; they then serve as ``state``."""
 
     def process(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:
         """Process the head's ``state`` for ``snapshot`` and fill the exports.
@@ -310,8 +313,8 @@ class PeerHandlerProtocol(Protocol):
     def written(self) -> list[str]:
         """Exports written since the last call."""
 
-    def close(self) -> None:
-        """Release what :meth:`targets` linked; called once the mapping is released."""
+    def unlink(self) -> None:
+        """Move what :meth:`link` linked off the mapping; called before the mapping is released."""
 
 
 class PeerBridge:
@@ -358,11 +361,8 @@ class PeerBridge:
                         reads = self.handler.open(shared, requests, message["meta"])
                         if unknown := sorted(set(reads) - {spec.name for spec in shared}):
                             raise ValueError(f"Peer reads state fields {unknown} the head does not share")
-                        mapped = MappedBuffers(
-                            [spec for spec in shared if spec.name in reads],
-                            device=device,
-                            targets=self.handler.targets(reads),
-                        )
+                        mapped = MappedBuffers([spec for spec in shared if spec.name in reads], device=device)
+                        mapped.serve(self.handler.link(mapped.tensors))
                         ready = wp.event_from_ipc_handle(bytes.fromhex(message["ready_handle"]), device=device)
                         done = wp.Event(device=device, interprocess=True)
                         head_pid = int(message["head_pid"])
@@ -396,6 +396,8 @@ class PeerBridge:
                         )
                     elif command == MessageType.CLOSE_REQUEST and mapped is not None:
                         torch.cuda.synchronize(device)
+                        mapped.verify_read_only()
+                        self.handler.unlink()
                         mapped.release()
                         mapped = None
                         self.control.socket.send_json({"type": MessageType.CLOSE_REPLY})
@@ -409,10 +411,8 @@ class PeerBridge:
             if mapped is not None:
                 with contextlib.suppress(Exception):  # Keep the original failure.
                     torch.cuda.synchronize(device)
+                    self.handler.unlink()
                     mapped.release()
             raise
         finally:
-            try:
-                self.handler.close()
-            finally:
-                self.control.close()
+            self.control.close()

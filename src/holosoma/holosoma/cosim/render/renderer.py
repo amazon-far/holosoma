@@ -16,7 +16,7 @@ here as ordinary cameras. Start the renderer before the head; it exits when the 
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import replace
 from typing import Any
@@ -123,11 +123,11 @@ class RenderHandler(PeerHandler):
             wanted[name] = (tuple(own.shape), str(own.dtype).removeprefix("torch."))
         return self.matching_fields(state, wanted)
 
-    def targets(self, reads: Sequence[str]) -> Mapping[str, torch.Tensor]:
-        self._linked = tuple(reads)
-        return self.simulator.state.link(reads)
+    def link(self, imports: Mapping[str, torch.Tensor]) -> Mapping[str, torch.Tensor]:
+        self._linked = tuple(imports)
+        return self.simulator.state.link(imports)
 
-    def close(self) -> None:
+    def unlink(self) -> None:
         self.simulator.state.unlink(self._linked)
         self._linked = ()
 

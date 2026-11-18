@@ -110,22 +110,17 @@ def shared_state_allocator(simulator: BaseSimulator) -> SharedStateAllocator:
 class MappedBuffers:
     """Own imports until SDK and caller views have been released.
 
-    Each import is served as one tensor: the given target, moved onto it with ``set_``, or Warp's view. Its
-    version moves for local in-place writes and for :meth:`record_writes`, which records the owner's writes.
+    Each import is served as one tensor: Warp's view, or one :meth:`serve` substitutes for it. Its version moves
+    for local in-place writes and for :meth:`record_writes`, which records the owner's writes.
     """
 
-    def __init__(
-        self, specs: Iterable[BufferSpec], *, device: str, targets: Mapping[str, torch.Tensor] | None = None
-    ) -> None:
-        import torch
+    def __init__(self, specs: Iterable[BufferSpec], *, device: str) -> None:
         import warp as wp
 
-        targets = targets or {}
         self.arrays: dict[str, Any] = {}
         self.tensors: dict[str, torch.Tensor] = {}
         self.versions: dict[str, int] = {}
-        self.references: dict[str, tuple[Any, ...]] = {}
-        self.adopted: list[str] = []
+        self.references: dict[str, tuple[Any, Any]] = {}
         for spec in specs:
             if spec.name in self.arrays:
                 raise ValueError(f"Duplicate IPC buffer: {spec.name}")
@@ -135,21 +130,21 @@ class MappedBuffers:
                 bytes.fromhex(spec.handle), shape=spec.shape, dtype=getattr(wp, spec.dtype), device=device
             )
             tensor = wp.to_torch(allocation)
-            self.arrays[spec.name] = allocation
-            self.references[spec.name] = (weakref.ref(allocation), weakref.ref(tensor))
-            target = targets.get(spec.name)
-            if target is not None:
-                if (target.shape, target.dtype, target.device) != (tensor.shape, tensor.dtype, tensor.device):
-                    raise ValueError(
-                        f"Target for {spec.name!r} is {target.dtype} {tuple(target.shape)} on {target.device}, "
-                        f"the import is {tensor.dtype} {tuple(tensor.shape)} on {tensor.device}"
-                    )
-                with torch.inference_mode(False):
-                    target.set_(tensor)
-                tensor = target
-                self.adopted.append(spec.name)
-            self.tensors[spec.name] = tensor
+            self.arrays[spec.name], self.tensors[spec.name] = allocation, tensor
             self.versions[spec.name] = tensor._version
+            self.references[spec.name] = (weakref.ref(allocation), weakref.ref(tensor))
+
+    def serve(self, tensors: Mapping[str, torch.Tensor]) -> None:
+        """Serve ``tensors``, already linked onto these imports' memory, in place of Warp's views.
+
+        Their holders must move them off the imports before :meth:`release`.
+        """
+        for name, tensor in tensors.items():
+            mapped = self.tensors[name]
+            if tensor.data_ptr() != mapped.data_ptr() or tensor.shape != mapped.shape or tensor.dtype != mapped.dtype:
+                raise ValueError(f"Tensor served as {name!r} does not use the import's memory")
+            self.tensors[name] = tensor
+            self.versions[name] = tensor._version
 
     def _written(self) -> list[str]:
         return [name for name, tensor in self.tensors.items() if tensor._version != self.versions[name]]
@@ -175,21 +170,10 @@ class MappedBuffers:
             self.versions[name] = tensor._version
 
     def release(self) -> None:
-        """Move adopted targets onto their own memory, holding the last values, and drop every mapping."""
-        import torch
-
-        written = self._written()
-        with torch.inference_mode(False):
-            for name in self.adopted:
-                tensor = self.tensors[name]
-                tensor.set_(tensor.clone())
+        """Drop every mapping; raise if a tensor still uses one. Call :meth:`verify_read_only` first."""
         self.tensors.clear()
         self.arrays.clear()
         gc.collect()
-        if written:
-            raise RuntimeError(
-                f"Borrowed IPC buffers {written} were written in place; only their allocating process writes them"
-            )
         retained = [name for name, refs in self.references.items() if any(ref() is not None for ref in refs)]
         if retained:
             raise RuntimeError(f"IPC mappings are still referenced: {retained}")

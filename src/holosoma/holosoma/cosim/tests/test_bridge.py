@@ -90,10 +90,13 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
         release_error: Exception | None = None
         names: list[str] = []
 
-        def __init__(self, descriptions: Any, *, device: str, targets: Any) -> None:
-            calls.append(("map", sorted(targets)))
+        def __init__(self, descriptions: Any, *, device: str) -> None:
+            calls.append("map")
             Mapped.names = [spec.name for spec in descriptions]
-            self.tensors = values
+            self.tensors = {spec.name: values[spec.name] for spec in descriptions if spec.name in values}
+
+        def serve(self, tensors: Any) -> None:
+            calls.append(("serve", sorted(tensors)))
 
         def record_writes(self, names: list[str]) -> None:
             calls.append(("record_writes", names))
@@ -125,7 +128,7 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
         state=SimpleNamespace(
             writable_names=lambda: list(values),
             get=values.__getitem__,
-            link=lambda names: {name: values[name] for name in names},
+            link=lambda sources: {name: values[name] for name in sources},
             unlink=lambda names: calls.append(("unlink", list(names))),
         ),
         sensor_manager=SensorManager("cpu", 50.0),
@@ -150,9 +153,9 @@ def test_peer_frame_lifecycle(peer: PeerFixture) -> None:
     worker, calls, replies, _messages = peer
     worker.run()
     place = ("place", [[0.0, 0.0, 0.0]])
-    assert _in_order(calls, place, ("map", []), "ready", ("record_writes", ["dof_pos"]), "capture")
+    assert _in_order(calls, place, "map", ("serve", []), "ready", ("record_writes", ["dof_pos"]), "capture")
     assert cast("Any", worker.handler).simulator.kinematic_time == 0.035
-    assert _in_order(calls, "capture", "readonly", "done", "unmap", ("unlink", []), "close")
+    assert _in_order(calls, "capture", "readonly", "done", "readonly", ("unlink", []), "unmap", "close")
     assert replies == [
         {"type": "OPEN_REPLY", "done_handle": "01", "exports": [], "reads": []},
         {"type": "EXCHANGE_REPLY", "sequence": 1, "written": []},
@@ -193,7 +196,7 @@ def test_remote_camera_mismatch_fails_before_mapping(peer: PeerFixture, change: 
     messages[0]["requests"] = [bridge.as_received(asdict(replace(request, **change)))]
     with pytest.raises(ValueError, match="differs|no camera output"):
         worker.run()
-    assert not any(call[0] == "map" for call in calls if isinstance(call, tuple))
+    assert "map" not in calls
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
 
 
@@ -225,7 +228,7 @@ def test_peer_maps_only_the_fields_its_handler_reads(peer: PeerFixture, reader: 
     expected = ["contact_forces"] if reader else ["dof_pos"]
     assert replies[0]["reads"] == expected
     assert bridge.MappedBuffers.names == expected  # type: ignore[attr-defined]
-    assert ("map", [] if reader else ["dof_pos"]) in calls
+    assert ("serve", [] if reader else ["dof_pos"]) in calls
     if reader:
         assert len(cast("Any", handler).seen) == 1
 
@@ -235,7 +238,7 @@ def test_reading_a_field_the_head_does_not_share_fails_before_mapping(peer: Peer
     handler = _ReadingHandler(("contact_forces",))
     with pytest.raises(ValueError, match="does not share"):
         bridge.PeerBridge(cast("Any", handler), endpoint="ipc:///unused").run()
-    assert not any(call[0] == "map" for call in calls if isinstance(call, tuple)) and replies[-1]["type"] == "ERROR"
+    assert "map" not in calls and replies[-1]["type"] == "ERROR"
 
 
 def test_duplicate_frame_is_rejected_and_import_is_released(peer: PeerFixture, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -245,7 +248,7 @@ def test_duplicate_frame_is_rejected_and_import_is_released(peer: PeerFixture, m
     with pytest.raises(ValueError, match="consecutive"):
         worker.run()
     assert calls.count("capture") == 1
-    assert replies[-1]["type"] == "ERROR" and calls[-3:] == ["unmap", ("unlink", []), "close"]
+    assert replies[-1]["type"] == "ERROR" and calls[-3:] == [("unlink", []), "unmap", "close"]
 
 
 def test_peer_stops_waiting_when_the_head_exits(peer: PeerFixture) -> None:
@@ -256,7 +259,7 @@ def test_peer_stops_waiting_when_the_head_exits(peer: PeerFixture) -> None:
     cast("Any", worker.control).socket.poll = lambda _ms: False
     with pytest.raises(RuntimeError, match="exited without closing"):
         worker.run()
-    assert calls[-3:] == ["unmap", ("unlink", []), "close"]
+    assert calls[-3:] == [("unlink", []), "unmap", "close"]
 
 
 def test_exchange_after_an_interrupted_request_takes_the_right_reply(tmp_path: Path) -> None:
@@ -295,7 +298,9 @@ class _Owner:
         self.tensor = torch.zeros(shape, dtype=getattr(torch, dtype))
 
 
-def test_mapped_buffers_serve_the_target_and_tell_owner_writes_from_local_ones(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mapped_buffers_serve_linked_tensors_and_tell_owner_writes_from_local_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     allocations: list[_Owner] = []
 
     def import_buffer(_handle: bytes, *, shape: tuple[int, ...], dtype: str, device: str) -> _Owner:
@@ -304,22 +309,22 @@ def test_mapped_buffers_serve_the_target_and_tell_owner_writes_from_local_ones(m
 
     warp = SimpleNamespace(from_ipc_handle=import_buffer, to_torch=lambda owner: owner.tensor, float32="float32")
     monkeypatch.setitem(sys.modules, "warp", warp)
-    target = torch.ones(2, 3)
-    mapped = cosim_cuda.MappedBuffers([BufferSpec("x", (2, 3), "00")], device="cpu", targets={"x": target})
-    assert mapped.tensors["x"] is target and target.data_ptr() == allocations[0].tensor.data_ptr()
+    mapped = cosim_cuda.MappedBuffers([BufferSpec("x", (2, 3), "00")], device="cpu")
+    linked = torch.ones(2, 3)
+    linked.set_(mapped.tensors["x"])
+    mapped.serve({"x": linked})
+    assert mapped.tensors["x"] is linked
+    with pytest.raises(ValueError, match="does not use the import's memory"):
+        mapped.serve({"x": torch.zeros(2, 3)})
 
-    version = target._version
+    version = linked._version
     mapped.record_writes(["x"])  # the owner wrote it
     mapped.verify_read_only()
-    assert target._version == version + 1
+    assert linked._version == version + 1
 
-    target.add_(1)  # a local write
+    linked.add_(1)  # a local write
     with pytest.raises(RuntimeError, match=r"\['x'\] were written in place"):
         mapped.record_writes(["x"])
-    allocations.clear()
-    with pytest.raises(RuntimeError, match="written in place"):
-        mapped.release()
-    assert torch.equal(target, torch.ones(2, 3))  # on its own memory, holding the last values
 
 
 def test_publisher_without_shared_state_fails_before_connecting(monkeypatch: pytest.MonkeyPatch) -> None:

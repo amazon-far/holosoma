@@ -74,7 +74,7 @@ class PeerHandler:
     """A peer's side of the exchange: choose the state to read, answer requests and fill exports.
 
     Each export is copied from its :meth:`export_source` after every :meth:`step`. Subclasses override :meth:`accept`,
-    :meth:`reads`, :meth:`export_source` and :meth:`step`, and :meth:`targets` and :meth:`close` to read the
+    :meth:`reads`, :meth:`export_source` and :meth:`step`, and :meth:`link` and :meth:`unlink` to read the
     head's state through tensors of their own.
     """
 
@@ -119,12 +119,12 @@ class PeerHandler:
         """The head's shared state fields to map and receive each exchange."""
         return ()
 
-    def targets(self, reads: Sequence[str]) -> Mapping[str, torch.Tensor]:
-        """Tensors to move onto the mapped head fields in ``reads``; they then serve as ``state``."""
+    def link(self, imports: Mapping[str, torch.Tensor]) -> Mapping[str, torch.Tensor]:
+        """Link tensors of the handler's own onto the mapped head fields ``imports``; they then serve as ``state``."""
         return {}
 
-    def close(self) -> None:
-        """Release what :meth:`targets` linked; called once the mapping is released."""
+    def unlink(self) -> None:
+        """Move what :meth:`link` linked off the mapping; called before the mapping is released."""
 
     def export_source(self, request: BufferRequest) -> Callable[[], torch.Tensor]:
         """Return what fills the export for ``request`` after each step; raise if it cannot be answered."""
