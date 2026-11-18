@@ -28,7 +28,7 @@ def replica(monkeypatch: pytest.MonkeyPatch) -> tuple[SimpleNamespace, list[obje
     monkeypatch.setattr(torch.cuda, "synchronize", lambda _device: None)
 
     @contextmanager
-    def mutation() -> Iterator[None]:
+    def mutation(_tag: str) -> Iterator[None]:
         calls.append("flush")
         try:
             yield

@@ -15,7 +15,7 @@ from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.hooks import HookHandle, HookRegistry, Phase
-from holosoma.simulator.base_simulator.state import SimState, StateTensor
+from holosoma.simulator.base_simulator.state import KINEMATICS, SimState, StateTensor
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
@@ -50,7 +50,7 @@ class BaseSimulator:
     ``self.state`` (:class:`~holosoma.simulator.base_simulator.state.SimState`). They are current at
     every read, and written by assigning into them in place; call :meth:`forward_kinematics` when a
     write must be visible before the next physics step. Code that changes the simulation's state
-    through the backend instead must wrap the change in ``with sim.state.mutation():``, so the served
+    through the backend instead must wrap the change in ``with sim.state.mutation(DYNAMICS):``, so the served
     tensors are re-read afterwards.
 
     Actor Concept
@@ -669,7 +669,7 @@ class BaseSimulator:
 
         In-place writes otherwise land at the next physics step. No dynamics, rendering or time advance.
         """
-        with self.state.mutation():
+        with self.state.mutation(KINEMATICS):
             self._forward_kinematics()
 
     def _forward_kinematics(self) -> None:
@@ -886,7 +886,7 @@ class BaseSimulator:
                     if differs.any():
                         poses[rows[differs]] = stored[differs]
 
-            state.register(f"mount_pose/{record.name}", lambda: record.mount_poses, write=write)
+            state.register(f"mount_pose/{record.name}", lambda: record.mount_poses, write=write, invalidates=())
 
         for record in [*manager.cameras, *manager.lidars]:
             if record.mount_poses is not None:

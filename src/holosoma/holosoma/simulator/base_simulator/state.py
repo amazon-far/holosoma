@@ -12,8 +12,12 @@ state write that would replace them: the changed rows (environments) are flushed
 ``write``. A tensor bound without ``write`` is read-only. :meth:`SimState.link` serves writable tensors whose memory is
 written from outside: they are never re-read, and their changed rows flush like in-place writes.
 
-Backends wrap every state mutation in :meth:`SimState.mutation`, which flushes pending writes first and
-marks every tensor stale after.
+Fields go stale by tag. Each is invalidated by its own name and by its ``invalidated_by`` tags; by default
+writable fields by :data:`DYNAMICS` and read-only (derived) fields by :data:`DYNAMICS` and :data:`KINEMATICS`.
+Backends wrap every state mutation in :meth:`SimState.mutation`, which flushes pending writes first and fires
+its tag after: :data:`DYNAMICS` when the simulation state changes, :data:`KINEMATICS` when only quantities
+derived from it are recomputed. A flush that writes rows of a field fires that field's ``invalidates`` tags
+(by default :data:`KINEMATICS` for writable fields).
 """
 
 from __future__ import annotations
@@ -28,14 +32,28 @@ import torch
 Read = Callable[[], "torch.Tensor | tuple[torch.Tensor, ...]"]
 BufferAllocator = Callable[[str, torch.Tensor, torch.device | str | None], torch.Tensor]
 
+DYNAMICS = "dynamics"
+"""Fired when the simulation state changes: a physics step or a state write."""
+KINEMATICS = "kinematics"
+"""Fired when quantities derived from the simulation's inputs change: an FK pass, or a flushed input write."""
+
 
 class _Registration:
-    __slots__ = ("buffers", "clean", "linked", "names", "read", "valid", "write")
+    __slots__ = ("buffers", "clean", "invalidated_by", "invalidates", "linked", "names", "read", "valid", "write")
 
-    def __init__(self, names: tuple[str, ...], read: Read, write: Callable[..., None] | None) -> None:
+    def __init__(
+        self,
+        names: tuple[str, ...],
+        read: Read,
+        write: Callable[..., None] | None,
+        invalidated_by: frozenset[str],
+        invalidates: frozenset[str],
+    ) -> None:
         self.names = names
         self.read = read
         self.write = write
+        self.invalidated_by = invalidated_by | frozenset(names)
+        self.invalidates = invalidates
         self.buffers: tuple[torch.Tensor, ...] = ()
         self.valid = False
         self.linked = False
@@ -157,6 +175,8 @@ class SimState:
         read: Columns,
         *,
         write: Callable[[torch.Tensor, torch.Tensor], None] | None = None,
+        invalidated_by: Iterable[str] | None = None,
+        invalidates: Iterable[str] | None = None,
     ) -> None: ...
 
     @overload
@@ -166,6 +186,8 @@ class SimState:
         read: Read,
         *,
         write: Callable[..., None] | None = None,
+        invalidated_by: Iterable[str] | None = None,
+        invalidates: Iterable[str] | None = None,
     ) -> None: ...
 
     def register(
@@ -174,13 +196,20 @@ class SimState:
         read: Columns | Read,
         *,
         write: Callable[..., None] | None = None,
+        invalidated_by: Iterable[str] | None = None,
+        invalidates: Iterable[str] | None = None,
     ) -> None:
         """Serve ``read``'s values as ``names``, re-read after a state change and flushed by ``write(rows, *buffers)``.
 
-        ``read`` returns one tensor per name. Without ``write`` the tensors are read-only.
+        ``read`` returns one tensor per name. Without ``write`` the tensors are read-only. ``invalidated_by``
+        and ``invalidates`` override the default tags (see the module docstring).
         """
         names = (names,) if isinstance(names, str) else tuple(names)
-        registration = _Registration(names, read, write)
+        if invalidated_by is None:
+            invalidated_by = (DYNAMICS,) if write is not None else (DYNAMICS, KINEMATICS)
+        if invalidates is None:
+            invalidates = (KINEMATICS,) if write is not None else ()
+        registration = _Registration(names, read, write, frozenset(invalidated_by), frozenset(invalidates))
         for name in names:
             self._unbind(name)
             self._by_name[name] = registration
@@ -194,19 +223,18 @@ class SimState:
         self._tensors[name] = tensor
 
     @contextmanager
-    def mutation(self) -> Iterator[None]:
-        """Wrap a mutation of the simulation state: flush pending writes first, mark every tensor stale after."""
+    def mutation(self, tag: str) -> Iterator[None]:
+        """Wrap a mutation of the simulation state: flush pending writes first, fire ``tag`` after."""
         self.flush_writes()
         try:
             yield
         finally:
-            self.mark_stale()
+            self.invalidate({tag})
 
     def flush_writes(self) -> None:
-        """Write the rows written in place to the simulation, then mark read-only tensors stale if any were.
+        """Write the rows written in place to the simulation, then fire the ``invalidates`` tags of the fields written.
 
-        Writable tensors stay valid: each is an independent input, so a write changes no other writable
-        tensor, and a flushed buffer already holds what the simulation now has.
+        A flushed buffer already holds what the simulation now has, so it stays valid.
         """
         stale_written = [
             registration
@@ -228,28 +256,34 @@ class SimState:
                 registration.valid = False
             names = ", ".join(name for registration in read_only for name in registration.names)
             raise RuntimeError(f"Simulator state {names} is read-only")
-        flushed = False
+        fired: set[str] = set()
         # Compare every written tensor with the simulation before writing any of them back.
         for registration, rows in [(registration, registration.changed_rows()) for registration in written]:
             if rows.numel():
                 assert registration.write is not None
                 registration.write(rows, *registration.buffers)
-                flushed = True
+                fired |= registration.invalidates
             registration.mark_clean()
-        if flushed:
-            for registration in self._registrations:
-                if registration.write is None:
-                    registration.valid = False
+        self.invalidate(fired)
+
+    def invalidate(self, tags: Iterable[str]) -> None:
+        """Mark stale every tensor invalidated by one of ``tags``; linked tensors are never stale."""
+        tags = set(tags)
+        for registration in self._registrations:
+            if not registration.linked and not tags.isdisjoint(registration.invalidated_by):
+                registration.valid = False
 
     def mark_stale(self, names: str | Iterable[str] | None = None) -> None:
         """Mark every tensor stale, or only those registered with ``names``, so the next access re-reads it.
 
         Linked tensors stay valid.
         """
-        selected = None if names is None else {names} if isinstance(names, str) else set(names)
-        for registration in self._registrations:
-            if not registration.linked and (selected is None or not selected.isdisjoint(registration.names)):
-                registration.valid = False
+        if names is None:
+            for registration in self._registrations:
+                if not registration.linked:
+                    registration.valid = False
+        else:
+            self.invalidate({names} if isinstance(names, str) else names)
 
     def link(self, sources: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Serve writable tensors from ``sources``' memory (``set_``), written outside the simulation; return them.

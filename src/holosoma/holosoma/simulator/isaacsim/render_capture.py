@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from holosoma.simulator.base_simulator.state import KINEMATICS
+
 if TYPE_CHECKING:
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
 
@@ -55,7 +57,7 @@ class RenderCapture:
             raise RuntimeError("Isaac physics advanced between rendered frames")
         self.settings.set_bool(_PLAY_SIMULATIONS, False)
         try:
-            with simulator.state.mutation():
+            with simulator.state.mutation(KINEMATICS):
                 simulator.write_state_updates()
                 simulator.render()
                 self.settings.set_bool(_PLAY_SIMULATIONS, False)

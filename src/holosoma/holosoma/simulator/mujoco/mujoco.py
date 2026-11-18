@@ -20,7 +20,7 @@ from holosoma.config_types.simulator import MujocoBackend
 from holosoma.managers.terrain.manager import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import Phase
-from holosoma.simulator.base_simulator.state import Columns
+from holosoma.simulator.base_simulator.state import DYNAMICS, Columns
 from holosoma.simulator.mujoco import light_setup
 from holosoma.simulator.mujoco.backends import WARP_AVAILABLE, ClassicBackend, IMujocoBackend, WarpBackend
 from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags, mj_to_holosoma_quat
@@ -889,7 +889,7 @@ class MuJoCo(BaseSimulator):
 
     def _advance_substep(self) -> None:
         """Advance simulation by one physics step."""
-        with self.state.mutation():
+        with self.state.mutation(DYNAMICS):
             if self.kinematic_playback:
                 self._forward_kinematics()
             else:
@@ -1087,7 +1087,7 @@ class MuJoCo(BaseSimulator):
             return
 
         resolved_objects = self.object_registry.resolve_indices(indices)
-        with self.state.mutation():
+        with self.state.mutation(DYNAMICS):
             self._write_actor_rows(resolved_objects, states)
 
         if write_updates:
@@ -1211,7 +1211,7 @@ class MuJoCo(BaseSimulator):
             begins with forward kinematics) consumes the updated GPU qpos/qvel; no
             out-of-graph GPU forward runs here.
         """
-        with self.state.mutation():
+        with self.state.mutation(DYNAMICS):
             if isinstance(self.backend, WarpBackend):
                 return
             self.backend.forward_kinematics()
