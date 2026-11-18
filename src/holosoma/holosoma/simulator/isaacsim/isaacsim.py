@@ -787,12 +787,12 @@ class IsaacSim(BaseSimulator):
         )
         self.state.register("contact_forces", self._robot_contact_forces, validation_groups=(DERIVED,), invalidates=())
         body_sources = {
-            "_rigid_body_pos": lambda: data.body_pos_w,
+            "rigid_body_pos_w": lambda: data.body_pos_w,
             # Isaac Lab stores wxyz; holosoma uses xyzw.
-            "_rigid_body_rot": lambda: data.body_quat_w[..., [1, 2, 3, 0]],
-            # Link-frame linear velocity, to match _rigid_body_pos: body_lin_vel_w is the COM velocity.
-            "_rigid_body_vel": lambda: data.body_link_lin_vel_w,
-            "_rigid_body_ang_vel": lambda: data.body_ang_vel_w,
+            "rigid_body_quat_w": lambda: data.body_quat_w[..., [1, 2, 3, 0]],
+            # Link-frame linear velocity, to match rigid_body_pos_w: body_lin_vel_w is the COM velocity.
+            "rigid_body_lin_vel_w": lambda: data.body_link_lin_vel_w,
+            "rigid_body_ang_vel_w": lambda: data.body_ang_vel_w,
         }
         for name, source in body_sources.items():
             self.state.register(name, Columns(source, self.body_ids), validation_groups=(DERIVED,), invalidates=())

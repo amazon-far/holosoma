@@ -135,7 +135,7 @@ class BaseSimulator:
     >>> sim.apply_external_force("obj0", forces=f, torques=t, env_ids=env_ids)
 
     **Robot rigid-body kinematics (cross-backend)**: read per-body world-frame pose/velocity of the
-    robot's link frames via the zero-cost properties :attr:`rigid_body_pos_w`,
+    robot's link frames via the state tensors :attr:`rigid_body_pos_w`,
     :attr:`rigid_body_quat_w` (xyzw), :attr:`rigid_body_lin_vel_w`,
     :attr:`rigid_body_ang_vel_w` — each ``[num_envs, num_bodies, k]`` in holosoma body order.
     Position and linear velocity refer to the same link-frame origin (not the inertial COM). Index
@@ -184,12 +184,11 @@ class BaseSimulator:
 
     env_origins: torch.Tensor
 
-    # Robot per-body kinematics, [num_envs, num_bodies, k] in holosoma body order, _rigid_body_rot xyzw.
-    # Read via the rigid_body_*_w properties below.
-    _rigid_body_pos = StateTensor("Robot per-body world positions.")
-    _rigid_body_rot = StateTensor("Robot per-body world orientations (xyzw).")
-    _rigid_body_vel = StateTensor("Robot link-origin world linear velocities.")
-    _rigid_body_ang_vel = StateTensor("Robot per-body world angular velocities.")
+    # Robot per-body kinematics, [num_envs, num_bodies, k] in holosoma body order.
+    rigid_body_pos_w = StateTensor("Robot per-body world positions, ``[num_envs, num_bodies, 3]``.")
+    rigid_body_quat_w = StateTensor("Robot per-body world orientations (xyzw), ``[num_envs, num_bodies, 4]``.")
+    rigid_body_lin_vel_w = StateTensor("Robot link-origin world linear velocities, ``[num_envs, num_bodies, 3]``.")
+    rigid_body_ang_vel_w = StateTensor("Robot per-body world angular velocities, ``[num_envs, num_bodies, 3]``.")
 
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         """
@@ -469,26 +468,6 @@ class BaseSimulator:
     # Bare properties, not getters: each returns the served _rigid_body_* tensor, which keeps its
     # identity across steps. Treat as read-only — mutate state via set_actor_states /
     # apply_external_force, not through these tensors.
-
-    @property
-    def rigid_body_pos_w(self) -> torch.Tensor:
-        """Robot per-body world positions, ``[num_envs, num_bodies, 3]`` (holosoma body order)."""
-        return self._rigid_body_pos
-
-    @property
-    def rigid_body_quat_w(self) -> torch.Tensor:
-        """Robot per-body world orientations (xyzw), ``[num_envs, num_bodies, 4]``."""
-        return self._rigid_body_rot
-
-    @property
-    def rigid_body_lin_vel_w(self) -> torch.Tensor:
-        """Robot link-origin world linear velocities, ``[num_envs, num_bodies, 3]``."""
-        return self._rigid_body_vel
-
-    @property
-    def rigid_body_ang_vel_w(self) -> torch.Tensor:
-        """Robot per-body world angular velocities, ``[num_envs, num_bodies, 3]``."""
-        return self._rigid_body_ang_vel
 
     # ----- External forces (public, cross-backend) -----
 

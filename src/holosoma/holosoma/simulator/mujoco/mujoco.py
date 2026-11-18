@@ -843,7 +843,7 @@ class MuJoCo(BaseSimulator):
             invalidates=(DERIVED,),
         )
 
-        body_names = ("_rigid_body_pos", "_rigid_body_rot", "_rigid_body_vel", "_rigid_body_ang_vel")
+        body_names = ("rigid_body_pos_w", "rigid_body_quat_w", "rigid_body_lin_vel_w", "rigid_body_ang_vel_w")
         if b == 0:
             empty = tuple(torch.zeros(n, 0, width, device=device) for width in (3, 4, 3, 3))
             state.register(body_names, lambda: empty, validation_groups=(DERIVED,), invalidates=())

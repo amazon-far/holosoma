@@ -60,7 +60,7 @@ class EngineRenderer(PeerHandler):
         self.engine.load_layout(meta)
 
     def reads(self, fields):  # head state fields to receive each exchange
-        return ("_rigid_body_pos", "_rigid_body_rot", "object_root_states")
+        return ("rigid_body_pos_w", "rigid_body_quat_w", "object_root_states")
 
     def step(self, snapshot, state):
         self.engine.render(state, time=snapshot.sim_time)

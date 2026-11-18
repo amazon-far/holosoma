@@ -7,7 +7,7 @@ plugin by subclassing :class:`holosoma.cosim.base.PeerHandler`; :mod:`.renderer`
   order of the joint, robot-body and object fields; ``env_origins`` ``[E, 3]`` is where the head simulated
   each environment, and the renderer places its environments there.
 - State: every non-empty SimState field. Roots are world-frame ``[pos, quat xyzw, lin vel, ang vel]``;
-  ``_rigid_body_pos`` and ``_rigid_body_rot`` are each body's world position and xyzw orientation;
+  ``rigid_body_pos_w`` and ``rigid_body_quat_w`` are each body's world position and xyzw orientation;
   ``mount_pose/<sensor>`` ``[E, 7]`` is a sensor's current offset from its mount, XYZ + XYZW. A renderer
   must apply it for remote cameras to follow ``set_mount_pose()``; the head warns once if one moves unread.
 - Writes: the remote cameras' SimState output fields, ``camera/<name>/rgb``

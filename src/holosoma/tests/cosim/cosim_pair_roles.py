@@ -68,8 +68,8 @@ def _capture(sim: Any, saved: dict[str, Any]) -> None:
             saved[f"{name}/{data_type}"] = sim.get_camera_data(name, data_type).clone().cpu()
     saved["robot_root_states"] = sim.robot_root_states.clone().cpu()
     saved["dof_pos"] = sim.dof_pos.clone().cpu()
-    saved["body_pos"] = sim._rigid_body_pos.clone().cpu()
-    saved["body_rot"] = sim._rigid_body_rot.clone().cpu()
+    saved["body_pos"] = sim.rigid_body_pos_w.clone().cpu()
+    saved["body_rot"] = sim.rigid_body_quat_w.clone().cpu()
     saved["body_names"] = list(sim.body_names)
 
 
