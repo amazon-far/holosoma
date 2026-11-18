@@ -20,7 +20,7 @@ from holosoma.cosim import bridge
 from holosoma.cosim import cuda as cosim_cuda
 from holosoma.cosim.base import PeerHandler
 from holosoma.cosim.cuda import BufferSpec, SharedStateAllocator
-from holosoma.cosim.render.plugin import CosimRenderPlugin, camera_requests
+from holosoma.cosim.render.plugin import CosimRenderPlugin, output_fields, sensor_settings
 from holosoma.cosim.render.renderer import RenderHandler, RenderTask
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.sensor_manager import SensorManager
@@ -64,6 +64,7 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
     calls: list[Any] = []
     replies: list[dict[str, Any]] = []
     values = {"robot_root_states": torch.ones(1, 13), "dof_pos": torch.zeros(1, 2), "dof_vel": torch.zeros(1, 2)}
+    sensors = SensorManager("cpu", 50.0)
     messages: list[dict[str, Any]] = [
         {
             "type": "OPEN_REQUEST",
@@ -127,11 +128,12 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
         scene=SimpleNamespace(env_origins=torch.zeros(1, 3)),
         state=SimpleNamespace(
             writable_names=lambda: list(values),
-            get=values.__getitem__,
+            get=lambda name: values[name] if name in values else sensors.state.get(name),
+            output_names=lambda: sensors.state.output_names(),
             link=lambda sources: {name: values[name] for name in sources},
             unlink=lambda names: calls.append(("unlink", list(names))),
         ),
-        sensor_manager=SensorManager("cpu", 50.0),
+        sensor_manager=sensors,
         match_env_origins=lambda origins: calls.append(("place", origins.tolist())),
     )
     task = SimpleNamespace(
@@ -157,7 +159,7 @@ def test_peer_frame_lifecycle(peer: PeerFixture) -> None:
     assert cast("Any", worker.handler).simulator.kinematic_time == 0.035
     assert _in_order(calls, "capture", "readonly", "done", "readonly", ("unlink", []), "unmap", "close")
     assert replies == [
-        {"type": "OPEN_REPLY", "done_handle": "01", "exports": [], "reads": []},
+        {"type": "OPEN_REPLY", "done_handle": "01", "exports": [], "reads": [], "meta": {"sensors": {}}},
         {"type": "EXCHANGE_REPLY", "sequence": 1},
         {"type": "CLOSE_REPLY"},
     ]
@@ -180,21 +182,26 @@ def test_layout_mismatch_fails_before_mapping(peer: PeerFixture, mismatch: str) 
 @pytest.mark.parametrize(
     "change",
     [
-        {"name": "missing/rgb"},
-        {"name": "cam/depth"},
+        {"name": "camera/missing/rgb"},
+        {"name": "camera/cam/depth"},
         {"shape": (1, 3, 8, 3)},
         {"dtype": "float32"},
-        {"meta": {"vertical_fov": 90.0}},
+        {"vertical_fov": 90.0},
+        {"camera": "missing"},
     ],
 )
 def test_remote_camera_mismatch_fails_before_mapping(peer: PeerFixture, change: dict[str, Any]) -> None:
     worker, calls, replies, messages = peer
     record = _camera(cast("Any", worker.handler).simulator.sensor_manager, "cam", remote=None, data_types=["rgb"])
-    (request,) = camera_requests(record, 1)
-    if "meta" in change:
-        change = {"meta": {**request.meta, **change["meta"]}}
-    messages[0]["requests"] = [bridge.as_received(asdict(replace(request, **change)))]
-    with pytest.raises(ValueError, match="differs|no camera output"):
+    (request,) = output_fields(record)
+    settings = sensor_settings(record)
+    if "vertical_fov" in change:
+        settings = {**settings, **change}
+    sensors = {change.get("camera", "cam"): settings}
+    fields = {key: value for key, value in change.items() if key in ("name", "shape", "dtype")}
+    messages[0]["meta"]["sensors"] = sensors
+    messages[0]["requests"] = [bridge.as_received(asdict(replace(request, **fields)))]
+    with pytest.raises(ValueError, match="differs|has no"):
         worker.run()
     assert "map" not in calls
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
@@ -354,7 +361,10 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     _camera(manager, "local", remote=None, data_types=["rgb"])
     _camera(manager, "cam", remote="cosim", data_types=["rgb", "depth"])
     _camera(manager, "elsewhere", remote="other", data_types=["rgb"])  # another plugin's camera
-    images = {"cam/rgb": torch.ones(2, 3, 4, 3, dtype=torch.uint8), "cam/depth": torch.ones(2, 3, 4, 1)}
+    images = {
+        "camera/cam/rgb": torch.ones(2, 3, 4, 3, dtype=torch.uint8),
+        "camera/cam/depth": torch.ones(2, 3, 4, 1),
+    }
     calls: list[Any] = []
     replies: dict[str, dict[str, Any]] = {
         "OPEN_REQUEST": {
@@ -365,6 +375,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
                 for name, image in images.items()
             ],
             "reads": ["dof_pos"],
+            "meta": {"sensors": {"cam": sensor_settings(manager.get("cam"))}},
         },
         "CLOSE_REQUEST": {"type": "CLOSE_REPLY"},
     }
@@ -417,7 +428,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
 
 def test_remote_due_cameras_get_copies_of_the_peer_images(plugin: PluginFixture) -> None:
     head, manager, images, calls = plugin
-    assert [request["name"] for request in calls[0][1]["requests"]] == ["cam/rgb", "cam/depth"]
+    assert [request["name"] for request in calls[0][1]["requests"]] == ["camera/cam/rgb", "camera/cam/depth"]
     hooks = head.simulator.hooks
     remote = manager.get("cam")
     seen: list[set[str]] = []
@@ -429,8 +440,8 @@ def test_remote_due_cameras_get_copies_of_the_peer_images(plugin: PluginFixture)
     for data_type in ("rgb", "depth"):
         buffer = remote.buffers[data_type]
         assert (
-            torch.equal(buffer, images[f"cam/{data_type}"])
-            and buffer.data_ptr() != images[f"cam/{data_type}"].data_ptr()
+            torch.equal(buffer, images[f"camera/cam/{data_type}"])
+            and buffer.data_ptr() != images[f"camera/cam/{data_type}"].data_ptr()
         )
     assert not manager.get("local").written and not manager.get("elsewhere").written
 

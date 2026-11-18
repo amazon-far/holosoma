@@ -19,7 +19,22 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class FieldSpec:
+    """A field's name and layout, e.g. one the head asks its peer to own."""
+
+    name: str
+    shape: tuple[int, ...]
+    dtype: str
+
+    @classmethod
+    def from_message(cls, raw: Mapping[str, Any]) -> FieldSpec:
+        return cls(raw["name"], tuple(raw["shape"]), raw["dtype"])
+
+
+@dataclass(frozen=True)
 class BufferSpec:
+    """A shared allocation of a field: its layout and IPC handle."""
+
     name: str
     shape: tuple[int, ...]
     handle: str

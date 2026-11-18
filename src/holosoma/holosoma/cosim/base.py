@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
-from holosoma.cosim.bridge import BufferRequest, HeadBridge, Snapshot
-from holosoma.cosim.cuda import BufferSpec, allocate_shared, shared_state_allocator
+from holosoma.cosim.bridge import HeadBridge, Snapshot
+from holosoma.cosim.cuda import BufferSpec, FieldSpec, allocate_shared, shared_state_allocator
 from holosoma.simulator.base_simulator.hooks import Phase
 
 if TYPE_CHECKING:
@@ -47,16 +47,24 @@ class HeadPlugin:
             requests=self.requests(),
             meta=self.meta(),
         )
+        try:
+            self.accept(self.bridge.peer_meta)
+        except BaseException:
+            self.bridge.close()
+            raise
         self._hooks = list(self.install(simulator.hooks))
         simulator.hooks.add(Phase.CLOSE, self.close, name=f"{self.name}.close")
 
-    def requests(self) -> list[BufferRequest]:
-        """Buffers to request from the peer, read in place through ``bridge.imports`` after each exchange."""
+    def requests(self) -> list[FieldSpec]:
+        """Fields to request from the peer, read in place through ``bridge.imports`` after each exchange."""
         return []
 
     def meta(self) -> dict[str, Any]:
         """JSON metadata sent to the peer at the handshake."""
         return {}
+
+    def accept(self, meta: Mapping[str, Any]) -> None:
+        """Check the peer's handshake metadata; raise to refuse it."""
 
     def install(self, hooks: HookRegistry) -> Iterable[HookHandle]:
         """Register the hooks that publish; they are removed on close."""
@@ -84,7 +92,7 @@ class PeerHandler:
         self._exports: list[tuple[torch.Tensor, Callable[[], torch.Tensor]]] = []
 
     def open(
-        self, state: Sequence[BufferSpec], requests: Sequence[BufferRequest], meta: Mapping[str, Any]
+        self, state: Sequence[BufferSpec], requests: Sequence[FieldSpec], meta: Mapping[str, Any]
     ) -> tuple[str, ...]:
         """Accept the head and allocate one export per request; return the state fields to read."""
         import warp as wp
@@ -107,6 +115,10 @@ class PeerHandler:
     def accept(self, meta: Mapping[str, Any]) -> None:
         """Check the head's handshake metadata; raise to refuse it."""
 
+    def meta(self) -> Mapping[str, Any]:
+        """JSON metadata sent back to the head once the handshake is accepted."""
+        return {}
+
     def reads(self, state: Mapping[str, BufferSpec]) -> tuple[str, ...]:
         """The head's shared state fields to map and receive each exchange."""
         return ()
@@ -118,7 +130,7 @@ class PeerHandler:
     def unlink(self) -> None:
         """Move what :meth:`link` linked off the mapping; called before the mapping is released."""
 
-    def export_source(self, request: BufferRequest) -> Callable[[], torch.Tensor]:
+    def export_source(self, request: FieldSpec) -> Callable[[], torch.Tensor]:
         """Return what fills the export for ``request`` after each step; raise if it cannot be answered."""
         raise ValueError(f"Peer has no export for the head's request {request.name!r}")
 

@@ -52,19 +52,21 @@ Any process on the same GPU can serve `cosim-render` without a Holosoma simulato
 ```python
 from holosoma.cosim.base import PeerHandler
 from holosoma.cosim.bridge import PeerBridge
-from holosoma.cosim.render.plugin import camera_output
 
 
 class EngineRenderer(PeerHandler):
-    def accept(self, meta):  # joint, body and object order; environment origins
-        self.engine.load_layout(meta)
+    def accept(self, meta):  # joint, body and object order; environment origins; meta["sensors"]
+        self.sensors = self.engine.load_layout(meta)
+
+    def meta(self):  # the camera settings the engine applies; the head checks them
+        return {"sensors": self.sensors}
 
     def reads(self, state):  # head state fields to receive each exchange
         return ("_rigid_body_pos", "_rigid_body_rot", "object_root_states")
 
-    def export_source(self, request):  # one per remote-camera output, e.g. "overview/rgb"
-        camera, data_type = camera_output(request.name)
-        self.engine.add_camera(camera, data_type, request.shape, request.meta)
+    def export_source(self, request):  # one per remote-camera output field, e.g. "camera/overview/rgb"
+        _, camera, data_type = request.name.split("/")
+        self.engine.add_camera(camera, data_type, request.shape)
         return lambda: self.engine.image(camera, data_type)
 
     def step(self, snapshot, state):
@@ -85,13 +87,13 @@ chooses what to request, the handshake metadata, and the hooks that publish. `Pe
 
 ```python
 from holosoma.cosim.base import PeerHandler, HeadPlugin
-from holosoma.cosim.bridge import BufferRequest
+from holosoma.cosim.cuda import FieldSpec
 from holosoma.simulator.base_simulator.hooks import Phase
 
 
 class ForcePlugin(HeadPlugin):  # head: before every physics substep, exchange and apply the peer's forces
     def requests(self):
-        return [BufferRequest("forces", (self.simulator.num_envs, self.simulator.num_bodies, 3), "float32")]
+        return [FieldSpec("forces", (self.simulator.num_envs, self.simulator.num_bodies, 3), "float32")]
 
     def install(self, hooks):
         yield hooks.add(Phase.PRE_STEP, self._exchange, name="forces.exchange")

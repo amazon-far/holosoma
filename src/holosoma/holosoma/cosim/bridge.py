@@ -3,9 +3,10 @@
 :class:`HeadBridge` and :class:`PeerBridge` exchange metadata over a ZeroMQ REQ/REP socket; state and
 exports stay in shared CUDA allocations, ordered by interprocess ready and done events.
 
-- ``OPEN_REQUEST`` -> ``OPEN_REPLY``: the head sends its shared ``state``, requests, ``meta``, ready event,
-  GPU UUID and PID. The peer's handler accepts ``meta``, picks the state fields it reads and allocates one
-  export per request; the reply carries the reads, the exports and its done event.
+- ``OPEN_REQUEST`` -> ``OPEN_REPLY``: the head sends its shared ``state``, the ``requests`` (fields it wants
+  the peer to own), ``meta``, ready event, GPU UUID and PID. The peer's handler accepts ``meta``, picks the
+  state fields it reads and allocates one export per request; the reply carries the reads, the exports, the
+  peer's own ``meta`` (which the head accepts in turn) and its done event.
 - ``EXCHANGE_REQUEST`` -> ``EXCHANGE_REPLY``: one per :meth:`HeadBridge.publish`, with a :class:`Snapshot`
   numbered consecutively. Each hands over every shared buffer: the side receiving it bumps the versions
   of everything it maps, as if each were written locally.
@@ -30,10 +31,10 @@ import json
 import math
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from holosoma.cosim.cuda import BufferSpec, MappedBuffers, SharedStateAllocator, share
+from holosoma.cosim.cuda import BufferSpec, FieldSpec, MappedBuffers, SharedStateAllocator, share
 
 if TYPE_CHECKING:
     import torch
@@ -142,20 +143,6 @@ def as_received(value: Any) -> Any:
     return json.loads(json.dumps(value))
 
 
-@dataclass(frozen=True)
-class BufferRequest:
-    """A buffer the head reads from its peer: its layout and the settings both sides must share."""
-
-    name: str
-    shape: tuple[int, ...]
-    dtype: str
-    meta: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_message(cls, raw: Mapping[str, Any]) -> BufferRequest:
-        return cls(raw["name"], tuple(raw["shape"]), raw["dtype"], dict(raw["meta"]))
-
-
 class HeadBridge:
     """Share a head's state caches with a peer and exchange snapshots with it in lockstep.
 
@@ -172,7 +159,7 @@ class HeadBridge:
         allocator: SharedStateAllocator,
         *,
         endpoint: str,
-        requests: Sequence[BufferRequest] = (),
+        requests: Sequence[FieldSpec] = (),
         meta: Mapping[str, Any] | None = None,
         startup_timeout_ms: int = STARTUP_TIMEOUT_MS,
         exchange_timeout_ms: int = EXCHANGE_TIMEOUT_MS,
@@ -213,6 +200,7 @@ class HeadBridge:
             requested = {request.name: (request.shape, request.dtype) for request in requests}
             if images != requested:
                 raise RuntimeError(f"Peer exported {images}, requested {requested}")
+            self.peer_meta: dict[str, Any] = reply["meta"]
             self._imports = MappedBuffers(specs, device=simulator.sim_device)
         except BaseException:
             self.control.close()
@@ -296,9 +284,12 @@ class PeerHandlerProtocol(Protocol):
         """Shared allocations answering the head's requests, by name, once :meth:`open` returns."""
 
     def open(
-        self, state: Sequence[BufferSpec], requests: Sequence[BufferRequest], meta: Mapping[str, Any]
+        self, state: Sequence[BufferSpec], requests: Sequence[FieldSpec], meta: Mapping[str, Any]
     ) -> tuple[str, ...]:
         """Accept the head, allocate :attr:`allocations` and return the state fields to read; raise to refuse."""
+
+    def meta(self) -> Mapping[str, Any]:
+        """JSON metadata sent back to the head, once :meth:`open` returns."""
 
     def link(self, imports: Mapping[str, torch.Tensor]) -> Mapping[str, torch.Tensor]:
         """Link tensors of the handler's own onto the mapped head fields ``imports``; they then serve as ``state``."""
@@ -353,7 +344,7 @@ class PeerBridge:
                         if (head_gpu := message["gpu_uuid"]) != (own_gpu := gpu_uuid(device)):
                             raise ValueError(f"Head GPU {head_gpu} differs from peer GPU {own_gpu}")
                         shared = [BufferSpec.from_message(raw) for raw in message["state"]]
-                        requests = [BufferRequest.from_message(raw) for raw in message["requests"]]
+                        requests = [FieldSpec.from_message(raw) for raw in message["requests"]]
                         reads = self.handler.open(shared, requests, message["meta"])
                         if unknown := sorted(set(reads) - {spec.name for spec in shared}):
                             raise ValueError(f"Peer reads state fields {unknown} the head does not share")
@@ -371,6 +362,7 @@ class PeerBridge:
                                     for name, allocation in self.handler.allocations.items()
                                 ],
                                 "reads": list(reads),
+                                "meta": as_received(dict(self.handler.meta())),
                             }
                         )
                     elif command == MessageType.EXCHANGE_REQUEST and mapped is not None:

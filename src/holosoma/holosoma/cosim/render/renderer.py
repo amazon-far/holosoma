@@ -27,9 +27,9 @@ from loguru import logger
 from holosoma.config_types.env import EnvConfig, get_run_sim_env_config
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.cosim.base import PeerHandler
-from holosoma.cosim.bridge import BufferRequest, PeerBridge, Snapshot
-from holosoma.cosim.cuda import BufferSpec
-from holosoma.cosim.render.plugin import camera_output, camera_requests, scene_layout
+from holosoma.cosim.bridge import PeerBridge, Snapshot
+from holosoma.cosim.cuda import BufferSpec, FieldSpec
+from holosoma.cosim.render.plugin import scene_layout, sensor_settings
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.envs.simulation_task import simulation_env_origins
 from holosoma.simulator.base_simulator.hooks import Phase
@@ -106,6 +106,7 @@ class RenderHandler(PeerHandler):
         self.task = task
         self.simulator = task.simulator
         self._linked: tuple[str, ...] = ()
+        self._sensors: dict[str, Any] = {}
 
     def accept(self, meta: Mapping[str, Any]) -> None:
         """Adopt the head's origins and reject a different joint or object order; body state is not applied."""
@@ -114,6 +115,16 @@ class RenderHandler(PeerHandler):
         own = scene_layout(self.simulator)
         if differing := [key for key in ("dof_names", "object_names", "env_origins") if meta.get(key) != own[key]]:
             raise ValueError(f"Scene {differing} differs between simulators")
+        manager = self.simulator.sensor_manager
+        for name, settings in meta.get("sensors", {}).items():
+            if not manager.has_camera(name):
+                raise ValueError(f"Peer has no camera {name!r} for the head's remote camera")
+            if (applied := sensor_settings(manager.get(name))) != settings:
+                raise ValueError(f"Camera {name!r} differs between simulators: head {settings}, peer {applied}")
+            self._sensors[name] = applied
+
+    def meta(self) -> Mapping[str, Any]:
+        return {"sensors": self._sensors}
 
     def reads(self, state: Mapping[str, BufferSpec]) -> tuple[str, ...]:
         own_state = self.simulator.state
@@ -131,18 +142,16 @@ class RenderHandler(PeerHandler):
         self.simulator.state.unlink(self._linked)
         self._linked = ()
 
-    def export_source(self, request: BufferRequest) -> Callable[[], torch.Tensor]:
-        manager = self.simulator.sensor_manager
-        camera, data_type = camera_output(request.name)
-        record = manager.get(camera) if manager.has_camera(camera) else None
-        own = {} if record is None else {output.name: output for output in camera_requests(record, self.task.num_envs)}
-        if record is None or request.name not in own:
-            raise ValueError(f"Peer has no camera output {request.name!r} for the head's request")
-        if request != own[request.name]:
-            raise ValueError(
-                f"Camera output {request.name!r} differs between simulators: head {request}, peer {own[request.name]}"
-            )
-        return lambda: record.buffers[data_type]
+    def export_source(self, request: FieldSpec) -> Callable[[], torch.Tensor]:
+        """Export the SimState output ``request`` names, e.g. ``camera/<name>/rgb``."""
+        state = self.simulator.state
+        if request.name not in state.output_names():
+            raise ValueError(f"Peer has no output {request.name!r} for the head's request")
+        output = state.get(request.name)
+        own = FieldSpec(request.name, tuple(output.shape), str(output.dtype).removeprefix("torch."))
+        if request != own:
+            raise ValueError(f"Output {request.name!r} differs between simulators: head {request}, peer {own}")
+        return lambda: output
 
     def step(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:
         self.simulator.kinematic_time = snapshot.sim_time

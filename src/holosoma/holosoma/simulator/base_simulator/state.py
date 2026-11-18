@@ -430,6 +430,10 @@ class SimState:
     def names(self) -> list[str]:
         return [*self._by_name, *self._outputs, *self._tensors]
 
+    def output_names(self) -> list[str]:
+        """Names of outputs served with :meth:`register_output`."""
+        return list(self._outputs)
+
     def dtype(self, name: str) -> torch.dtype:
         """The dtype of registered tensor or output ``name``'s buffer."""
         output = self._outputs.get(name)
