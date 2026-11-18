@@ -11,6 +11,7 @@ Core training framework for humanoid robot reinforcement learning with support f
 ## Training
 
 All training/eval scripts support `--help` for discovering available flags, e.g. `python src/holosoma/holosoma/train_agent.py --help`.
+They also read their arguments from a YAML file with `--config`, e.g. `python src/holosoma/holosoma/train_agent.py --config @holosoma/examples/configs/g1_locomotion_train.yaml`; see [Running from a config file](../../docs/config-files.md).
 
 > **Note:** Video recording is enabled by default with `logger:wandb`. On headless servers, you may need to disable video or configure rendering. See [Video Recording](#video-recording) below.
 

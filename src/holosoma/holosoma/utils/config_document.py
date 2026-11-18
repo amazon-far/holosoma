@@ -2,7 +2,7 @@
 
 Document shape (YAML or JSON)::
 
-    version: 2
+    version: 1
     arguments:
       simulator: mujoco          # <group>:<preset>
       robot: g1-29dof
@@ -27,7 +27,7 @@ from typing import Any
 
 import yaml
 
-SUPPORTED_VERSION = 2
+SUPPORTED_VERSION = 1
 EMBEDDED_KEY = "holosoma_sim"
 DOCUMENT_FIELDS = {"version", "arguments"}
 

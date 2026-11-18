@@ -4,8 +4,8 @@
 #
 # Command-line tokens after --config take precedence, e.g.
 #   ... --config @holosoma/examples/configs/g1_lidar.yaml terrain:terrain-locomotion-mix --training.seed 7
-# See docs/run-sim-config-files.md for the format.
-version: 2
+# See docs/config-files.md for the format.
+version: 1
 arguments:
   # Group selections: <group>:<preset>
   simulator: mujoco

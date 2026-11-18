@@ -14,7 +14,7 @@ from holosoma.utils.config_registry import parse_config
 pytestmark = pytest.mark.no_sim
 
 DOCUMENT: dict[str, Any] = {
-    "version": 2,
+    "version": 1,
     "arguments": {
         "simulator": "mjwarp",
         "robot": "t1-29dof-waist-wrist",
@@ -63,7 +63,7 @@ def test_document_parses_like_equivalent_cli(tmp_path: Path, content: dict[str, 
 
 def test_command_line_overrides_document(tmp_path: Path) -> None:
     doc = {
-        "version": 2,
+        "version": 1,
         "arguments": {"robot": "g1-29dof", "robot.asset.link_physics": "none", "overrides": {"training.seed": 3}},
     }
     args = ["--config", _write(tmp_path, doc), "--training.seed", "-1", "robot:t1-29dof-waist-wrist"]
@@ -73,7 +73,7 @@ def test_command_line_overrides_document(tmp_path: Path) -> None:
 
 def test_scalars_follow_yaml_1_2(tmp_path: Path) -> None:
     text = (
-        "version: 2\n"
+        "version: 1\n"
         "arguments:\n"
         "  overrides:\n"
         "    training.seed: 010\n"
@@ -87,7 +87,7 @@ def test_scalars_follow_yaml_1_2(tmp_path: Path) -> None:
 
 
 def test_root_subcommand_comes_first(tmp_path: Path) -> None:
-    doc = {"version": 2, "arguments": {"simulator": "mujoco", "exp": "g1-29dof", "overrides": {"training.num_envs": 8}}}
+    doc = {"version": 1, "arguments": {"simulator": "mujoco", "exp": "g1-29dof", "overrides": {"training.num_envs": 8}}}
     parsed = parse_config(get_annotated_experiment_config, args=["--config", _write(tmp_path, doc)])
     expected = parse_config(
         get_annotated_experiment_config, args=["exp:g1-29dof", "simulator:mujoco", "--training.num_envs", "8"]
@@ -98,12 +98,12 @@ def test_root_subcommand_comes_first(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("content", "extra_args"),
     [
-        ({**DOCUMENT, "version": 1}, []),
+        ({**DOCUMENT, "version": 2}, []),
         ({**DOCUMENT, "backend": "mujoco"}, []),
-        ("version: 2\narguments: {}\narguments: {}\n", []),
+        ("version: 1\narguments: {}\narguments: {}\n", []),
         (DOCUMENT, ["--config", "other.yaml"]),
     ],
-    ids=["old-version", "unknown-field", "duplicate-key", "repeated-config"],
+    ids=["unsupported-version", "unknown-field", "duplicate-key", "repeated-config"],
 )
 def test_rejects_invalid_documents(tmp_path: Path, content: dict[str, Any] | str, extra_args: list[str]) -> None:
     with pytest.raises(SystemExit):
@@ -115,6 +115,9 @@ def test_json_document(tmp_path: Path) -> None:
     assert parse_config(RunSimConfig, args=["--config", path]) == parse_config(RunSimConfig, args=EQUIVALENT_CLI)
 
 
-def test_packaged_example_parses() -> None:
-    config = parse_config(RunSimConfig, args=["--config", "@holosoma/examples/configs/g1_lidar.yaml"])
-    assert "scan" in config.sensor
+@pytest.mark.parametrize(
+    ("name", "config_type"),
+    [("g1_lidar", RunSimConfig), ("g1_locomotion_train", get_annotated_experiment_config)],
+)
+def test_packaged_examples_parse(name: str, config_type: Any) -> None:
+    parse_config(config_type, args=["--config", f"@holosoma/examples/configs/{name}.yaml"])
