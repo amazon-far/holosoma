@@ -692,13 +692,6 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'render' method must be implemented in subclasses.")
 
-    def apply_state(self, inputs: Mapping[str, torch.Tensor]) -> None:
-        """Overwrite complete writable unified-state fields; the backend receives them at the next state flush.
-
-        Inputs are read, not retained. This does not integrate physics.
-        """
-        self.state.assign(inputs)
-
     def native_env_origins(self) -> torch.Tensor | None:
         """Origins this backend always places environments at, or ``None`` if it honours the origins it is given."""
         return None
@@ -889,10 +882,6 @@ class BaseSimulator:
 
         def register(record: Any) -> None:
             def write(rows: torch.Tensor, poses: torch.Tensor) -> None:
-                # Unchanged rows skip the backend writer, which is costly on some renderers.
-                rows = rows[(poses[rows] != record.mount_poses[rows]).any(-1)]
-                if not rows.numel():
-                    return
                 try:
                     manager.set_mount_pose(record.name, poses[rows], rows, notify=False)
                 finally:

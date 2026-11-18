@@ -9,8 +9,7 @@ state changed, and ``write`` flushes in-place changes back to the simulation, ro
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
 simulation state. In-place writes reach the simulation before its next physics step, FK pass or any
 state write that would replace them: the changed rows (environments) are flushed through the tensor's
-``write``. A tensor bound without ``write`` is read-only. :meth:`SimState.assign` overwrites whole writable
-tensors, written in full at the next flush. :meth:`SimState.link` serves writable tensors whose memory is
+``write``. A tensor bound without ``write`` is read-only. :meth:`SimState.link` serves writable tensors whose memory is
 written from outside: they are never re-read, and their changed rows flush like in-place writes.
 
 Backends wrap every state mutation in :meth:`SimState.mutation`, which flushes pending writes first and
@@ -19,7 +18,7 @@ marks every tensor stale after.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, overload
@@ -31,7 +30,7 @@ BufferAllocator = Callable[[str, torch.Tensor, torch.device | str | None], torch
 
 
 class _Registration:
-    __slots__ = ("_all_rows", "assigned", "buffers", "clean", "linked", "names", "read", "valid", "write")
+    __slots__ = ("buffers", "clean", "linked", "names", "read", "valid", "write")
 
     def __init__(self, names: tuple[str, ...], read: Read, write: Callable[..., None] | None) -> None:
         self.names = names
@@ -39,10 +38,8 @@ class _Registration:
         self.write = write
         self.buffers: tuple[torch.Tensor, ...] = ()
         self.valid = False
-        self.assigned = False
         self.linked = False
         self.clean: tuple[int, ...] = ()
-        self._all_rows: torch.Tensor | None = None
 
     def values(self) -> tuple[torch.Tensor, ...]:
         """The read's current values, one per name."""
@@ -77,12 +74,6 @@ class _Registration:
         for buffer, value in zip(self.buffers, values, strict=True):
             buffer.copy_(value)
         self.mark_clean()
-
-    def all_rows(self) -> torch.Tensor:
-        """Every row (environment) index, on the buffers' device."""
-        if self._all_rows is None:
-            self._all_rows = torch.arange(self.buffers[0].shape[0], device=self.buffers[0].device)
-        return self._all_rows
 
     def _versions(self) -> tuple[int, ...]:
         return tuple(buffer._version for buffer in self.buffers)
@@ -212,17 +203,15 @@ class SimState:
             self.mark_stale()
 
     def flush_writes(self) -> None:
-        """Write assigned tensors in full and the rows written in place to the simulation, then mark read-only
-        tensors stale if any were.
+        """Write the rows written in place to the simulation, then mark read-only tensors stale if any were.
 
         Writable tensors stay valid: each is an independent input, so a write changes no other writable
         tensor, and a flushed buffer already holds what the simulation now has.
         """
-        assigned = [registration for registration in self._registrations if registration.assigned]
         stale_written = [
             registration
             for registration in self._registrations
-            if not registration.assigned and not registration.valid and registration.buffers and registration.written()
+            if not registration.valid and registration.buffers and registration.written()
         ]
         if stale_written:
             for registration in stale_written:  # discard the write, so the next access re-reads
@@ -230,9 +219,7 @@ class SimState:
             names = ", ".join(name for registration in stale_written for name in registration.names)
             raise RuntimeError(f"Simulator state {names} was written in place after the simulation changed it")
         written = [
-            registration
-            for registration in self._registrations
-            if not registration.assigned and registration.valid and registration.written()
+            registration for registration in self._registrations if registration.valid and registration.written()
         ]
         read_only = [registration for registration in written if registration.write is None]
         if read_only:
@@ -241,13 +228,7 @@ class SimState:
                 registration.valid = False
             names = ", ".join(name for registration in read_only for name in registration.names)
             raise RuntimeError(f"Simulator state {names} is read-only")
-        flushed = bool(assigned)
-        for registration in assigned:
-            assert registration.write is not None
-            registration.write(registration.all_rows(), *registration.buffers)
-            registration.assigned = False
-            registration.valid = True
-            registration.mark_clean()
+        flushed = False
         # Compare every written tensor with the simulation before writing any of them back.
         for registration, rows in [(registration, registration.changed_rows()) for registration in written]:
             if rows.numel():
@@ -305,7 +286,7 @@ class SimState:
                 return self._tensors[name]
             except KeyError:
                 raise AttributeError(f"Simulator state {name!r} is not bound") from None
-        if not registration.valid and not registration.assigned:
+        if not registration.valid:
             if registration.written():
                 registration.mark_clean()  # discard the write, so the next access re-reads
                 names = ", ".join(registration.names)
@@ -320,41 +301,6 @@ class SimState:
     def writable_names(self) -> list[str]:
         """Names of registered tensors whose in-place writes flush to the simulation."""
         return [name for name, registration in self._by_name.items() if registration.write is not None]
-
-    def assign(self, values: Mapping[str, torch.Tensor]) -> None:
-        """Overwrite whole writable tensors without reading the simulation.
-
-        Every row of each tensor is written at the next flush. A tensor never read before is read once, to
-        allocate and validate against. Each registration's names are assigned together, and every value is
-        validated before any is copied. Values are read, not retained.
-        """
-        registrations: dict[int, _Registration] = {}
-        for name in values:
-            registration = self._by_name.get(name)
-            if registration is None or registration.write is None:
-                raise ValueError(f"Simulator state {name!r} is not writable")
-            registrations[id(registration)] = registration
-        for registration in registrations.values():
-            if missing := [name for name in registration.names if name not in values]:
-                raise ValueError(
-                    f"Simulator state {', '.join(registration.names)} must be assigned together: {missing}"
-                )
-            if not registration.buffers:
-                registration.refresh(self.device, self._buffer_allocator)
-                registration.valid = True
-            for name in registration.names:
-                value = values[name]
-                expected = registration.buffers[registration.names.index(name)]
-                if value.shape != expected.shape or value.dtype != torch.float32 or value.device != expected.device:
-                    raise ValueError(
-                        f"Simulator state {name!r} must be float32 {tuple(expected.shape)} on {expected.device}, "
-                        f"got {value.dtype} {tuple(value.shape)} on {value.device}"
-                    )
-        for registration in registrations.values():
-            given = tuple(values[name] for name in registration.names)
-            for buffer, value in zip(registration.buffers, given, strict=True):
-                buffer.copy_(value)
-            registration.assigned = True
 
     def _read_fresh(self, name: str) -> torch.Tensor:
         """Return a fresh read of ``name`` without touching the served tensor, for consistency checks."""

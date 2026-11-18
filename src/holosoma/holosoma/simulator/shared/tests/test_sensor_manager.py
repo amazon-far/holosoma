@@ -264,12 +264,11 @@ def test_mount_pose_state_follows_set_mount_pose_and_writes_only_changed_rows() 
     manager.set_mount_pose("remote", moved)  # stored without a writer; the cached field is re-read
     torch.testing.assert_close(state.get("mount_pose/remote"), moved.expand(2, 7))
 
-    poses = state.get("mount_pose/local").clone()
-    state.assign({"mount_pose/local": poses})
+    poses = state.get("mount_pose/local")
+    poses.copy_(poses.clone())
     state.flush_writes()
     assert writes == []
     poses[1, 0] += 0.5
-    state.assign({"mount_pose/local": poses})
     state.flush_writes()
     assert writes == [[1]]
     torch.testing.assert_close(manager.get_mount_pose("local"), poses)
@@ -289,7 +288,7 @@ def test_writing_the_mount_pose_field_keeps_it_valid_and_matching_the_sensor() -
 
     near_unit = held.clone()
     near_unit[0, 3:] = torch.tensor([0.0, 0.0, 0.0, 1.00005])
-    state.assign({"mount_pose/cam": near_unit})
+    held.copy_(near_unit)
     state.flush_writes()
     torch.testing.assert_close(state.get("mount_pose/cam"), manager.get_mount_pose("cam"))  # normalised
 

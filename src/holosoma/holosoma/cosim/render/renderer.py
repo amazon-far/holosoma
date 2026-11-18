@@ -9,7 +9,7 @@ here as ordinary cameras. Start the renderer before the source; it exits when th
 
     with create_render_task(run_sim_config) as task:
         task.simulator.set_kinematic_time(time)  # what simulator.time() reports
-        task.simulator.apply_state(inputs)        # complete writable SimState fields
+        task.simulator.dof_pos[:] = dof_pos       # write writable state in place
         task.render_frame()
 """
 
@@ -42,8 +42,9 @@ class RenderTask(BaseTask):
 
     Startup runs with ``sim.kinematic_playback`` and without the terrain height scanner. Environments go to the
     backend's native placement where it has one, otherwise where a :class:`SimulationTask` would place them.
-    Drive each frame with ``simulator.apply_state()`` and then :meth:`render_frame`; every sensor renders each
-    frame. Sensors and consumers that read ``simulator.time()`` see whatever ``simulator.set_kinematic_time()`` set.
+    Drive each frame by writing writable simulator state in place, then :meth:`render_frame`; every sensor
+    renders each frame. Sensors and consumers that read ``simulator.time()`` see whatever
+    ``simulator.set_kinematic_time()`` set.
     """
 
     def __init__(self, tyro_config: EnvConfig) -> None:
