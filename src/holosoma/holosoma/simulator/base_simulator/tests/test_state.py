@@ -23,7 +23,7 @@ def _counting_state(writable: bool = True, rows: int = 2) -> tuple[SimState, tor
         flushed.append(env_rows.tolist())
         backing[env_rows] = out[env_rows]
 
-    state.register("x", read, write=write if writable else None)
+    state.register("x", read, write=write if writable else None, validation_groups=(STATE,), invalidates=(DERIVED,))
     return state, backing, reads, flushed
 
 
@@ -61,7 +61,7 @@ def test_a_flush_writes_only_changed_rows() -> None:
 def test_a_read_only_write_raises_once_and_flushes_nothing() -> None:
     state, backing, _, flushed = _counting_state()
     read_only = torch.zeros(2, 3)
-    state.register("y", lambda: read_only)
+    state.register("y", lambda: read_only, validation_groups=(DERIVED,), invalidates=())
     state.get("x")[0] = -1.0
     state.get("y")[0] = -1.0
     with pytest.raises(RuntimeError, match="read-only"):
@@ -100,13 +100,13 @@ def test_one_read_serves_several_names() -> None:
         reads.append(1)
         return values
 
-    state.register(("a", "b"), read)
+    state.register(("a", "b"), read, validation_groups=(DERIVED,), invalidates=())
     assert torch.equal(state.get("b"), values[1].float()) and state.get("b").dtype == torch.float32
     state.get("a")
     assert len(reads) == 1
     assert torch.equal(state._read_fresh("a"), values[0])
 
-    state.register("c", lambda: values)
+    state.register("c", lambda: values, validation_groups=(DERIVED,), invalidates=())
     with pytest.raises(ValueError, match="returned 2 tensors"):
         state.get("c")
 
@@ -114,9 +114,9 @@ def test_one_read_serves_several_names() -> None:
 def test_columns_return_the_selection() -> None:
     source = torch.arange(12, dtype=torch.float32).reshape(2, 6)
     state = SimState()
-    state.register("run", Columns(source, [2, 3, 4]))
-    state.register("gathered", Columns(source, [4, 2]))
-    state.register("callable", Columns(lambda: source, [2, 3, 4]))
+    state.register("run", Columns(source, [2, 3, 4]), validation_groups=(DERIVED,), invalidates=())
+    state.register("gathered", Columns(source, [4, 2]), validation_groups=(DERIVED,), invalidates=())
+    state.register("callable", Columns(lambda: source, [2, 3, 4]), validation_groups=(DERIVED,), invalidates=())
 
     assert torch.equal(state.get("run"), source[:, 2:5])
     assert torch.equal(state.get("gathered"), source[:, [4, 2]])
@@ -136,7 +136,7 @@ def test_a_flush_keeps_written_tensors_valid() -> None:
         other_reads.append(1)
         return torch.zeros(2, 3)
 
-    state.register("y", read_other)
+    state.register("y", read_other, validation_groups=(DERIVED,), invalidates=())
     held = state.get("x")
     state.get("y")
 
@@ -152,7 +152,13 @@ def test_a_flush_keeps_written_tensors_valid() -> None:
 def test_a_flush_keeps_other_writable_tensors_valid() -> None:
     state, backing, _, flushed = _counting_state()
     other = torch.zeros(2, 3)
-    state.register("z", lambda: other, write=lambda rows, out: other.__setitem__(rows, out[rows]))
+    state.register(
+        "z",
+        lambda: other,
+        write=lambda rows, out: other.__setitem__(rows, out[rows]),
+        validation_groups=(STATE,),
+        invalidates=(DERIVED,),
+    )
     held = state.get("z")
     state.get("x")[0] = -1.0
     state.flush_writes()
@@ -181,7 +187,7 @@ def test_assigning_a_registered_tensor_raises() -> None:
 
     sim = Sim()
     sim.x = torch.zeros(2)  # a placeholder before registration
-    sim.state.register("x", lambda: torch.ones(2))
+    sim.state.register("x", lambda: torch.ones(2), validation_groups=(DERIVED,), invalidates=())
     with pytest.raises(AttributeError, match="in place"):
         sim.x = torch.zeros(2)
 
@@ -250,9 +256,17 @@ def test_tags_decide_what_goes_stale(event: str, joint_reread: bool, pose_reread
 
         return counted
 
-    state.register("joints", read("joints", joints), write=lambda _rows, out: joints.copy_(out))
-    state.register("poses", read("poses", poses))  # derived
-    state.register("mount", lambda: mount, write=lambda _rows, out: mount.copy_(out), invalidates=())
+    state.register(
+        "joints",
+        read("joints", joints),
+        write=lambda _rows, out: joints.copy_(out),
+        validation_groups=(STATE,),
+        invalidates=(DERIVED,),
+    )
+    state.register("poses", read("poses", poses), validation_groups=(DERIVED,), invalidates=())  # derived
+    state.register(
+        "mount", lambda: mount, write=lambda _rows, out: mount.copy_(out), validation_groups=(STATE,), invalidates=()
+    )
     for name in ("joints", "poses", "mount"):
         state.get(name)
     if event in ("state", "derived"):

@@ -15,7 +15,7 @@ from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.hooks import HookHandle, HookRegistry, Phase
-from holosoma.simulator.base_simulator.state import DERIVED, SimState, StateTensor
+from holosoma.simulator.base_simulator.state import DERIVED, STATE, SimState, StateTensor
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
@@ -889,7 +889,13 @@ class BaseSimulator:
                     if differs.any():
                         poses[rows[differs]] = stored[differs]
 
-            state.register(f"mount_pose/{record.name}", lambda: record.mount_poses, write=write, invalidates=())
+            state.register(
+                f"mount_pose/{record.name}",
+                lambda: record.mount_poses,
+                write=write,
+                validation_groups=(STATE,),
+                invalidates=(),
+            )
 
         for record in [*manager.cameras, *manager.lidars]:
             if record.mount_poses is not None:

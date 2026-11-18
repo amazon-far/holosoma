@@ -50,7 +50,7 @@ from holosoma.simulator.isaacsim.object_spawner import (
     physics_material_cfg,
 )
 from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures, register_terrain_mesh_cache
-from holosoma.simulator.base_simulator.state import STATE, Columns
+from holosoma.simulator.base_simulator.state import DERIVED, STATE, Columns
 from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
 from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
 from holosoma.simulator.shared.external_wrench import WrenchTarget
@@ -698,8 +698,10 @@ class IsaacSim(BaseSimulator):
             self.prev_dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
             self._base_linear_acc = torch.zeros(self.num_envs, 3, device=self.sim_device)
             self.prev_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.sim_device)
-            self.state.register("dof_acc", lambda: self._dof_acc)
-            self.state.register("base_linear_acc", lambda: self._base_linear_acc)
+            self.state.register("dof_acc", lambda: self._dof_acc, validation_groups=(DERIVED,), invalidates=())
+            self.state.register(
+                "base_linear_acc", lambda: self._base_linear_acc, validation_groups=(DERIVED,), invalidates=()
+            )
             self.hooks.add(Phase.POST_STEP, self._update_bridge_accelerations, name="isaacsim.bridge_accelerations")
         else:
             logger.debug("Bridge disabled: skipping acceleration computation tensors")
@@ -742,17 +744,25 @@ class IsaacSim(BaseSimulator):
             return flush
 
         self.state.register(
-            "robot_root_states", lambda: fullstate_wxyz_to_xyzw(data.root_state_w), write=write_robot_root_states
+            "robot_root_states",
+            lambda: fullstate_wxyz_to_xyzw(data.root_state_w),
+            write=write_robot_root_states,
+            validation_groups=(STATE,),
+            invalidates=(DERIVED,),
         )
         self.state.register(
             "dof_pos",
             Columns(lambda: data.joint_pos, self.dof_ids),
             write=joint_writer(self._robot.write_joint_position_to_sim),
+            validation_groups=(STATE,),
+            invalidates=(DERIVED,),
         )
         self.state.register(
             "dof_vel",
             Columns(lambda: data.joint_vel, self.dof_ids),
             write=joint_writer(self._robot.write_joint_velocity_to_sim),
+            validation_groups=(STATE,),
+            invalidates=(DERIVED,),
         )
         object_names = self.object_state_names
         object_handles = [self.scene.rigid_objects[name] for name in object_names]
@@ -768,8 +778,14 @@ class IsaacSim(BaseSimulator):
             for index, handle in enumerate(object_handles):
                 handle.write_root_state_to_sim(fullstate_xyzw_to_wxyz(source[:, index]), env_ids=env_ids)
 
-        self.state.register("object_root_states", read_object_root_states, write=write_object_root_states)
-        self.state.register("contact_forces", self._robot_contact_forces)
+        self.state.register(
+            "object_root_states",
+            read_object_root_states,
+            write=write_object_root_states,
+            validation_groups=(STATE,),
+            invalidates=(DERIVED,),
+        )
+        self.state.register("contact_forces", self._robot_contact_forces, validation_groups=(DERIVED,), invalidates=())
         body_sources = {
             "_rigid_body_pos": lambda: data.body_pos_w,
             # Isaac Lab stores wxyz; holosoma uses xyzw.
@@ -779,7 +795,7 @@ class IsaacSim(BaseSimulator):
             "_rigid_body_ang_vel": lambda: data.body_ang_vel_w,
         }
         for name, source in body_sources.items():
-            self.state.register(name, Columns(source, self.body_ids))
+            self.state.register(name, Columns(source, self.body_ids), validation_groups=(DERIVED,), invalidates=())
 
     def _robot_contact_forces(self) -> torch.Tensor:
         """Sensor forces in robot body order, (num_envs, num_bodies, 3). The contact sensor's body

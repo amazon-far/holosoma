@@ -12,13 +12,13 @@ state write that would replace them: the changed rows (environments) are flushed
 ``write``. A tensor bound without ``write`` is read-only. :meth:`SimState.link` serves writable tensors whose memory is
 written from outside: they are never re-read, and their changed rows flush like in-place writes.
 
-Fields go stale by tag. Each is invalidated by its own name and by its ``invalidated_by`` tags; by default
-writable fields by :data:`STATE` and read-only (derived) fields by :data:`DERIVED`. Invalidation cascades: a
-field going stale, or being flushed, fires its own ``invalidates`` tags (by default :data:`DERIVED` for
-writable fields), so derived fields follow the inputs they derive from.
-Backends wrap every state mutation in :meth:`SimState.mutation`, which flushes pending writes first and fires
-its tag after: :data:`STATE` when the simulation state changes, :data:`DERIVED` when only quantities
-derived from it are recomputed.
+Fields go stale by validation group. Each field belongs to the ``validation_groups`` it registers with, and to
+a group named after itself; invalidating a group marks its fields stale. Invalidation cascades: a field going
+stale, or being flushed, invalidates its own ``invalidates`` groups. Simulation inputs belong to
+:data:`STATE` and invalidate :data:`DERIVED`, to which quantities derived from them belong. Backends wrap every
+state mutation in :meth:`SimState.mutation`, which flushes pending writes first and invalidates a group after:
+:data:`STATE` when the simulation state changes, :data:`DERIVED` when only quantities derived from it are
+recomputed.
 """
 
 from __future__ import annotations
@@ -34,9 +34,9 @@ Read = Callable[[], "torch.Tensor | tuple[torch.Tensor, ...]"]
 BufferAllocator = Callable[[str, torch.Tensor, torch.device | str | None, torch.dtype], torch.Tensor]
 
 STATE = "state"
-"""Fired when the simulation's state changes: a physics step or a backend state write."""
+"""Validation group of the simulation's inputs, invalidated by a physics step or a backend state write."""
 DERIVED = "derived"
-"""Fired when only quantities derived from the simulation's inputs change: an FK pass or a flushed input write."""
+"""Validation group of quantities derived from the inputs, invalidated by an FK pass or a changed input."""
 
 
 class _Registration:
@@ -44,12 +44,12 @@ class _Registration:
         "buffers",
         "clean",
         "dtype",
-        "invalidated_by",
         "invalidates",
         "linked",
         "names",
         "read",
         "valid",
+        "validation_groups",
         "write",
     )
 
@@ -58,7 +58,7 @@ class _Registration:
         names: tuple[str, ...],
         read: Read,
         write: Callable[..., None] | None,
-        invalidated_by: frozenset[str],
+        validation_groups: frozenset[str],
         invalidates: frozenset[str],
         dtype: torch.dtype,
     ) -> None:
@@ -66,7 +66,7 @@ class _Registration:
         self.dtype = dtype
         self.read = read
         self.write = write
-        self.invalidated_by = invalidated_by | frozenset(names)
+        self.validation_groups = validation_groups | frozenset(names)
         self.invalidates = invalidates
         self.buffers: tuple[torch.Tensor, ...] = ()
         self.valid = False
@@ -212,8 +212,8 @@ class SimState:
         read: Columns,
         *,
         write: Callable[[torch.Tensor, torch.Tensor], None] | None = None,
-        invalidated_by: Iterable[str] | None = None,
-        invalidates: Iterable[str] | None = None,
+        validation_groups: Iterable[str],
+        invalidates: Iterable[str],
         dtype: torch.dtype = torch.float32,
     ) -> None: ...
 
@@ -224,8 +224,8 @@ class SimState:
         read: Read,
         *,
         write: Callable[..., None] | None = None,
-        invalidated_by: Iterable[str] | None = None,
-        invalidates: Iterable[str] | None = None,
+        validation_groups: Iterable[str],
+        invalidates: Iterable[str],
         dtype: torch.dtype = torch.float32,
     ) -> None: ...
 
@@ -235,21 +235,18 @@ class SimState:
         read: Columns | Read,
         *,
         write: Callable[..., None] | None = None,
-        invalidated_by: Iterable[str] | None = None,
-        invalidates: Iterable[str] | None = None,
+        validation_groups: Iterable[str],
+        invalidates: Iterable[str],
         dtype: torch.dtype = torch.float32,
     ) -> None:
         """Serve ``read``'s values as ``names``, re-read after a state change and flushed by ``write(rows, *buffers)``.
 
-        ``read`` returns one tensor per name. Without ``write`` the tensors are read-only. ``invalidated_by``
-        and ``invalidates`` override the default tags (see the module docstring); buffers have ``dtype``.
+        ``read`` returns one tensor per name. Without ``write`` the tensors are read-only. They go stale when one
+        of their ``validation_groups`` is invalidated, and going stale or being flushed invalidates the groups in
+        ``invalidates``; each name is also a validation group of its own. Buffers have ``dtype``.
         """
         names = (names,) if isinstance(names, str) else tuple(names)
-        if invalidated_by is None:
-            invalidated_by = (STATE,) if write is not None else (DERIVED,)
-        if invalidates is None:
-            invalidates = (DERIVED,) if write is not None else ()
-        registration = _Registration(names, read, write, frozenset(invalidated_by), frozenset(invalidates), dtype)
+        registration = _Registration(names, read, write, frozenset(validation_groups), frozenset(invalidates), dtype)
         for name in names:
             self._unbind(name)
             self._by_name[name] = registration
@@ -301,16 +298,17 @@ class SimState:
         self._tensors[name] = tensor
 
     @contextmanager
-    def mutation(self, tag: str) -> Iterator[None]:
-        """Wrap a mutation of the simulation state: flush pending writes first, fire ``tag`` after."""
+    def mutation(self, group: str) -> Iterator[None]:
+        """Wrap a mutation of the simulation state: flush pending writes first, invalidate ``group`` after."""
         self.flush_writes()
         try:
             yield
         finally:
-            self.invalidate({tag})
+            self.invalidate({group})
 
     def flush_writes(self) -> None:
-        """Write the rows written in place to the simulation, then fire the ``invalidates`` tags of the fields written.
+        """Write the rows written in place to the simulation, then invalidate the ``invalidates`` groups of the fields
+        written.
 
         A flushed buffer already holds what the simulation now has, so it stays valid.
         """
@@ -345,21 +343,21 @@ class SimState:
             registration.mark_clean()
         self.invalidate(fired)
 
-    def invalidate(self, tags: Iterable[str]) -> None:
-        """Mark stale every tensor invalidated by one of ``tags``, and in turn every tensor invalidated by their
-        ``invalidates`` tags; linked tensors are never stale."""
+    def invalidate(self, groups: Iterable[str]) -> None:
+        """Mark stale every tensor in one of ``groups``, and in turn every tensor in the groups those invalidate;
+        linked tensors are never stale."""
         fired: set[str] = set()
-        pending = set(tags)
+        pending = set(groups)
         while pending:
             fired |= pending
             matched = [
                 registration
                 for registration in self._registrations
-                if not registration.linked and not pending.isdisjoint(registration.invalidated_by)
+                if not registration.linked and not pending.isdisjoint(registration.validation_groups)
             ]
             for registration in matched:
                 registration.valid = False
-            pending = {tag for registration in matched for tag in registration.invalidates} - fired
+            pending = {group for registration in matched for group in registration.invalidates} - fired
 
     def mark_stale(self, names: str | Iterable[str] | None = None) -> None:
         """Mark every tensor stale, or only those registered with ``names``, so the next access re-reads it.
