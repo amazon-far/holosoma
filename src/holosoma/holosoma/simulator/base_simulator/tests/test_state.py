@@ -295,3 +295,13 @@ def test_a_linked_output_serves_outside_memory_until_unlinked() -> None:
     state.flush_writes()
     state.unlink(["camera/cam/depth"])
     assert image.data_ptr() != outside.data_ptr() and torch.equal(image, outside)
+
+
+def test_moving_an_output_onto_other_memory_is_not_a_write() -> None:
+    state = SimState()
+    image = torch.zeros(2, 3)
+    state.register_output("camera/cam/depth", image)
+    image.set_(torch.ones(2, 3))  # e.g. onto a co-simulation export
+    with state.producing("camera/cam/depth"):
+        image.fill_(2.0)
+    state.flush_writes()

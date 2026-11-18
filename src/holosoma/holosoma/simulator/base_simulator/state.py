@@ -166,14 +166,21 @@ class Columns:
 class _Output:
     """A fixed buffer its producer writes in place; read-only to everyone else."""
 
-    __slots__ = ("buffer", "clean", "linked")
+    __slots__ = ("buffer", "clean", "linked", "memory")
 
     def __init__(self, buffer: torch.Tensor) -> None:
         self.buffer = buffer
-        self.clean = buffer._version
         self.linked = False
+        self.mark_clean()
+
+    def mark_clean(self) -> None:
+        self.clean, self.memory = self.buffer._version, self.buffer.data_ptr()
 
     def written(self) -> bool:
+        """Whether the buffer was written in place since the last baseline; moving it (``set_``) is not."""
+        if self.buffer.data_ptr() != self.memory:
+            self.mark_clean()
+            return False
         return bool(self.buffer._version != self.clean)
 
 
@@ -251,7 +258,8 @@ class SimState:
         """Serve ``buffer`` as ``name``: an output its producer writes in place (see :meth:`producing`).
 
         Outputs are never re-read and are read-only to everyone but the producer. ``buffer`` must be an
-        ordinary tensor (not created in inference mode), so it can be versioned and linked.
+        ordinary tensor (not created in inference mode), so it can be versioned and linked; moving it onto
+        other memory with ``set_`` is not a write.
         """
         if buffer.is_inference():
             raise ValueError(f"Output {name!r} needs an ordinary tensor, not an inference-mode one")
@@ -269,7 +277,7 @@ class SimState:
         finally:
             for output in outputs:
                 torch.autograd.graph.increment_version(output.buffer)
-                output.clean = output.buffer._version
+                output.mark_clean()
 
     def _check_outputs(self, outputs: Iterable[_Output]) -> None:
         """Raise if one of ``outputs`` was written in place by someone other than its producer."""
@@ -280,7 +288,7 @@ class SimState:
             if id(output) in selected and not output.linked and output.written()
         ]
         for name in written:  # report a write once
-            self._outputs[name].clean = self._outputs[name].buffer._version
+            self._outputs[name].mark_clean()
         if written:
             raise RuntimeError(f"Simulator outputs {written} are read-only; only their producer writes them")
 
@@ -400,7 +408,7 @@ class SimState:
                 if (output := self._outputs.get(name)) is not None:
                     output.buffer.set_(output.buffer.clone())
                     output.linked = False
-                    output.clean = output.buffer._version
+                    output.mark_clean()
                     continue
                 registration = self._by_name[name]
                 buffer = registration.buffers[registration.names.index(name)]
