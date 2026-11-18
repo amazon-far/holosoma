@@ -558,6 +558,14 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'apply_torques_at_dof' method must be implemented in subclasses.")
 
+    def set_dof_effort_limits(self, limits: torch.Tensor, dof_indices: list[int]) -> None:
+        """Set symmetric effort limits for the selected DOFs; infinity disables clipping."""
+        raise NotImplementedError
+
+    def set_dof_armatures(self, armatures: torch.Tensor, dof_indices: list[int]) -> None:
+        """Set diagonal reflected inertia for the selected DOFs."""
+        raise NotImplementedError
+
     # ----- DOF access by joint name (public, cross-backend) -----
     #
     # ``dof_pos``/``dof_vel`` and torques are in ``robot_config.dof_names`` order on every backend;

@@ -732,6 +732,27 @@ class IsaacSim(BaseSimulator):
             joint_ids = [self.dof_ids[i] for i in dof_indices]
         self._robot.set_joint_effort_target(torques, joint_ids=joint_ids)
 
+    def set_dof_effort_limits(self, limits: torch.Tensor, dof_indices: list[int]) -> None:
+        joint_ids = [self.dof_ids[i] for i in dof_indices]
+        limits = limits.to(device=self.sim_device).expand(self.num_envs, -1)
+        self._robot.write_joint_effort_limit_to_sim(limits, joint_ids=joint_ids)
+        # Explicit actuator models also clip before submitting efforts to PhysX.
+        for actuator in self._robot.actuators.values():
+            ids = (
+                list(range(self._robot.num_joints))
+                if isinstance(actuator.joint_indices, slice)
+                else actuator.joint_indices
+            )
+            for column, joint_id in enumerate(joint_ids):
+                if joint_id in ids:
+                    actuator.effort_limit[:, list(ids).index(joint_id)] = limits[:, column]
+
+    def set_dof_armatures(self, armatures: torch.Tensor, dof_indices: list[int]) -> None:
+        joint_ids = [self.dof_ids[i] for i in dof_indices]
+        self._robot.write_joint_armature_to_sim(
+            armatures.to(device=self.sim_device).expand(self.num_envs, -1), joint_ids=joint_ids
+        )
+
     def draw_debug_viz(self) -> None:
         if self.virtual_gantry:
             self.virtual_gantry.draw_debug()

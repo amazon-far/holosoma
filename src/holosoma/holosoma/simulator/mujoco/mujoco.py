@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import mujoco
 import mujoco.viewer
+import numpy as np
 import torch
 from loguru import logger
 
@@ -699,7 +700,7 @@ class MuJoCo(BaseSimulator):
         # before the initial pose / joint-angle qpos writes that happen here. Re-sync
         # the CPU state to the GPU so every env starts from the configured initial
         # state rather than the MJCF qpos0 defaults still on the GPU.
-        if isinstance(self.backend, WarpBackend):
+        if WARP_AVAILABLE and isinstance(self.backend, WarpBackend):
             self.backend.initialize_state(self.root_model, self.root_data)
 
         # initialize_state tiles one CPU qpos/model across all envs, so every env's objects sit
@@ -756,7 +757,7 @@ class MuJoCo(BaseSimulator):
 
     def _mj_arrays(self) -> tuple[Any, Any, Any]:
         """``(qpos, qvel, qacc)`` as ``[num_envs, n]`` tensors: Warp's live GPU views, or classic's CPU data."""
-        if isinstance(self.backend, WarpBackend):
+        if WARP_AVAILABLE and isinstance(self.backend, WarpBackend):
             return self.backend.qpos_t, self.backend.qvel_t, self.backend.qacc_t
         assert self.root_data
         data = self.root_data
@@ -858,6 +859,30 @@ class MuJoCo(BaseSimulator):
                 raise ValueError(f"Torque count mismatch: got {len(torques_np)}, expected {len(target_dofs)}")
 
             self.root_data.ctrl[[self._dof_actuator_ids[i] for i in target_dofs]] = torques_np
+
+    def set_dof_effort_limits(self, limits: torch.Tensor, dof_indices: list[int]) -> None:
+        assert self.root_model is not None
+        limits_np = limits.detach().cpu().numpy()
+        actuator_ids = [self._dof_actuator_ids[i] for i in dof_indices]
+        self.root_model.actuator_forcelimited[actuator_ids] = np.isfinite(limits_np)
+        self.root_model.actuator_forcerange[actuator_ids] = np.column_stack((-limits_np, limits_np))
+        # Controls are torques. The effort limit above is their sole saturation.
+        self.root_model.actuator_ctrllimited[actuator_ids] = False
+        joints = self.root_model.dof_jntid[[self.dof_qvel_addrs[i] for i in dof_indices]]
+        self.root_model.jnt_actfrclimited[joints] = False
+        if isinstance(self.backend, WarpBackend):
+            model = self.backend.warp_model_bridge
+            model.actuator_forcelimited[actuator_ids] = torch.isfinite(limits)
+            model.actuator_forcerange[..., actuator_ids, :] = torch.stack((-limits, limits), dim=-1)
+            model.actuator_ctrllimited[actuator_ids] = False
+            model.jnt_actfrclimited[joints] = False
+
+    def set_dof_armatures(self, armatures: torch.Tensor, dof_indices: list[int]) -> None:
+        assert self.root_model is not None
+        addresses = [self.dof_qvel_addrs[i] for i in dof_indices]
+        self.root_model.dof_armature[addresses] = armatures.detach().cpu().numpy()
+        if isinstance(self.backend, WarpBackend):
+            self.backend.warp_model_bridge.dof_armature[..., addresses] = armatures
 
     def draw_debug_viz(self) -> None:
         if self.virtual_gantry:
