@@ -128,7 +128,6 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
             link=lambda names: {name: values[name] for name in names},
             unlink=lambda names: calls.append(("unlink", list(names))),
         ),
-        set_kinematic_time=lambda sim_time: calls.append(("clock", sim_time)),
         sensor_manager=SensorManager("cpu", 50.0),
         match_env_origins=lambda origins: calls.append(("place", origins.tolist())),
     )
@@ -151,7 +150,8 @@ def test_receiver_frame_lifecycle(receiver: ReceiverFixture) -> None:
     worker, calls, replies, _messages = receiver
     worker.run()
     place = ("place", [[0.0, 0.0, 0.0]])
-    assert _in_order(calls, place, ("map", []), "ready", ("advance", ["dof_pos"]), ("clock", 0.035), "capture")
+    assert _in_order(calls, place, ("map", []), "ready", ("advance", ["dof_pos"]), "capture")
+    assert cast("Any", worker.handler).simulator.kinematic_time == 0.035
     assert _in_order(calls, "capture", "readonly", "done", "unmap", ("unlink", []), "close")
     assert replies == [
         {"type": "OPENED", "done_handle": "01", "exports": [], "reads": []},

@@ -224,7 +224,8 @@ class BaseSimulator:
         # helper, like the bridge/gantry below; allocates per-actor buffers lazily on first use.
         self._external_wrench = ExternalWrenchAccumulator(self)
         self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
-        self._kinematic_time = 0.0
+        # The clock time() reports under kinematic playback: one sim dt per step, or as a caller sets it.
+        self.kinematic_time = 0.0
         self.hooks = HookRegistry(base_rates=self._hook_base_rates())
         # Buffer-filling hooks order between capture and render; egress consumers follow render.
         self.sensor_capture_hook: HookHandle = self.hooks.add(
@@ -647,7 +648,7 @@ class BaseSimulator:
         """
         self._advance_substep()
         if self.kinematic_playback:
-            self._kinematic_time += 1.0 / self.simulator_config.sim.fps
+            self.kinematic_time += 1.0 / self.simulator_config.sim.fps
 
     def _advance_substep(self) -> None:
         """Advance the simulation by one substep: one integration step, or one kinematics pass.
@@ -696,9 +697,6 @@ class BaseSimulator:
         """Origins this backend always places environments at, or ``None`` if it honours the origins it is given."""
         return None
 
-    def prepare_render_only(self) -> None:
-        """Prepare, after ordinary startup, to render applied state without physics."""
-
     def match_env_origins(self, origins: torch.Tensor) -> None:
         """Place render-only environments at ``origins`` ``[num_envs, 3]``, where a source simulated them.
 
@@ -709,10 +707,6 @@ class BaseSimulator:
         """Flush applied state and bring body poses and renderers up to date, without integrating physics."""
         self.forward_kinematics()
 
-    def set_kinematic_time(self, sim_time: float) -> None:
-        """Set the clock :meth:`time` reports under ``kinematic_playback``."""
-        self._kinematic_time = sim_time
-
     def time(self) -> float:
         """Get current simulation time in seconds.
 
@@ -721,7 +715,7 @@ class BaseSimulator:
         to allow policies (especially WBT policies) to advance motion timesteps
         in sync with the simulation.
 
-        Under ``sim.kinematic_playback`` this is the kinematic clock (one sim dt per step);
+        Under ``sim.kinematic_playback`` this is :attr:`kinematic_time` (one sim dt per step);
         the engine's own clock does not advance without integration.
 
         Returns
@@ -734,7 +728,7 @@ class BaseSimulator:
         SimulatorBridge.transport_step : Publishes this time via ClockPub
         """
         if self.kinematic_playback:
-            return self._kinematic_time
+            return self.kinematic_time
         return self._physics_time()
 
     def _physics_time(self) -> float:

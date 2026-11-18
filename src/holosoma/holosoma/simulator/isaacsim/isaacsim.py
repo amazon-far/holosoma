@@ -326,19 +326,18 @@ class IsaacSim(BaseSimulator):
         """The clone grid ``InteractiveScene`` builds; :meth:`create_envs` cannot move it."""
         return self.scene.env_origins
 
-    def prepare_render_only(self) -> None:
-        """Stop physics playback and initialize cameras for rendering applied state."""
-        if self._render_capture is not None:
-            raise RuntimeError("Render-only rendering is already prepared")
-        self._render_capture = RenderCapture(self)
-        self._render_capture.initialize_cameras()
+    def _render_only(self) -> RenderCapture:
+        """The render-only capture, created on first use: physics playback stops and cameras initialize."""
+        if self._render_capture is None:
+            self._render_capture = RenderCapture(self)
+            self._render_capture.initialize_cameras()
+        return self._render_capture
 
     def match_env_origins(self, origins: torch.Tensor) -> None:
         """Move the cloned environment prims to ``origins``, so world-frame state renders in place."""
         if origins.shape != self.scene.env_origins.shape or torch.equal(origins, self.scene.env_origins):
             return
-        if self._render_capture is None:
-            raise RuntimeError("Environments can be moved only for render-only rendering")
+        self._render_only()
         from pxr import Gf
 
         stage = stage_utils.get_current_stage()
@@ -353,9 +352,7 @@ class IsaacSim(BaseSimulator):
 
     def render_applied_state(self) -> None:
         """Flush applied state and render through Isaac Lab (which runs FK) with physics held stopped."""
-        if self._render_capture is None:
-            raise RuntimeError("Call prepare_render_only() before rendering applied state")
-        self._render_capture.render()
+        self._render_only().render()
 
     def _get_base_body_name(self, preference_order: list[str]) -> str:
         """Get the base body name with fallback logic.
