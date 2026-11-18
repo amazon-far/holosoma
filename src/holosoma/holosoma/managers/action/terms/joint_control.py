@@ -93,6 +93,12 @@ class JointPositionActionTerm(ActionTermBase):
         self.torques_substep = torch.zeros(self.env.num_envs, decimation, self._action_dim, device=self.env.device)
         self.dof_pos_substep = torch.zeros(self.env.num_envs, decimation, self._action_dim, device=self.env.device)
         self.dof_vel_substep = torch.zeros(self.env.num_envs, decimation, self._action_dim, device=self.env.device)
+        # Per-joint saturation keys are opt-in: one console line each.
+        self._log_torque_sat_per_joint = bool((self.cfg.params or {}).get("log_torque_sat_per_joint", False))
+        if self._log_torque_sat_per_joint:
+            names = [name.removesuffix("_joint") for name in self.env.dof_names]
+            self._torque_sat_keys = [f"torque_sat/{n}" for n in names]
+            self._torque_util_keys = [f"torque_util_p99/{n}" for n in names]
 
         # Randomization setup runs before the action manager's setup and creates these buffers.
         # Once we reach setup(), try attaching any pre-created actuator scales.
@@ -162,10 +168,35 @@ class JointPositionActionTerm(ActionTermBase):
         self.dof_pos_substep[:, self._substep_idx] = self.env.simulator.dof_pos
         self.dof_vel_substep[:, self._substep_idx] = self.env.simulator.dof_vel
         self._substep_idx += 1
+        if self._substep_idx == self.torques_substep.shape[1]:
+            self._log_torque_saturation()
         # Apply torques to simulator
         self.env.simulator.apply_torques_at_dof(self.torques)
         # Cache velocities for next derivative computation
         self._prev_dof_vel.copy_(self.env.simulator.dof_vel)
+
+    def _log_torque_saturation(self) -> None:
+        """Log how often the applied torque is at its joint limit, over all envs and substeps of this step.
+
+        torques_substep holds the applied torque: with clip_torques=True a saturating request sits at exactly
+        +-limit; with clip_torques=False it is the request itself. RFI noise is included. A joint with a zero
+        limit always counts as saturated.
+        """
+        limits = self.env.torque_limits
+        abs_torques = self.torques_substep.abs()
+        per_joint = (abs_torques >= limits).float().mean(dim=(0, 1))
+        self.env.log_dict["torque_sat_frac"] = per_joint.mean()
+        self.env.log_dict["torque_sat_max"] = per_joint.max()
+        if not self._log_torque_sat_per_joint:
+            return
+        # Utilization |tau| / limit; zero-limit joints report 0 rather than dividing by zero.
+        util = torch.where(limits > 0, abs_torques / limits.clamp_min(1e-12), torch.zeros_like(abs_torques))
+        util_p99 = torch.quantile(util.reshape(-1, util.shape[-1]), 0.99, dim=0)
+        for sat_key, util_key, sat, u in zip(
+            self._torque_sat_keys, self._torque_util_keys, per_joint, util_p99, strict=True
+        ):
+            self.env.log_dict[sat_key] = sat
+            self.env.log_dict[util_key] = u
 
     def _compute_torques(self, actions: torch.Tensor) -> torch.Tensor:
         """Compute torques from actions using PD controller.
