@@ -872,8 +872,8 @@ class BaseSimulator:
                 f"mount_pose/{record.name}",
                 lambda: record.mount_poses,
                 write=write,
-                validation_groups=(STATE,),
-                invalidates=(),
+                stale_with=(STATE,),
+                stales=(),
             )
 
         for record in [*manager.cameras, *manager.lidars]:
@@ -1542,7 +1542,7 @@ class BaseSimulator:
         """Deprecated: state tensors are current at every read."""
         _warn_deprecated("refresh_sim_tensors", "drop the call; call forward_kinematics() to apply writes now")
         self.state.flush_writes()
-        self.state.mark_stale()
+        self.state.mark_stale((STATE, DERIVED))
 
     def _deprecated_env_ids(self, env_ids: torch.Tensor | None) -> torch.Tensor:
         if env_ids is None:

@@ -698,10 +698,8 @@ class IsaacSim(BaseSimulator):
             self.prev_dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
             self._base_linear_acc = torch.zeros(self.num_envs, 3, device=self.sim_device)
             self.prev_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.sim_device)
-            self.state.register("dof_acc", lambda: self._dof_acc, validation_groups=(DERIVED,), invalidates=())
-            self.state.register(
-                "base_linear_acc", lambda: self._base_linear_acc, validation_groups=(DERIVED,), invalidates=()
-            )
+            self.state.register("dof_acc", lambda: self._dof_acc, stale_with=(DERIVED,), stales=())
+            self.state.register("base_linear_acc", lambda: self._base_linear_acc, stale_with=(DERIVED,), stales=())
             self.hooks.add(Phase.POST_STEP, self._update_bridge_accelerations, name="isaacsim.bridge_accelerations")
         else:
             logger.debug("Bridge disabled: skipping acceleration computation tensors")
@@ -747,22 +745,22 @@ class IsaacSim(BaseSimulator):
             "robot_root_states",
             lambda: fullstate_wxyz_to_xyzw(data.root_state_w),
             write=write_robot_root_states,
-            validation_groups=(STATE,),
-            invalidates=(DERIVED,),
+            stale_with=(STATE,),
+            stales=(DERIVED,),
         )
         self.state.register(
             "dof_pos",
             Columns(lambda: data.joint_pos, self.dof_ids),
             write=joint_writer(self._robot.write_joint_position_to_sim),
-            validation_groups=(STATE,),
-            invalidates=(DERIVED,),
+            stale_with=(STATE,),
+            stales=(DERIVED,),
         )
         self.state.register(
             "dof_vel",
             Columns(lambda: data.joint_vel, self.dof_ids),
             write=joint_writer(self._robot.write_joint_velocity_to_sim),
-            validation_groups=(STATE,),
-            invalidates=(DERIVED,),
+            stale_with=(STATE,),
+            stales=(DERIVED,),
         )
         object_names = self.object_state_names
         object_handles = [self.scene.rigid_objects[name] for name in object_names]
@@ -782,10 +780,10 @@ class IsaacSim(BaseSimulator):
             "object_root_states",
             read_object_root_states,
             write=write_object_root_states,
-            validation_groups=(STATE,),
-            invalidates=(DERIVED,),
+            stale_with=(STATE,),
+            stales=(DERIVED,),
         )
-        self.state.register("contact_forces", self._robot_contact_forces, validation_groups=(DERIVED,), invalidates=())
+        self.state.register("contact_forces", self._robot_contact_forces, stale_with=(DERIVED,), stales=())
         body_sources = {
             "rigid_body_pos_w": lambda: data.body_pos_w,
             # Isaac Lab stores wxyz; holosoma uses xyzw.
@@ -795,7 +793,7 @@ class IsaacSim(BaseSimulator):
             "rigid_body_ang_vel_w": lambda: data.body_ang_vel_w,
         }
         for name, source in body_sources.items():
-            self.state.register(name, Columns(source, self.body_ids), validation_groups=(DERIVED,), invalidates=())
+            self.state.register(name, Columns(source, self.body_ids), stale_with=(DERIVED,), stales=())
 
     def _robot_contact_forces(self) -> torch.Tensor:
         """Sensor forces in robot body order, (num_envs, num_bodies, 3). The contact sensor's body

@@ -63,7 +63,7 @@ class SensorRecord:
         name = self.field_name(output)
         with torch.inference_mode(False):
             frame = torch.zeros(shape, dtype=dtype, device=device)
-        self.state.register(name, None, validation_groups=(), invalidates=(), dtype=dtype)
+        self.state.register(name, None, stale_with=(), stales=(), dtype=dtype)
         self.buffers[output] = self.state.link({name: frame})[name]
 
     @contextmanager

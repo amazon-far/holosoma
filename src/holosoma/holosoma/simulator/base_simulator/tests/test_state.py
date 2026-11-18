@@ -23,7 +23,7 @@ def _counting_state(writable: bool = True, rows: int = 2) -> tuple[SimState, tor
         flushed.append(env_rows.tolist())
         backing[env_rows] = out[env_rows]
 
-    state.register("x", read, write=write if writable else None, validation_groups=(STATE,), invalidates=(DERIVED,))
+    state.register("x", read, write=write if writable else None, stale_with=(STATE,), stales=(DERIVED,))
     return state, backing, reads, flushed
 
 
@@ -34,7 +34,7 @@ def test_reads_once_per_state_change() -> None:
 
     backing += 10
     assert not torch.equal(state.get("x"), backing) and len(reads) == 1
-    state.mark_stale()
+    state.mark_stale((STATE, DERIVED))
     assert torch.equal(state.get("x"), backing) and state.get("x") is served and len(reads) == 2
 
 
@@ -52,7 +52,7 @@ def test_a_flush_writes_only_changed_rows() -> None:
     assert flushed == [[1, 3]]
 
     backing[0, 0] = float("nan")  # a diverged env: NaN rows are unchanged unless written
-    state.mark_stale()
+    state.mark_stale((STATE, DERIVED))
     state.get("x")[2] = -3.0
     state.flush_writes()
     assert flushed == [[1, 3], [2]]
@@ -61,7 +61,7 @@ def test_a_flush_writes_only_changed_rows() -> None:
 def test_a_read_only_write_raises_once_and_flushes_nothing() -> None:
     state, backing, _, flushed = _counting_state()
     read_only = torch.zeros(2, 3)
-    state.register("y", lambda: read_only, validation_groups=(DERIVED,), invalidates=())
+    state.register("y", lambda: read_only, stale_with=(DERIVED,), stales=())
     state.get("x")[0] = -1.0
     state.get("y")[0] = -1.0
     with pytest.raises(RuntimeError, match="read-only"):
@@ -75,7 +75,7 @@ def test_a_read_only_write_raises_once_and_flushes_nothing() -> None:
 def test_writes_after_the_simulation_changed_raise() -> None:
     state, _, _, _ = _counting_state()
     served = state.get("x")
-    state.mark_stale()
+    state.mark_stale((STATE, DERIVED))
     served[0] = -1.0
     with pytest.raises(RuntimeError, match="written in place after"):
         state.get("x")
@@ -100,13 +100,13 @@ def test_one_read_serves_several_names() -> None:
         reads.append(1)
         return values
 
-    state.register(("a", "b"), read, validation_groups=(DERIVED,), invalidates=())
+    state.register(("a", "b"), read, stale_with=(DERIVED,), stales=())
     assert torch.equal(state.get("b"), values[1].float()) and state.get("b").dtype == torch.float32
     state.get("a")
     assert len(reads) == 1
     assert torch.equal(state._read_fresh("a"), values[0])
 
-    state.register("c", lambda: values, validation_groups=(DERIVED,), invalidates=())
+    state.register("c", lambda: values, stale_with=(DERIVED,), stales=())
     with pytest.raises(ValueError, match="returned 2 tensors"):
         state.get("c")
 
@@ -114,16 +114,16 @@ def test_one_read_serves_several_names() -> None:
 def test_columns_return_the_selection() -> None:
     source = torch.arange(12, dtype=torch.float32).reshape(2, 6)
     state = SimState()
-    state.register("run", Columns(source, [2, 3, 4]), validation_groups=(DERIVED,), invalidates=())
-    state.register("gathered", Columns(source, [4, 2]), validation_groups=(DERIVED,), invalidates=())
-    state.register("callable", Columns(lambda: source, [2, 3, 4]), validation_groups=(DERIVED,), invalidates=())
+    state.register("run", Columns(source, [2, 3, 4]), stale_with=(DERIVED,), stales=())
+    state.register("gathered", Columns(source, [4, 2]), stale_with=(DERIVED,), stales=())
+    state.register("callable", Columns(lambda: source, [2, 3, 4]), stale_with=(DERIVED,), stales=())
 
     assert torch.equal(state.get("run"), source[:, 2:5])
     assert torch.equal(state.get("gathered"), source[:, [4, 2]])
 
     source += 100
     assert not torch.equal(state.get("run"), source[:, 2:5])
-    state.mark_stale()
+    state.mark_stale((STATE, DERIVED))
     assert torch.equal(state.get("run"), source[:, 2:5])
     assert torch.equal(state.get("callable"), source[:, 2:5])
 
@@ -136,7 +136,7 @@ def test_a_flush_keeps_written_tensors_valid() -> None:
         other_reads.append(1)
         return torch.zeros(2, 3)
 
-    state.register("y", read_other, validation_groups=(DERIVED,), invalidates=())
+    state.register("y", read_other, stale_with=(DERIVED,), stales=())
     held = state.get("x")
     state.get("y")
 
@@ -156,8 +156,8 @@ def test_a_flush_keeps_other_writable_tensors_valid() -> None:
         "z",
         lambda: other,
         write=lambda rows, out: other.__setitem__(rows, out[rows]),
-        validation_groups=(STATE,),
-        invalidates=(DERIVED,),
+        stale_with=(STATE,),
+        stales=(DERIVED,),
     )
     held = state.get("z")
     state.get("x")[0] = -1.0
@@ -170,7 +170,7 @@ def test_a_flush_keeps_other_writable_tensors_valid() -> None:
 def test_a_stale_write_raises_at_the_next_flush() -> None:
     state, backing, _, flushed = _counting_state()
     held = state.get("x")
-    state.mark_stale()  # a physics step
+    state.mark_stale((STATE, DERIVED))  # a physics step
     held[0] = -1.0
     with pytest.raises(RuntimeError, match="written in place after"):
         state.flush_writes()
@@ -187,7 +187,7 @@ def test_assigning_a_registered_tensor_raises() -> None:
 
     sim = Sim()
     sim.x = torch.zeros(2)  # a placeholder before registration
-    sim.state.register("x", lambda: torch.ones(2), validation_groups=(DERIVED,), invalidates=())
+    sim.state.register("x", lambda: torch.ones(2), stale_with=(DERIVED,), stales=())
     with pytest.raises(AttributeError, match="in place"):
         sim.x = torch.zeros(2)
 
@@ -237,7 +237,7 @@ def test_linked_tensor_is_never_re_read_and_flushes_outside_writes() -> None:
 
 def _output(state: SimState, name: str, value: torch.Tensor) -> torch.Tensor:
     """Register ``name`` without a read and link it onto ``value``, as a sensor output."""
-    state.register(name, None, validation_groups=(), invalidates=(), dtype=value.dtype)
+    state.register(name, None, stale_with=(), stales=(), dtype=value.dtype)
     return state.link({name: value})[name]
 
 

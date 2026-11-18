@@ -12,13 +12,13 @@ state write that would replace them: the changed rows (environments) are flushed
 ``write``. A tensor bound without ``write`` is read-only. :meth:`SimState.link` serves writable tensors whose memory is
 written from outside: they are never re-read, and their changed rows flush like in-place writes.
 
-Fields go stale by validation group. Each field belongs to the ``validation_groups`` it registers with, and to
-a group named after itself; invalidating a group marks its fields stale. Invalidation cascades: a field going
-stale, or being flushed, invalidates its own ``invalidates`` groups. Simulation inputs belong to
-:data:`STATE` and invalidate :data:`DERIVED`, to which quantities derived from them belong. Backends wrap every
-state mutation in :meth:`SimState.mutation`, which flushes pending writes first and invalidates a group after:
-:data:`STATE` when the simulation state changes, :data:`DERIVED` when only quantities derived from it are
-recomputed.
+Fields go stale by group. Each field goes stale with the groups in its ``stale_with``, and with a group
+named after itself; marking a group stale (:meth:`SimState.mark_stale`) marks its fields stale. Staleness
+cascades: a field going stale, or being flushed, marks the groups in its ``stales`` stale. Simulation inputs go
+stale with :data:`STATE` and mark :data:`DERIVED` stale, which quantities derived from them go stale with.
+Backends wrap every state mutation in :meth:`SimState.mutation`, which flushes pending writes first and marks a
+group stale after: :data:`STATE` when the simulation state changes, :data:`DERIVED` when only quantities derived
+from it are recomputed.
 """
 
 from __future__ import annotations
@@ -34,9 +34,9 @@ Read = Callable[[], "torch.Tensor | tuple[torch.Tensor, ...]"]
 BufferAllocator = Callable[[str, torch.Tensor, torch.device | str | None, torch.dtype], torch.Tensor]
 
 STATE = "state"
-"""Validation group of the simulation's inputs, invalidated by a physics step or a backend state write."""
+"""Staleness group of the simulation's inputs, marked stale by a physics step or a backend state write."""
 DERIVED = "derived"
-"""Validation group of quantities derived from the inputs, invalidated by an FK pass or a changed input."""
+"""Staleness group of quantities derived from the inputs, marked stale by an FK pass or a changed input."""
 
 
 class _Registration:
@@ -44,13 +44,13 @@ class _Registration:
         "buffers",
         "clean",
         "dtype",
-        "invalidates",
         "linked",
         "memory",
         "names",
         "read",
+        "stale_with",
+        "stales",
         "valid",
-        "validation_groups",
         "write",
     )
 
@@ -59,16 +59,16 @@ class _Registration:
         names: tuple[str, ...],
         read: Read | None,
         write: Callable[..., None] | None,
-        validation_groups: frozenset[str],
-        invalidates: frozenset[str],
+        stale_with: frozenset[str],
+        stales: frozenset[str],
         dtype: torch.dtype,
     ) -> None:
         self.names = names
         self.dtype = dtype
         self.read = read
         self.write = write
-        self.validation_groups = validation_groups | frozenset(names)
-        self.invalidates = invalidates
+        self.stale_with = stale_with | frozenset(names)
+        self.stales = stales
         self.buffers: tuple[torch.Tensor, ...] = ()
         self.valid = False
         self.linked = False
@@ -198,8 +198,8 @@ class SimState:
         read: Columns,
         *,
         write: Callable[[torch.Tensor, torch.Tensor], None] | None = None,
-        validation_groups: Iterable[str],
-        invalidates: Iterable[str],
+        stale_with: Iterable[str],
+        stales: Iterable[str],
         dtype: torch.dtype = torch.float32,
     ) -> None: ...
 
@@ -209,8 +209,8 @@ class SimState:
         names: str | Sequence[str],
         read: None,
         *,
-        validation_groups: Iterable[str],
-        invalidates: Iterable[str],
+        stale_with: Iterable[str],
+        stales: Iterable[str],
         dtype: torch.dtype = torch.float32,
     ) -> None: ...
 
@@ -221,8 +221,8 @@ class SimState:
         read: Read,
         *,
         write: Callable[..., None] | None = None,
-        validation_groups: Iterable[str],
-        invalidates: Iterable[str],
+        stale_with: Iterable[str],
+        stales: Iterable[str],
         dtype: torch.dtype = torch.float32,
     ) -> None: ...
 
@@ -232,22 +232,21 @@ class SimState:
         read: Columns | Read | None,
         *,
         write: Callable[..., None] | None = None,
-        validation_groups: Iterable[str],
-        invalidates: Iterable[str],
+        stale_with: Iterable[str],
+        stales: Iterable[str],
         dtype: torch.dtype = torch.float32,
     ) -> None:
         """Serve ``read``'s values as ``names``, re-read after a state change and flushed by ``write(rows, *buffers)``.
 
         ``read`` returns one tensor per name. Without ``write`` the tensors are read-only. Without ``read`` they
         are served only by :meth:`link`, never re-read and never stale, and are written by their producer inside
-        :meth:`producing`. They go stale when one
-        of their ``validation_groups`` is invalidated, and going stale or being flushed invalidates the groups in
-        ``invalidates``; each name is also a validation group of its own. Buffers have ``dtype``.
+        :meth:`producing`. The tensors go stale with the groups in ``stale_with`` and with their own names; going
+        stale or being flushed marks the groups in ``stales`` stale. Buffers have ``dtype``.
         """
         names = (names,) if isinstance(names, str) else tuple(names)
         if read is None and write is not None:
             raise ValueError(f"Simulator state {names} needs a read to flush its writes")
-        registration = _Registration(names, read, write, frozenset(validation_groups), frozenset(invalidates), dtype)
+        registration = _Registration(names, read, write, frozenset(stale_with), frozenset(stales), dtype)
         for name in names:
             self._unbind(name)
             self._by_name[name] = registration
@@ -284,15 +283,15 @@ class SimState:
 
     @contextmanager
     def mutation(self, group: str) -> Iterator[None]:
-        """Wrap a mutation of the simulation state: flush pending writes first, invalidate ``group`` after."""
+        """Wrap a mutation of the simulation state: flush pending writes first, mark ``group`` stale after."""
         self.flush_writes()
         try:
             yield
         finally:
-            self.invalidate({group})
+            self.mark_stale({group})
 
     def flush_writes(self) -> None:
-        """Write the rows written in place to the simulation, then invalidate the ``invalidates`` groups of the fields
+        """Write the rows written in place to the simulation, then mark the ``stales`` groups of the fields
         written.
 
         A flushed buffer already holds what the simulation now has, so it stays valid.
@@ -317,45 +316,33 @@ class SimState:
                 registration.valid = False
             names = ", ".join(name for registration in read_only for name in registration.names)
             raise RuntimeError(f"Simulator state {names} is read-only")
-        fired: set[str] = set()
+        marked: set[str] = set()
         # Compare every written tensor with the simulation before writing any of them back.
         for registration, rows in [(registration, registration.changed_rows()) for registration in written]:
             if rows.numel():
                 assert registration.write is not None
                 registration.write(rows, *registration.buffers)
-                fired |= registration.invalidates
+                marked |= registration.stales
             registration.mark_clean()
-        self.invalidate(fired)
+        self.mark_stale(marked)
 
-    def invalidate(self, groups: Iterable[str]) -> None:
-        """Mark stale every tensor in one of ``groups``, and in turn every tensor in the groups those invalidate;
-        linked tensors are never stale."""
-        fired: set[str] = set()
-        pending = set(groups)
+    def mark_stale(self, groups: str | Iterable[str]) -> None:
+        """Mark stale every tensor that goes stale with one of ``groups`` (a field's name is one of its groups), and
+        in turn every tensor that goes stale with the groups those mark stale; linked tensors are never stale."""
+        marked: set[str] = set()
+        pending = {groups} if isinstance(groups, str) else set(groups)
         while pending:
-            fired |= pending
+            marked |= pending
             matched = [
                 registration
                 for registration in self._registrations
                 if registration.read is not None
                 and not registration.linked
-                and not pending.isdisjoint(registration.validation_groups)
+                and not pending.isdisjoint(registration.stale_with)
             ]
             for registration in matched:
                 registration.valid = False
-            pending = {group for registration in matched for group in registration.invalidates} - fired
-
-    def mark_stale(self, names: str | Iterable[str] | None = None) -> None:
-        """Mark every tensor stale, or only those registered with ``names``, so the next access re-reads it.
-
-        Linked tensors stay valid.
-        """
-        if names is None:
-            for registration in self._registrations:
-                if registration.read is not None and not registration.linked:
-                    registration.valid = False
-        else:
-            self.invalidate({names} if isinstance(names, str) else names)
+            pending = {group for registration in matched for group in registration.stales} - marked
 
     def link(self, sources: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Serve tensors from ``sources``' memory (``set_``) in place of their read, and return them.

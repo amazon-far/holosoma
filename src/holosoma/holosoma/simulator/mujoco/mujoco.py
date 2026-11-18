@@ -800,20 +800,20 @@ class MuJoCo(BaseSimulator):
                 name,
                 Columns(source, ids),
                 write=write_columns(source, ids),
-                validation_groups=(STATE,),
-                invalidates=(DERIVED,),
+                stale_with=(STATE,),
+                stales=(DERIVED,),
             )
-        state.register("dof_acc", Columns(qacc, self.dof_qvel_addrs), validation_groups=(DERIVED,), invalidates=())
+        state.register("dof_acc", Columns(qacc, self.dof_qvel_addrs), stale_with=(DERIVED,), stales=())
 
         qvel_addr = self.object_addrs["robot"]["qvel_addr"]
         linear_acc_ids = range(qvel_addr, qvel_addr + 3)
-        state.register("base_linear_acc", Columns(qacc, linear_acc_ids), validation_groups=(DERIVED,), invalidates=())
+        state.register("base_linear_acc", Columns(qacc, linear_acc_ids), stale_with=(DERIVED,), stales=())
         if b > 0:
             state.register(
                 "contact_forces",
                 lambda: self.backend.compute_contact_forces()[:, self._body_ids_t],
-                validation_groups=(DERIVED,),
-                invalidates=(),
+                stale_with=(DERIVED,),
+                stales=(),
             )
 
         env_ids = torch.arange(n, device=device)
@@ -822,8 +822,8 @@ class MuJoCo(BaseSimulator):
             "robot_root_states",
             lambda: self._freejoint_angvel_to_world(self.backend.get_actor_state(env_ids, *robot_addrs)),
             write=lambda rows, root: self._write_root_states(rows, root[rows]),
-            validation_groups=(STATE,),
-            invalidates=(DERIVED,),
+            stale_with=(STATE,),
+            stales=(DERIVED,),
         )
         if isinstance(self.backend, WarpBackend):
             self._object_read_plan = ObjectReadPlan.build(
@@ -839,18 +839,16 @@ class MuJoCo(BaseSimulator):
             "object_root_states",
             self._read_object_root_states,
             write=lambda rows, out: self._write_object_root_states(rows, out[rows]),
-            validation_groups=(STATE,),
-            invalidates=(DERIVED,),
+            stale_with=(STATE,),
+            stales=(DERIVED,),
         )
 
         body_names = ("rigid_body_pos_w", "rigid_body_quat_w", "rigid_body_lin_vel_w", "rigid_body_ang_vel_w")
         if b == 0:
             empty = tuple(torch.zeros(n, 0, width, device=device) for width in (3, 4, 3, 3))
-            state.register(body_names, lambda: empty, validation_groups=(DERIVED,), invalidates=())
+            state.register(body_names, lambda: empty, stale_with=(DERIVED,), stales=())
         else:
-            state.register(
-                body_names, self.backend.refresh_rigid_body_states, validation_groups=(DERIVED,), invalidates=()
-            )
+            state.register(body_names, self.backend.refresh_rigid_body_states, stale_with=(DERIVED,), stales=())
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
         """Apply torques with backend-specific optimization.
