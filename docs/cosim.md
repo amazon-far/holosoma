@@ -120,7 +120,7 @@ class ForcePlugin(HeadPlugin):  # head: before every physics substep, the peer w
 
 
 class ForceSolver(PeerHandler):  # peer: read contacts, write forces
-    def reads(self, state):
+    def reads(self, fields):
         return ("contact_forces",)
 
     def export_source(self, field):  # a new tensor each step, so copied after it
