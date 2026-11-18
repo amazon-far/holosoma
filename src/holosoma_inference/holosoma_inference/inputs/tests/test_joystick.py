@@ -7,6 +7,8 @@ This module contains additional per-concern tests for interface-specific behavio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 
 def _make_interface(**overrides):
     iface = MagicMock()
@@ -133,6 +135,23 @@ class TestJoystickCommandMapping:
         from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
         assert JOYSTICK_COMMANDS["select+A"] == StateCommand.START_MOTION_CLIP
+        assert JOYSTICK_COMMANDS["R2"] == StateCommand.START_MOTION_CLIP
+
+    def test_r2_bit_resolves_to_the_motion_clip_command(self):
+        """ABS_RZ sets _BIT_R2; this is the bit -> label -> command chain poll_commands walks."""
+        pytest.importorskip("evdev")
+        from holosoma_inference.inputs.api.commands import StateCommand
+        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
+        from holosoma_inference.inputs.impl.usb_joystick import _BIT_R2, _KEY_LABEL
+
+        assert JOYSTICK_COMMANDS[_KEY_LABEL[_BIT_R2]] == StateCommand.START_MOTION_CLIP
+
+    def test_motion_clip_button_is_not_half_of_a_chord(self):
+        """poll_commands fires per label change, so a chord's halves must stay unbound."""
+        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
+
+        assert "L1" not in JOYSTICK_COMMANDS
+        assert "R1" not in JOYSTICK_COMMANDS
 
     def test_policy_select_mapped(self):
         from holosoma_inference.inputs.api.commands import StateCommand
