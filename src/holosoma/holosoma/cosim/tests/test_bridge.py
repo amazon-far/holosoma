@@ -390,6 +390,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     monkeypatch.setattr(bridge, "ControlChannel", lambda **_: control)
     mapped = SimpleNamespace(
         tensors=images,
+        serve=lambda tensors: calls.append(("serve", sorted(tensors))),
         verify_read_only=lambda: calls.append("readonly"),
         record_exchange=lambda: calls.append("record_exchange"),
         release=lambda: calls.append("unmap"),
@@ -400,7 +401,14 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     values = {"dof_pos": torch.zeros(2, 1), "dof_vel": torch.zeros(2, 1)}
     sim = _Simulator(
         sim_device="cuda:0",
-        state=SimpleNamespace(names=lambda: list(values), get=values.__getitem__, set_buffer_allocator=lambda _: None),
+        state=SimpleNamespace(
+            names=lambda: list(values),
+            get=values.__getitem__,
+            set_buffer_allocator=lambda _: None,
+            output_names=manager.state.output_names,
+            link=manager.state.link,
+            unlink=manager.state.unlink,
+        ),
         sensor_manager=manager,
         hooks=HookRegistry(),
         dof_names=["a"],
@@ -426,7 +434,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     return head, manager, images, calls
 
 
-def test_remote_due_cameras_get_copies_of_the_peer_images(plugin: PluginFixture) -> None:
+def test_remote_due_cameras_read_the_peer_images_in_place(plugin: PluginFixture) -> None:
     head, manager, images, calls = plugin
     assert [request["name"] for request in calls[0][1]["requests"]] == ["camera/cam/rgb", "camera/cam/depth"]
     hooks = head.simulator.hooks
@@ -434,14 +442,15 @@ def test_remote_due_cameras_get_copies_of_the_peer_images(plugin: PluginFixture)
     seen: list[set[str]] = []
     hooks.add(Phase.FRAME_END, lambda: seen.append(set(remote.written)), after=head.simulator.sensor_render_hook)
     hooks.emit(Phase.FRAME_END)
-    assert calls[1:4] == ["readonly", calls[2], "record_exchange"]
-    assert calls[2][0] == "EXCHANGE_REQUEST" and calls[2][1]["snapshot"]["phase"] == "frame_end"
+    assert calls[1] == ("serve", ["camera/cam/depth", "camera/cam/rgb"])  # linked at the handshake
+    assert calls[2:5] == ["readonly", calls[3], "record_exchange"]
+    assert calls[3][0] == "EXCHANGE_REQUEST" and calls[3][1]["snapshot"]["phase"] == "frame_end"
     assert seen == [{"rgb", "depth"}]  # filled before consumers of the sensor render hook
     for data_type in ("rgb", "depth"):
         buffer = remote.buffers[data_type]
         assert (
             torch.equal(buffer, images[f"camera/cam/{data_type}"])
-            and buffer.data_ptr() != images[f"camera/cam/{data_type}"].data_ptr()
+            and buffer.data_ptr() == images[f"camera/cam/{data_type}"].data_ptr()
         )
     assert not manager.get("local").written and not manager.get("elsewhere").written
 

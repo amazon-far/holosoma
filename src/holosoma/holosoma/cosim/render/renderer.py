@@ -16,7 +16,7 @@ here as ordinary cameras. Start the renderer before the head; it exits when the 
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from dataclasses import replace
 from typing import Any
@@ -142,8 +142,8 @@ class RenderHandler(PeerHandler):
         self.simulator.state.unlink(self._linked)
         self._linked = ()
 
-    def export_source(self, request: FieldSpec) -> Callable[[], torch.Tensor]:
-        """Export the SimState output ``request`` names, e.g. ``camera/<name>/rgb``."""
+    def export_source(self, request: FieldSpec) -> torch.Tensor:
+        """Export the SimState output ``request`` names, e.g. ``camera/<name>/rgb``; its writer renders into it."""
         state = self.simulator.state
         if request.name not in state.output_names():
             raise ValueError(f"Peer has no output {request.name!r} for the head's request")
@@ -151,7 +151,7 @@ class RenderHandler(PeerHandler):
         own = FieldSpec(request.name, tuple(output.shape), str(output.dtype).removeprefix("torch."))
         if request != own:
             raise ValueError(f"Output {request.name!r} differs between simulators: head {request}, peer {own}")
-        return lambda: output
+        return output
 
     def step(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:
         self.simulator.kinematic_time = snapshot.sim_time

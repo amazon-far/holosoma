@@ -81,7 +81,8 @@ class HeadPlugin:
 class PeerHandler:
     """A peer's side of the exchange: choose the state to read, answer requests and fill exports.
 
-    Each export is copied from its :meth:`export_source` after every :meth:`step`. Subclasses override :meth:`accept`,
+    Each export is filled from its :meth:`export_source`: a tensor is moved onto the export, so writes to it
+    land there; a callable is copied into the export after every :meth:`step`. Subclasses override :meth:`accept`,
     :meth:`reads`, :meth:`export_source` and :meth:`step`, and :meth:`link` and :meth:`unlink` to read the
     head's state through tensors of their own.
     """
@@ -103,7 +104,17 @@ class PeerHandler:
         for request, source in sources:
             allocation = allocate_shared(request.shape, request.dtype, self.device)
             self.allocations[request.name] = allocation
-            self._exports.append((wp.to_torch(allocation), source))
+            export = wp.to_torch(allocation)
+            if not isinstance(source, torch.Tensor):
+                self._exports.append((export, source))
+                continue
+            if (source.shape, source.dtype, source.device) != (export.shape, export.dtype, export.device):
+                raise ValueError(
+                    f"Export source for {request.name!r} is {source.dtype} {tuple(source.shape)} on "
+                    f"{source.device}, the request is {export.dtype} {tuple(export.shape)} on {export.device}"
+                )
+            with torch.inference_mode(False):
+                source.set_(export)
         return reads
 
     def process(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:
@@ -130,8 +141,12 @@ class PeerHandler:
     def unlink(self) -> None:
         """Move what :meth:`link` linked off the mapping; called before the mapping is released."""
 
-    def export_source(self, request: FieldSpec) -> Callable[[], torch.Tensor]:
-        """Return what fills the export for ``request`` after each step; raise if it cannot be answered."""
+    def export_source(self, request: FieldSpec) -> torch.Tensor | Callable[[], torch.Tensor]:
+        """Return what fills the export for ``request``; raise if it cannot be answered.
+
+        A tensor shaped like the request is moved onto the export (``set_``), so whoever writes it writes the
+        export and it keeps that memory; a callable returns the tensor to copy into the export after each step.
+        """
         raise ValueError(f"Peer has no export for the head's request {request.name!r}")
 
     def step(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:

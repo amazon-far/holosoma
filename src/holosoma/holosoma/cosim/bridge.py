@@ -202,6 +202,10 @@ class HeadBridge:
                 raise RuntimeError(f"Peer exported {images}, requested {requested}")
             self.peer_meta: dict[str, Any] = reply["meta"]
             self._imports = MappedBuffers(specs, device=simulator.sim_device)
+            # Requested SimState outputs are served from the peer's memory directly.
+            outputs = set(simulator.state.output_names())
+            self._linked = [spec.name for spec in specs if spec.name in outputs]
+            self._imports.serve(simulator.state.link({name: self._imports.tensors[name] for name in self._linked}))
         except BaseException:
             self.control.close()
             raise
@@ -210,7 +214,8 @@ class HeadBridge:
     def imports(self) -> dict[str, torch.Tensor]:
         """The peer's exports, by request name, read in place; valid after an exchange until the next one.
 
-        The same tensors throughout, read-only; each version moves once per exchange the peer wrote it.
+        The same tensors throughout, read-only; each version moves once per exchange. Requested SimState
+        outputs are linked onto them, so they serve the peer's memory as well.
         """
         return self._imports.tensors
 
@@ -264,6 +269,7 @@ class HeadBridge:
             try:
                 self._imports.verify_read_only()
             finally:
+                self.simulator.state.unlink(self._linked)
                 self._imports.release()
             if not self.failed:
                 reply = self.control.exchange(MessageType.CLOSE_REQUEST)

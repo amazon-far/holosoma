@@ -71,12 +71,16 @@ class SensorRecord:
         with self.state.producing(self.field_name(output)):
             yield self.buffers[output]
             self._finish(output, env_ids)
-        self.written.add(output)
-        self.rendered.add(output)
-        self._drop_device_cache(output)
+        self.mark_written(output)
 
     def _finish(self, output: str, env_ids: torch.Tensor | None) -> None:
         """Post-process a frame just written into ``output``'s buffer."""
+
+    def mark_written(self, output: str) -> None:
+        """Record a new frame in ``output``'s buffer written by someone else, e.g. a co-simulation peer."""
+        self.written.add(output)
+        self.rendered.add(output)
+        self._drop_device_cache(output)
 
     def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
         """Copy a finished frame into ``output``'s buffer."""

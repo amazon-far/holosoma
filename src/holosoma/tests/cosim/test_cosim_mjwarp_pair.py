@@ -29,6 +29,7 @@ def test_receiver_images_become_the_source_remote_camera_data() -> None:
     outputs = ("loopback/rgb", "loopback/depth")
 
     assert sent["frames"] == rendered["frames"] > 1 and rendered["linked"]
+    assert rendered["exports_in_place"] and sent["imports_in_place"]
     torch.testing.assert_close(rendered["robot_root_states"], sent["robot_root_states"])
     torch.testing.assert_close(rendered["dof_pos"], sent["dof_pos"])
     for output in outputs:

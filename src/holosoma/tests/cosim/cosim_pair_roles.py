@@ -90,6 +90,10 @@ def receiver(endpoint: str, output: Path, num_envs: int, loopback: bool, backend
             def step(self, snapshot: Any, state: Any) -> None:
                 # The renderer's state is the head's memory, not a copy of it.
                 saved["linked"] = all(state[name] is sim.state.get(name) for name in state)
+                # Its cameras render straight into the exports.
+                saved["exports_in_place"] = all(
+                    sim.state.get(name).data_ptr() == allocation.ptr for name, allocation in self.allocations.items()
+                )
                 super().step(snapshot, state)
 
         receiver_loop = PeerBridge(LinkCheckingHandler(task), endpoint=endpoint)
@@ -120,6 +124,10 @@ def source(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bo
                     manager.set_mount_pose(name, moved)
             task.step()
         saved["frames"] = cosim.bridge.sequence
+        # Remote camera outputs are the renderer's exports, not copies.
+        saved["imports_in_place"] = all(
+            sim.state.get(name).data_ptr() == tensor.data_ptr() for name, tensor in cosim.bridge.imports.items()
+        )
     torch.save(saved, output / "source.pt")
 
 

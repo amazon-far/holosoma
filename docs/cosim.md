@@ -32,15 +32,16 @@ python -m holosoma.run_sim \
 ```
 
 Each time a camera is due, the head publishes after its local cameras render. The renderer applies the
-state, renders, and returns the requested images, which fill the remote cameras before
-`simulator.sensor_render_hook`, so observation terms and camera plugins read them unchanged. The renderer
-exits when the head closes, including on Ctrl+C.
+state and renders its cameras straight into shared memory; the head's remote cameras read those images in
+place (`camera/<name>/<rgb|depth>`), filled before `simulator.sensor_render_hook`, so observation terms and
+camera plugins read them unchanged. The renderer checks the cameras' settings against its own at the
+handshake. It exits when the head closes, including on Ctrl+C.
 
 - Local and remote cameras mix on one head.
 - `set_mount_pose()` works on a remote camera: the pose travels with the state, as `mount_pose/<camera>`.
   On the renderer, cameras the head also has follow the head's poses every frame.
 - Several renderers: give each its own plugin slot and endpoint, and set each remote camera to the slot that
-  supplies it.
+  supplies it. The remote cameras of one plugin share a decimation.
 - `cosim-render` is an ordinary plugin, so any task that installs plugins can use it; the tested path is
   `run_sim`.
 
@@ -131,7 +132,9 @@ fields its peer reads.
 - Lockstep: the head waits for every exchange, with no overlap between physics and the peer's work.
 - Each shared buffer is written only by the process that allocated it: the head's state and the peer's
   exports. The other reads it in place and fails the exchange if it wrote one; the Holosoma renderer serves
-  the head's state as its own SimState this way.
+  the head's state as its own SimState this way, and the head serves the renderer's images as its remote
+  cameras' outputs. Those are valid until the next exchange; code reading them on another CUDA stream
+  synchronises first.
 - After a reset, a remote camera keeps the reset environment's frame from before the reset until the next
   frame, as local cameras do.
 - Failures propagate to both processes; there is no reconnection. The handshake and the first exchange time

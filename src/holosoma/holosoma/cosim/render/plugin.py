@@ -20,8 +20,9 @@ plugin by subclassing :class:`holosoma.cosim.base.PeerHandler`; :mod:`.renderer`
   ``uint8 [E, H, W, 3]`` and ``camera/<name>/depth`` ``float32 [E, H, W, 1]``, metric distance to the image
   plane with the camera's ``depth_clipping_behavior`` applied.
 
-Exports are filled after each step and read in place by the head, which copies due cameras' images
-before its next exchange. :class:`~holosoma.cosim.base.PeerHandler` reports which it wrote.
+The remote cameras' outputs on the head are linked onto the exports, read in place until the next exchange;
+exports are final, since both sides' settings (clipping included) match. Head consumers that read them on
+another CUDA stream synchronise before the next exchange.
 """
 
 from __future__ import annotations
@@ -143,10 +144,9 @@ class CosimRenderPlugin(HeadPlugin):
                 return
             self._warn_if_unread_mount_moved()
             self.bridge.publish()
-            images = self.bridge.imports
-            for record in cameras:
+            for record in cameras:  # their outputs are linked onto the renderer's exports
                 for data_type in record.config.data_types:
-                    record.set_buffer(data_type, images[record.field_name(data_type)])
+                    record.mark_written(data_type)
         elif due:
             self.bridge.publish()
 
