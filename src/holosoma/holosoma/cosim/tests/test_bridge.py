@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -20,7 +19,7 @@ from holosoma.cosim import bridge
 from holosoma.cosim import cuda as cosim_cuda
 from holosoma.cosim.base import PeerHandler
 from holosoma.cosim.cuda import BufferSpec, SharedStateAllocator
-from holosoma.cosim.render.plugin import CosimRenderPlugin, output_fields
+from holosoma.cosim.render.plugin import CosimRenderPlugin
 from holosoma.cosim.render.renderer import RenderHandler, RenderTask
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.sensor_manager import SensorManager
@@ -68,8 +67,9 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
     messages: list[dict[str, Any]] = [
         {
             "type": "OPEN_REQUEST",
-            "state": [],
-            "requests": [],
+            "fields": [],
+            "handles": {},
+            "writes": [],
             "ready_handle": "00",
             "gpu_uuid": "gpu-a",
             "head_pid": os.getpid(),
@@ -145,6 +145,11 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
     return bridge.PeerBridge(handler, endpoint="ipc:///unused"), calls, replies, messages
 
 
+def _shared(*fields: dict[str, Any]) -> dict[str, Any]:
+    """The ``fields`` and ``handles`` of an OPEN_REQUEST sharing ``fields``."""
+    return {"fields": list(fields), "handles": {field["name"]: "00" for field in fields}}
+
+
 def _in_order(calls: list[Any], *expected: Any) -> bool:
     """Whether ``expected`` occurs in ``calls`` in this order, possibly with other calls between."""
     remaining = iter(calls)
@@ -169,7 +174,7 @@ def test_peer_frame_lifecycle(peer: PeerFixture) -> None:
 def test_layout_mismatch_fails_before_mapping(peer: PeerFixture, mismatch: str) -> None:
     worker, calls, replies, messages = peer
     if mismatch == "state_layout":
-        messages[0]["state"] = [{"name": "dof_pos", "shape": [1, 3], "handle": "00"}]
+        messages[0].update(_shared({"name": "dof_pos", "shape": [1, 3], "dtype": "float32"}))
     else:
         wrong: list[Any] = [[1.0, 0.0, 0.0]] if mismatch == "env_origins" else ["wrong"]
         (messages[0] if mismatch == "gpu_uuid" else messages[0]["meta"])[mismatch] = wrong
@@ -186,8 +191,8 @@ def test_layout_mismatch_fails_before_mapping(peer: PeerFixture, mismatch: str) 
 def test_remote_camera_mismatch_fails_before_mapping(peer: PeerFixture, change: dict[str, Any]) -> None:
     worker, calls, replies, messages = peer
     record = _camera(cast("Any", worker.handler).simulator.sensor_manager, "cam", remote=None, data_types=["rgb"])
-    (request,) = output_fields(record)
-    messages[0]["requests"] = [bridge.as_received(asdict(replace(request, **change)))]
+    field = {"name": record.field_name("rgb"), "shape": list(record.buffers["rgb"].shape), "dtype": "uint8", **change}
+    messages[0].update(fields=[bridge.as_received(field)], writes=[field["name"]])
     with pytest.raises(ValueError, match="differs|has no"):
         worker.run()
     assert "map" not in calls
@@ -213,10 +218,12 @@ class _ReadingHandler(PeerHandler):
 def test_peer_maps_only_the_fields_its_handler_reads(peer: PeerFixture, reader: bool) -> None:
     # The render handler reads, and links, what it can write; another handler may read derived fields.
     worker, calls, replies, messages = peer
-    messages[0]["state"] = [
-        {"name": "dof_pos", "shape": [1, 2], "handle": "00"},
-        {"name": "contact_forces", "shape": [1, 3], "handle": "00"},
-    ]
+    messages[0].update(
+        _shared(
+            {"name": "dof_pos", "shape": [1, 2], "dtype": "float32"},
+            {"name": "contact_forces", "shape": [1, 3], "dtype": "float32"},
+        )
+    )
     handler = _ReadingHandler(("contact_forces",)) if reader else worker.handler
     bridge.PeerBridge(cast("Any", handler), endpoint="ipc:///unused").run()
     expected = ["contact_forces"] if reader else ["dof_pos"]
@@ -388,8 +395,8 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     sim = _Simulator(
         sim_device="cuda:0",
         state=SimpleNamespace(
-            names=lambda: list(values),
-            get=values.__getitem__,
+            names=lambda: [*values, *manager.state.output_names()],
+            get=lambda name: values[name] if name in values else manager.state.get(name),
             set_buffer_allocator=lambda _: None,
             output_names=manager.state.output_names,
             link=manager.state.link,
@@ -422,7 +429,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
 
 def test_remote_due_cameras_read_the_peer_images_in_place(plugin: PluginFixture) -> None:
     head, manager, images, calls = plugin
-    assert [request["name"] for request in calls[0][1]["requests"]] == ["camera/cam/rgb", "camera/cam/depth"]
+    assert calls[0][1]["writes"] == ["camera/cam/rgb", "camera/cam/depth"]
     hooks = head.simulator.hooks
     remote = manager.get("cam")
     seen: list[set[str]] = []

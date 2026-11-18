@@ -80,25 +80,23 @@ must follow.
 
 ## Other kinds of co-simulation
 
-`holosoma.cosim.base` assumes nothing about rendering. `HeadPlugin` owns the head side, and a subclass
-chooses what to request, the handshake metadata, and the hooks that publish. `PeerHandler` is the peer.
+`holosoma.cosim.base` assumes nothing about rendering. The handshake is by SimState field name: the head
+offers its fields, the peer picks the shared ones it `reads`, and the head names the ones the peer `writes`.
+`HeadPlugin` owns the head side, and a subclass chooses those writes, the handshake metadata, and the hooks
+that publish. `PeerHandler` is the peer. A written output (a camera image) serves the peer's memory; a
+written writable field flushes into the head's simulation at its next mutation.
 
 ```python
 from holosoma.cosim.base import PeerHandler, HeadPlugin
-from holosoma.cosim.cuda import FieldSpec
 from holosoma.simulator.base_simulator.hooks import Phase
 
 
-class ForcePlugin(HeadPlugin):  # head: before every physics substep, exchange and apply the peer's forces
-    def requests(self):
-        return [FieldSpec("forces", (self.simulator.num_envs, self.simulator.num_bodies, 3), "float32")]
+class ForcePlugin(HeadPlugin):  # head: before every physics substep, the peer writes the forces
+    def writes(self):
+        return ["external_forces"]  # a writable SimState field the head registers; flushed into physics
 
     def install(self, hooks):
-        yield hooks.add(Phase.PRE_STEP, self._exchange, name="forces.exchange")
-
-    def _exchange(self):
-        self.bridge.publish()
-        self.simulator.apply_external_force("robot", forces=self.bridge.imports["forces"])
+        yield hooks.add(Phase.PRE_STEP, self.bridge.publish, name="forces.exchange")
 
 
 class ForceSolver(PeerHandler):  # peer: read contacts, write forces

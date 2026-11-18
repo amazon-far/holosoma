@@ -115,13 +115,13 @@ class RenderHandler(PeerHandler):
         if differing := [key for key in ("dof_names", "object_names", "env_origins") if meta.get(key) != own[key]]:
             raise ValueError(f"Scene {differing} differs between simulators")
 
-    def reads(self, state: Mapping[str, BufferSpec]) -> tuple[str, ...]:
+    def reads(self, fields: Mapping[str, BufferSpec]) -> tuple[str, ...]:
         own_state = self.simulator.state
         wanted = {}
         for name in own_state.writable_names():
             own = own_state.get(name)
             wanted[name] = (tuple(own.shape), str(own.dtype).removeprefix("torch."))
-        return self.matching_fields(state, wanted)
+        return self.matching_fields(fields, wanted)
 
     def link(self, imports: Mapping[str, torch.Tensor]) -> Mapping[str, torch.Tensor]:
         self._linked = tuple(imports)
@@ -135,7 +135,7 @@ class RenderHandler(PeerHandler):
         """Export the SimState output ``request`` names, e.g. ``camera/<name>/rgb``; its writer renders into it."""
         state = self.simulator.state
         if request.name not in state.output_names():
-            raise ValueError(f"Peer has no output {request.name!r} for the head's request")
+            raise ValueError(f"Peer has no output {request.name!r} for the head to read")
         output = state.get(request.name)
         own = FieldSpec(request.name, tuple(output.shape), str(output.dtype).removeprefix("torch."))
         if request != own:

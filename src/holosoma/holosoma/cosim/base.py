@@ -44,14 +44,15 @@ class HeadPlugin:
             simulator,
             shared_state_allocator(simulator),
             endpoint=cfg.endpoint,
-            requests=self.requests(),
+            writes=self.writes(),
             meta=self.meta(),
         )
         self._hooks = list(self.install(simulator.hooks))
         simulator.hooks.add(Phase.CLOSE, self.close, name=f"{self.name}.close")
 
-    def requests(self) -> list[FieldSpec]:
-        """Fields to request from the peer, read in place through ``bridge.imports`` after each exchange."""
+    def writes(self) -> list[str]:
+        """Names of the simulator's fields the peer writes: they serve the peer's memory, read in place after each
+        exchange (outputs), or flush into the simulation at its next mutation (writable fields)."""
         return []
 
     def meta(self) -> dict[str, Any]:
@@ -71,7 +72,7 @@ class HeadPlugin:
 
 
 class PeerHandler:
-    """A peer's side of the exchange: choose the state to read, answer requests and fill exports.
+    """A peer's side of the exchange: choose the head fields to read, and write the ones the head names.
 
     Each export is filled from its :meth:`export_source`: a tensor is moved onto the export, so writes to it
     land there; a callable is copied into the export after every :meth:`step`. Subclasses override :meth:`accept`,
@@ -85,14 +86,14 @@ class PeerHandler:
         self._exports: list[tuple[torch.Tensor, Callable[[], torch.Tensor]]] = []
 
     def open(
-        self, state: Sequence[BufferSpec], requests: Sequence[FieldSpec], meta: Mapping[str, Any]
+        self, fields: Sequence[BufferSpec], writes: Sequence[FieldSpec], meta: Mapping[str, Any]
     ) -> tuple[str, ...]:
-        """Accept the head and allocate one export per request; return the state fields to read."""
+        """Accept the head and allocate one export per written field; return the shared ``fields`` to read."""
         import warp as wp
 
         self.accept(meta)
-        reads = self.reads({spec.name: spec for spec in state})
-        sources = [(request, self.export_source(request)) for request in requests]
+        reads = self.reads({spec.name: spec for spec in fields})
+        sources = [(request, self.export_source(request)) for request in writes]
         for request, source in sources:
             allocation = allocate_shared(request.shape, request.dtype, self.device)
             self.allocations[request.name] = allocation
@@ -118,8 +119,8 @@ class PeerHandler:
     def accept(self, meta: Mapping[str, Any]) -> None:
         """Check the head's handshake metadata; raise to refuse it."""
 
-    def reads(self, state: Mapping[str, BufferSpec]) -> tuple[str, ...]:
-        """The head's shared state fields to map and receive each exchange."""
+    def reads(self, fields: Mapping[str, BufferSpec]) -> tuple[str, ...]:
+        """Names of the head's shared ``fields`` to map and receive each exchange."""
         return ()
 
     def link(self, imports: Mapping[str, torch.Tensor]) -> Mapping[str, torch.Tensor]:
@@ -130,7 +131,7 @@ class PeerHandler:
         """Move what :meth:`link` linked off the mapping; called before the mapping is released."""
 
     def export_source(self, request: FieldSpec) -> torch.Tensor | Callable[[], torch.Tensor]:
-        """Return what fills the export for ``request``; raise if it cannot be answered.
+        """Return what fills the export for the written head field ``request``; raise if it cannot be answered.
 
         A tensor shaped like the request is moved onto the export (``set_``), so whoever writes it writes the
         export and it keeps that memory; a callable returns the tensor to copy into the export after each step.
@@ -142,14 +143,14 @@ class PeerHandler:
 
     @staticmethod
     def matching_fields(
-        state: Mapping[str, BufferSpec], wanted: Mapping[str, tuple[tuple[int, ...], str]]
+        fields: Mapping[str, BufferSpec], wanted: Mapping[str, tuple[tuple[int, ...], str]]
     ) -> tuple[str, ...]:
-        """The ``wanted`` fields, by name to ``(shape, dtype)``, that ``state`` has; raise if one differs."""
+        """The ``wanted`` fields, by name to ``(shape, dtype)``, that ``fields`` has; raise if one differs."""
         for name, (shape, dtype) in wanted.items():
-            if name in state and (state[name].shape, state[name].dtype) != (tuple(shape), dtype):
-                spec = state[name]
+            if name in fields and (fields[name].shape, fields[name].dtype) != (tuple(shape), dtype):
+                spec = fields[name]
                 raise ValueError(
                     f"State field {name!r} differs between simulators: "
                     f"head {spec.dtype} {spec.shape}, peer {dtype} {tuple(shape)}"
                 )
-        return tuple(name for name in state if name in wanted)
+        return tuple(name for name in fields if name in wanted)

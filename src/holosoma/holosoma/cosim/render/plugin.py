@@ -10,7 +10,7 @@ plugin by subclassing :class:`holosoma.cosim.base.PeerHandler`; :mod:`.renderer`
   ``_rigid_body_pos`` and ``_rigid_body_rot`` are each body's world position and xyzw orientation;
   ``mount_pose/<sensor>`` ``[E, 7]`` is a sensor's current offset from its mount, XYZ + XYZW. A renderer
   must apply it for remote cameras to follow ``set_mount_pose()``; the head warns once if one moves unread.
-- Requests (:func:`output_fields`): the remote cameras' SimState output fields, ``camera/<name>/rgb``
+- Writes: the remote cameras' SimState output fields, ``camera/<name>/rgb``
   ``uint8 [E, H, W, 3]`` and ``camera/<name>/depth`` ``float32 [E, H, W, 1]``, metric distance to the image
   plane with the camera's ``depth_clipping_behavior`` applied. Each camera's settings (field of view, near/far,
   clipping, mount target) are its config's on both sides; the renderer writes the frames the head's cameras
@@ -31,14 +31,12 @@ from loguru import logger
 
 from holosoma.cosim.base import HeadPlugin
 from holosoma.cosim.bridge import as_received
-from holosoma.cosim.cuda import FieldSpec
 from holosoma.simulator.base_simulator.hooks import Phase
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import CosimRenderPluginConfig
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
     from holosoma.simulator.base_simulator.hooks import HookHandle, HookRegistry
-    from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
 def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
@@ -52,18 +50,6 @@ def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
         }
     )
     return layout
-
-
-def output_fields(record: CameraRecord) -> list[FieldSpec]:
-    """The SimState output fields of ``record``: rgb ``uint8 [E, H, W, 3]``, depth ``float32 [E, H, W, 1]``."""
-    return [
-        FieldSpec(
-            record.field_name(data_type),
-            tuple(record.buffers[data_type].shape),
-            str(record.buffers[data_type].dtype).removeprefix("torch."),
-        )
-        for data_type in record.config.data_types
-    ]
 
 
 class CosimRenderPlugin(HeadPlugin):
@@ -90,8 +76,8 @@ class CosimRenderPlugin(HeadPlugin):
             if record.mount_poses is not None and f"mount_pose/{record.name}" not in read
         ]
 
-    def requests(self) -> list[FieldSpec]:
-        return [spec for record in self.remote for spec in output_fields(record)]
+    def writes(self) -> list[str]:
+        return [record.field_name(data_type) for record in self.remote for data_type in record.config.data_types]
 
     def meta(self) -> dict[str, Any]:
         return scene_layout(self.simulator)

@@ -3,10 +3,10 @@
 :class:`HeadBridge` and :class:`PeerBridge` exchange metadata over a ZeroMQ REQ/REP socket; state and
 exports stay in shared CUDA allocations, ordered by interprocess ready and done events.
 
-- ``OPEN_REQUEST`` -> ``OPEN_REPLY``: the head sends its shared ``state``, the ``requests`` (fields it wants
-  the peer to own), ``meta``, ready event, GPU UUID and PID. The peer's handler accepts ``meta``, picks the
-  state fields it reads and allocates one export per request; the reply carries the reads, the exports and
-  its done event.
+- ``OPEN_REQUEST`` -> ``OPEN_REPLY``: the head sends its SimState ``fields`` (name, shape, dtype), the
+  ``handles`` of those it shares, the names of the fields the peer is to ``write``, ``meta``, ready event, GPU
+  UUID and PID. The peer's handler accepts ``meta``, picks the shared fields it reads and allocates one export
+  per written field; the reply carries the reads, the exports and its done event.
 - ``EXCHANGE_REQUEST`` -> ``EXCHANGE_REPLY``: one per :meth:`HeadBridge.publish`, with a :class:`Snapshot`
   numbered consecutively. Each hands over every shared buffer: the side receiving it bumps the versions
   of everything it maps, as if each were written locally.
@@ -146,11 +146,13 @@ def as_received(value: Any) -> Any:
 class HeadBridge:
     """Share a head's state caches with a peer and exchange snapshots with it in lockstep.
 
-    The handshake runs at construction: every state field ``allocator`` shares, ``requests`` and ``meta``,
-    which the peer interprets, go to the peer. It answers with the fields it reads and one export per
-    request, mapped as :attr:`imports`. Callers decide when to :meth:`publish`; each exchange refreshes the
-    fields the peer reads and orders later work after the peer's. After an exchange fails, other than by
-    interruption, the bridge refuses further exchanges and closes without contacting the peer.
+    The handshake runs at construction: the head's SimState fields (shared ones with their memory), the
+    names of those the peer is to ``write`` and ``meta``, which the peer interprets, go to the peer. It
+    answers with the shared fields it reads and one export per written field, mapped as :attr:`imports`;
+    the written fields are linked onto them (``SimState.link``). Callers decide when to :meth:`publish`; each
+    exchange refreshes the fields the peer reads and orders later work after the peer's. After an exchange
+    fails, other than by interruption, the bridge refuses further exchanges and closes without contacting
+    the peer.
     """
 
     def __init__(
@@ -159,11 +161,12 @@ class HeadBridge:
         allocator: SharedStateAllocator,
         *,
         endpoint: str,
-        requests: Sequence[FieldSpec] = (),
+        writes: Sequence[str] = (),
         meta: Mapping[str, Any] | None = None,
         startup_timeout_ms: int = STARTUP_TIMEOUT_MS,
         exchange_timeout_ms: int = EXCHANGE_TIMEOUT_MS,
     ) -> None:
+        import torch
         import warp as wp
 
         self.simulator, self.allocator = simulator, allocator
@@ -171,7 +174,14 @@ class HeadBridge:
         state = simulator.state
         for name in sorted(allocator.fields):
             state.get(name)
-        shared = tuple(name for name in state.names() if name in allocator.allocations)
+        fields = {
+            name: FieldSpec(name, tuple(value.shape), str(value.dtype).removeprefix("torch."))
+            for name in state.names()
+            if isinstance(value := state.get(name), torch.Tensor)
+        }
+        if unknown := sorted(set(writes) - set(fields)):
+            raise ValueError(f"The peer cannot write {unknown}: the head has no such fields")
+        shared = tuple(name for name in fields if name in allocator.allocations and name not in writes)
         if not shared:
             raise ValueError("The allocator shares no state; install it before simulator state is first read")
         self.reads = shared
@@ -182,8 +192,9 @@ class HeadBridge:
         try:
             reply = self.control.exchange(
                 MessageType.OPEN_REQUEST,
-                state=[asdict(spec) for spec in allocator.specs(self.refresh())],
-                requests=[asdict(request) for request in requests],
+                fields=[asdict(spec) for spec in fields.values()],
+                handles={spec.name: spec.handle for spec in allocator.specs(self.refresh())},
+                writes=list(writes),
                 ready_handle=self.ready.ipc_handle().hex(),
                 gpu_uuid=gpu_uuid(simulator.sim_device),
                 head_pid=os.getpid(),
@@ -196,14 +207,12 @@ class HeadBridge:
                 raise RuntimeError(f"Peer reads state fields {unknown} the head does not share")
             self.reads = tuple(reply["reads"])
             specs = [BufferSpec.from_message(raw) for raw in reply["exports"]]
-            images = {spec.name: (spec.shape, spec.dtype) for spec in specs}
-            requested = {request.name: (request.shape, request.dtype) for request in requests}
-            if images != requested:
-                raise RuntimeError(f"Peer exported {images}, requested {requested}")
+            exported = {spec.name: FieldSpec(spec.name, spec.shape, spec.dtype) for spec in specs}
+            if exported != (wanted := {name: fields[name] for name in writes}):
+                raise RuntimeError(f"Peer exported {exported}, the head asked it to write {wanted}")
             self._imports = MappedBuffers(specs, device=simulator.sim_device)
-            # Requested SimState outputs are served from the peer's memory directly.
-            outputs = set(simulator.state.output_names())
-            self._linked = [spec.name for spec in specs if spec.name in outputs]
+            # The written fields are served from the peer's memory.
+            self._linked = list(writes)
             self._imports.serve(simulator.state.link({name: self._imports.tensors[name] for name in self._linked}))
         except BaseException:
             self.control.close()
@@ -286,12 +295,13 @@ class PeerHandlerProtocol(Protocol):
 
     @property
     def allocations(self) -> Mapping[str, Any]:
-        """Shared allocations answering the head's requests, by name, once :meth:`open` returns."""
+        """Shared allocations of the fields the peer writes, by name, once :meth:`open` returns."""
 
     def open(
-        self, state: Sequence[BufferSpec], requests: Sequence[FieldSpec], meta: Mapping[str, Any]
+        self, fields: Sequence[BufferSpec], writes: Sequence[FieldSpec], meta: Mapping[str, Any]
     ) -> tuple[str, ...]:
-        """Accept the head, allocate :attr:`allocations` and return the state fields to read; raise to refuse."""
+        """Accept the head, allocate :attr:`allocations` for ``writes`` and return the shared ``fields`` to read;
+        raise to refuse."""
 
     def link(self, imports: Mapping[str, torch.Tensor]) -> Mapping[str, torch.Tensor]:
         """Link tensors of the handler's own onto the mapped head fields ``imports``; they then serve as ``state``."""
@@ -345,9 +355,13 @@ class PeerBridge:
                     if command == MessageType.OPEN_REQUEST and mapped is None:
                         if (head_gpu := message["gpu_uuid"]) != (own_gpu := gpu_uuid(device)):
                             raise ValueError(f"Head GPU {head_gpu} differs from peer GPU {own_gpu}")
-                        shared = [BufferSpec.from_message(raw) for raw in message["state"]]
-                        requests = [FieldSpec.from_message(raw) for raw in message["requests"]]
-                        reads = self.handler.open(shared, requests, message["meta"])
+                        fields = {raw["name"]: FieldSpec.from_message(raw) for raw in message["fields"]}
+                        shared = [
+                            BufferSpec(name, fields[name].shape, handle, fields[name].dtype)
+                            for name, handle in message["handles"].items()
+                        ]
+                        writes = [fields[name] for name in message["writes"]]
+                        reads = self.handler.open(shared, writes, message["meta"])
                         if unknown := sorted(set(reads) - {spec.name for spec in shared}):
                             raise ValueError(f"Peer reads state fields {unknown} the head does not share")
                         mapped = MappedBuffers([spec for spec in shared if spec.name in reads], device=device)
