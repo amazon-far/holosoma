@@ -53,7 +53,7 @@ def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
 
 
 class CosimRenderPlugin(HeadPlugin):
-    """Share ``simulator``'s state with a renderer and publish a snapshot whenever a camera is due.
+    """Share ``simulator``'s state with a renderer and publish a frame whenever a camera is due.
 
     Remote cameras take the renderer's images: each frame they are filled after local sensors render
     and before consumers read them. Without remote cameras, state is published after local cameras render.
