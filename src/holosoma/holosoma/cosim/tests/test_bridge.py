@@ -74,7 +74,7 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
             "source_pid": os.getpid(),
             "meta": {"dof_names": ["a", "b"], "object_names": [], "env_origins": [[0.0, 0.0, 0.0]]},
         },
-        {"type": "FRAME_AVAILABLE", "frame": {"sequence": 1, "sim_time": 0.035}},
+        {"type": "FRAME_AVAILABLE", "frame": {"sequence": 1, "sim_time": 0.035}, "written": ["dof_pos"]},
         {"type": "CLOSE"},
     ]
     socket = SimpleNamespace(send_json=replies.append, poll=lambda _ms: True)
@@ -90,10 +90,13 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
         release_error: Exception | None = None
         names: list[str] = []
 
-        def __init__(self, descriptions: Any, *, device: str) -> None:
-            calls.append("map")
+        def __init__(self, descriptions: Any, *, device: str, targets: Any) -> None:
+            calls.append(("map", sorted(targets)))
             Mapped.names = [spec.name for spec in descriptions]
             self.tensors = values
+
+        def advance(self, names: list[str]) -> None:
+            calls.append(("advance", names))
 
         def verify_read_only(self) -> None:
             calls.append("readonly")
@@ -119,8 +122,12 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
         body_names=["pelvis"],
         object_state_names=(),
         scene=SimpleNamespace(env_origins=torch.zeros(1, 3)),
-        state=SimpleNamespace(writable_names=lambda: list(values), get=values.__getitem__),
-        apply_state=lambda inputs: calls.append(("apply", inputs is values)),
+        state=SimpleNamespace(
+            writable_names=lambda: list(values),
+            get=values.__getitem__,
+            link=lambda names: {name: values[name] for name in names},
+            unlink=lambda names: calls.append(("unlink", list(names))),
+        ),
         set_kinematic_time=lambda sim_time: calls.append(("clock", sim_time)),
         sensor_manager=SensorManager("cpu", 50.0),
         match_env_origins=lambda origins: calls.append(("place", origins.tolist())),
@@ -143,11 +150,12 @@ def _in_order(calls: list[Any], *expected: Any) -> bool:
 def test_receiver_frame_lifecycle(receiver: ReceiverFixture) -> None:
     worker, calls, replies, _messages = receiver
     worker.run()
-    assert _in_order(calls, ("place", [[0.0, 0.0, 0.0]]), "map", "ready", ("clock", 0.035), ("apply", True), "capture")
-    assert _in_order(calls, "capture", "readonly", "done", "unmap", "close")
+    place = ("place", [[0.0, 0.0, 0.0]])
+    assert _in_order(calls, place, ("map", []), "ready", ("advance", ["dof_pos"]), ("clock", 0.035), "capture")
+    assert _in_order(calls, "capture", "readonly", "done", "unmap", ("unlink", []), "close")
     assert replies == [
         {"type": "OPENED", "done_handle": "01", "exports": [], "reads": []},
-        {"type": "FRAME_COMPLETE", "sequence": 1},
+        {"type": "FRAME_COMPLETE", "sequence": 1, "written": []},
         {"type": "UNMAPPED"},
     ]
 
@@ -162,7 +170,7 @@ def test_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture, mismatc
         (messages[0] if mismatch == "gpu_uuid" else messages[0]["meta"])[mismatch] = wrong
     with pytest.raises(ValueError, match="differs|differ"):
         worker.run()
-    assert not any(isinstance(call, tuple) and call[0] != "place" for call in calls)
+    assert not any(isinstance(call, tuple) and call[0] not in ("place", "unlink") for call in calls)
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
 
 
@@ -185,7 +193,7 @@ def test_remote_camera_mismatch_fails_before_mapping(receiver: ReceiverFixture, 
     messages[0]["requests"] = [bridge.as_received(asdict(replace(request, **change)))]
     with pytest.raises(ValueError, match="differs|no camera output"):
         worker.run()
-    assert "map" not in calls
+    assert not any(call[0] == "map" for call in calls if isinstance(call, tuple))
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
 
 
@@ -206,7 +214,7 @@ class _ReadingHandler(BufferHandler):
 
 @pytest.mark.parametrize("reader", [False, True])
 def test_receiver_maps_only_the_fields_its_handler_reads(receiver: ReceiverFixture, reader: bool) -> None:
-    # The render handler reads what it can write; another handler may read derived fields without applying them.
+    # The render handler reads, and links, what it can write; another handler may read derived fields.
     worker, calls, replies, messages = receiver
     messages[0]["exports"] = [
         {"name": "dof_pos", "shape": [1, 2], "handle": "00"},
@@ -217,9 +225,9 @@ def test_receiver_maps_only_the_fields_its_handler_reads(receiver: ReceiverFixtu
     expected = ["contact_forces"] if reader else ["dof_pos"]
     assert replies[0]["reads"] == expected
     assert bridge.MappedBuffers.names == expected  # type: ignore[attr-defined]
+    assert ("map", [] if reader else ["dof_pos"]) in calls
     if reader:
         assert len(cast("Any", handler).seen) == 1
-        assert not any(isinstance(call, tuple) and call[0] == "apply" for call in calls)
 
 
 def test_reading_a_field_the_source_does_not_share_fails_before_mapping(receiver: ReceiverFixture) -> None:
@@ -227,7 +235,7 @@ def test_reading_a_field_the_source_does_not_share_fails_before_mapping(receiver
     handler = _ReadingHandler(("contact_forces",))
     with pytest.raises(ValueError, match="does not share"):
         bridge.Receiver(cast("Any", handler), endpoint="ipc:///unused").run()
-    assert "map" not in calls and replies[-1]["type"] == "ERROR"
+    assert not any(call[0] == "map" for call in calls if isinstance(call, tuple)) and replies[-1]["type"] == "ERROR"
 
 
 def test_duplicate_frame_is_rejected_and_import_is_released(
@@ -239,7 +247,7 @@ def test_duplicate_frame_is_rejected_and_import_is_released(
     with pytest.raises(ValueError, match="consecutive"):
         worker.run()
     assert calls.count("capture") == 1
-    assert replies[-1]["type"] == "ERROR" and calls[-2:] == ["unmap", "close"]
+    assert replies[-1]["type"] == "ERROR" and calls[-3:] == ["unmap", ("unlink", []), "close"]
 
 
 def test_receiver_stops_waiting_when_the_source_exits(receiver: ReceiverFixture) -> None:
@@ -250,7 +258,7 @@ def test_receiver_stops_waiting_when_the_source_exits(receiver: ReceiverFixture)
     cast("Any", worker.control).socket.poll = lambda _ms: False
     with pytest.raises(RuntimeError, match="exited without closing"):
         worker.run()
-    assert calls[-2:] == ["unmap", "close"]
+    assert calls[-3:] == ["unmap", ("unlink", []), "close"]
 
 
 def test_exchange_after_an_interrupted_request_takes_the_right_reply(tmp_path: Path) -> None:
@@ -280,6 +288,40 @@ def test_exchange_after_an_interrupted_request_takes_the_right_reply(tmp_path: P
         server.join(timeout=5)
         control.close()
         receiver.close()
+
+
+class _Owner:
+    """A stand-in for an imported Warp array."""
+
+    def __init__(self, shape: tuple[int, ...], dtype: str) -> None:
+        self.tensor = torch.zeros(shape, dtype=getattr(torch, dtype))
+
+
+def test_mapped_buffers_serve_the_target_and_tell_owner_writes_from_local_ones(monkeypatch: pytest.MonkeyPatch) -> None:
+    owners: list[_Owner] = []
+
+    def import_buffer(_handle: bytes, *, shape: tuple[int, ...], dtype: str, device: str) -> _Owner:
+        owners.append(_Owner(shape, dtype))
+        return owners[-1]
+
+    warp = SimpleNamespace(from_ipc_handle=import_buffer, to_torch=lambda owner: owner.tensor, float32="float32")
+    monkeypatch.setitem(sys.modules, "warp", warp)
+    target = torch.ones(2, 3)
+    mapped = cosim_cuda.MappedBuffers([BufferSpec("x", (2, 3), "00")], device="cpu", targets={"x": target})
+    assert mapped.tensors["x"] is target and target.data_ptr() == owners[0].tensor.data_ptr()
+
+    version = target._version
+    mapped.advance(["x"])  # the owner wrote it
+    mapped.verify_read_only()
+    assert target._version == version + 1
+
+    target.add_(1)  # a local write
+    with pytest.raises(RuntimeError, match=r"\['x'\] were written in place"):
+        mapped.advance(["x"])
+    owners.clear()
+    with pytest.raises(RuntimeError, match="written in place"):
+        mapped.release()
+    assert torch.equal(target, torch.ones(2, 3))  # on its own memory, holding the last values
 
 
 def test_publisher_without_shared_state_fails_before_connecting(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -327,12 +369,17 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     def exchange(command: str, **fields: Any) -> dict[str, Any]:
         calls.append((command, fields))
         if command == "FRAME_AVAILABLE":
-            return {"type": "FRAME_COMPLETE", "sequence": fields["frame"]["sequence"]}
+            return {"type": "FRAME_COMPLETE", "sequence": fields["frame"]["sequence"], "written": list(images)}
         return replies[command]
 
     control = SimpleNamespace(exchange=exchange, set_timeout=lambda _: None, close=lambda: None)
     monkeypatch.setattr(bridge, "ControlChannel", lambda **_: control)
-    mapped = SimpleNamespace(tensors=images, release=lambda: calls.append("unmap"))
+    mapped = SimpleNamespace(
+        tensors=images,
+        verify_read_only=lambda: calls.append("readonly"),
+        advance=lambda names: calls.append(("advance", names)),
+        release=lambda: calls.append("unmap"),
+    )
     monkeypatch.setattr(bridge, "MappedBuffers", lambda *_args, **_kw: mapped)
     monkeypatch.setattr(bridge, "gpu_uuid", lambda _: "gpu-a")
     _fake_cuda(monkeypatch, SimpleNamespace(wait_event=lambda _: None, record_event=lambda _: None))
@@ -351,7 +398,9 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     monkeypatch.setattr(
         cosim_cuda,
         "CacheAllocator",
-        lambda fields: SimpleNamespace(fields=frozenset(fields), owners=dict.fromkeys(fields), exports=lambda _: []),
+        lambda fields: SimpleNamespace(
+            fields=frozenset(fields), owners=dict.fromkeys(fields), tensors=values, exports=lambda _: []
+        ),
     )
     fake: Any = sim
     fake.sensor_capture_hook = fake.hooks.add(Phase.FRAME_END, manager.collect_due, name="sensors.capture")
@@ -371,7 +420,9 @@ def test_remote_due_cameras_get_copies_of_the_receiver_images(plugin: PluginFixt
     seen: list[set[str]] = []
     hooks.add(Phase.FRAME_END, lambda: seen.append(set(remote.buffers)), after=source.simulator.sensor_render_hook)
     hooks.emit(Phase.FRAME_END)
-    assert calls[1][0] == "FRAME_AVAILABLE" and calls[1][1]["frame"]["phase"] == "frame_end"
+    assert calls[1:4] == ["readonly", calls[2], ("advance", ["cam/rgb", "cam/depth"])]
+    assert calls[2][0] == "FRAME_AVAILABLE" and calls[2][1]["frame"]["phase"] == "frame_end"
+    assert calls[2][1]["written"] == ["dof_pos"]  # the first frame reports every field the receiver reads
     assert seen == [{"rgb", "depth"}]  # filled before consumers of the sensor render hook
     for data_type in ("rgb", "depth"):
         buffer = remote.buffers[data_type]

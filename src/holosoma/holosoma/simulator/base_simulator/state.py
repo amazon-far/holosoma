@@ -10,7 +10,8 @@ Every served tensor keeps its identity, so references to it stay valid. Reads se
 simulation state. In-place writes reach the simulation before its next physics step, FK pass or any
 state write that would replace them: the changed rows (environments) are flushed through the tensor's
 ``write``. A tensor bound without ``write`` is read-only. :meth:`SimState.assign` overwrites whole writable
-tensors, written in full at the next flush.
+tensors, written in full at the next flush. :meth:`SimState.link` serves writable tensors whose memory is
+written from outside: they are never re-read, and their changed rows flush like in-place writes.
 
 Backends wrap every state mutation in :meth:`SimState.mutation`, which flushes pending writes first and
 marks every tensor stale after.
@@ -30,7 +31,7 @@ BufferAllocator = Callable[[str, torch.Tensor, torch.device | str | None], torch
 
 
 class _Registration:
-    __slots__ = ("_all_rows", "assigned", "buffers", "clean", "names", "read", "valid", "write")
+    __slots__ = ("_all_rows", "assigned", "buffers", "clean", "linked", "names", "read", "valid", "write")
 
     def __init__(self, names: tuple[str, ...], read: Read, write: Callable[..., None] | None) -> None:
         self.names = names
@@ -39,6 +40,7 @@ class _Registration:
         self.buffers: tuple[torch.Tensor, ...] = ()
         self.valid = False
         self.assigned = False
+        self.linked = False
         self.clean: tuple[int, ...] = ()
         self._all_rows: torch.Tensor | None = None
 
@@ -259,11 +261,42 @@ class SimState:
                     registration.valid = False
 
     def mark_stale(self, names: str | Iterable[str] | None = None) -> None:
-        """Mark every tensor stale, or only those registered with ``names``, so the next access re-reads it."""
+        """Mark every tensor stale, or only those registered with ``names``, so the next access re-reads it.
+
+        Linked tensors stay valid.
+        """
         selected = None if names is None else {names} if isinstance(names, str) else set(names)
         for registration in self._registrations:
-            if selected is None or not selected.isdisjoint(registration.names):
+            if not registration.linked and (selected is None or not selected.isdisjoint(registration.names)):
                 registration.valid = False
+
+    def link(self, names: Iterable[str]) -> dict[str, torch.Tensor]:
+        """Serve the writable tensors ``names`` from memory written outside the simulation, and return them.
+
+        The caller moves each returned tensor onto that memory (``set_``). Linked tensors are never re-read;
+        in-place writes, including version bumps for outside writes, flush their changed rows. Each
+        registration's names are linked together.
+        """
+        names = list(names)
+        registrations = {id(self._by_name.get(name)): self._by_name.get(name) for name in names}
+        for registration in registrations.values():
+            if registration is None or registration.write is None:
+                raise ValueError(f"Simulator state {names} must all be writable to link")
+            if missing := [name for name in registration.names if name not in names]:
+                raise ValueError(f"Simulator state {', '.join(registration.names)} must be linked together: {missing}")
+        tensors = {name: self.get(name) for name in names}
+        for registration in registrations.values():
+            assert registration is not None
+            registration.linked = True
+        return tensors
+
+    def unlink(self, names: Iterable[str]) -> None:
+        """Serve ``names`` from the simulation again, re-read at the next access; unflushed writes are dropped."""
+        for name in names:
+            registration = self._by_name[name]
+            registration.linked = False
+            registration.valid = False
+            registration.mark_clean()
 
     def get(self, name: str) -> Any:
         registration = self._by_name.get(name)

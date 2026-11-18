@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 
 from holosoma.cosim.bridge import BufferRequest, Frame, Publisher
-from holosoma.cosim.cuda import BufferSpec, allocate_shared, shared_state
+from holosoma.cosim.cuda import BufferSpec, WriteLog, allocate_shared, shared_state
 from holosoma.simulator.base_simulator.hooks import Phase
 
 if TYPE_CHECKING:
@@ -47,7 +47,7 @@ class CosimPlugin:
         simulator.hooks.add(Phase.CLOSE, self.close, name=f"{self.name}.close")
 
     def requests(self) -> list[BufferRequest]:
-        """Buffers to request from the peer, available as ``publisher.imports`` after each exchange."""
+        """Buffers to request from the peer, read in place through ``publisher.imports`` after each exchange."""
         return []
 
     def meta(self) -> dict[str, Any]:
@@ -70,13 +70,15 @@ class BufferHandler:
     """A peer's side of the exchange: choose the state to read, answer requests and fill exports.
 
     Each export is copied from its source after every :meth:`step`. Subclasses override :meth:`accept`,
-    :meth:`reads`, :meth:`export_source` and :meth:`step`.
+    :meth:`reads`, :meth:`export_source` and :meth:`step`, and :meth:`targets` and :meth:`close` to read the
+    source's state through tensors of their own.
     """
 
     def __init__(self, device: str) -> None:
         self.device = device
         self.owners: dict[str, Any] = {}
         self._exports: list[tuple[torch.Tensor, Callable[[], torch.Tensor]]] = []
+        self._written = WriteLog({})
 
     def open(
         self, exports: Sequence[BufferSpec], requests: Sequence[BufferRequest], meta: Mapping[str, Any]
@@ -91,6 +93,9 @@ class BufferHandler:
             owner = allocate_shared(request.shape, request.dtype, self.device)
             self.owners[request.name] = owner
             self._exports.append((wp.to_torch(owner), source))
+        self._written = WriteLog(
+            {request.name: export for request, (export, _) in zip(requests, self._exports, strict=True)}
+        )
         return reads
 
     def process(self, frame: Frame, state: Mapping[str, torch.Tensor]) -> None:
@@ -99,12 +104,23 @@ class BufferHandler:
         for export, source in self._exports:
             export.copy_(source())
 
+    def written(self) -> list[str]:
+        """Exports written since the last call."""
+        return self._written()
+
     def accept(self, meta: Mapping[str, Any]) -> None:
         """Check the source's handshake metadata; raise to refuse it."""
 
     def reads(self, exports: Mapping[str, BufferSpec]) -> tuple[str, ...]:
         """The exported fields to map and receive each frame."""
         return ()
+
+    def targets(self, reads: Sequence[str]) -> Mapping[str, torch.Tensor]:
+        """Tensors to move onto the mapped source fields in ``reads``; they then serve as ``state``."""
+        return {}
+
+    def close(self) -> None:
+        """Release what :meth:`targets` linked; called once the mapping is released."""
 
     def export_source(self, request: BufferRequest) -> Callable[[], torch.Tensor]:
         """Return what fills the export for ``request`` after each step; raise if it cannot be answered."""

@@ -127,6 +127,9 @@ fields its peer reads.
   environment origins (Isaac Sim moves its clone grid; MuJoCo re-places world-mounted sensors). It renders
   every camera each frame, so its sensors must not be decimated; an Isaac Sim renderer serves cameras only.
 - Lockstep: the source waits for every exchange, with no overlap between physics and the peer's work.
+- Each shared buffer is written only by the process that allocated it: the source's state and the peer's
+  exports. The other reads it in place and fails the exchange if it wrote one; the Holosoma renderer serves
+  the source's state as its own SimState this way.
 - After a reset, a remote camera keeps the reset environment's frame from before the reset until the next
   frame, as local cameras do.
 - Failures propagate to both processes; there is no reconnection. Startup and the first frame may take

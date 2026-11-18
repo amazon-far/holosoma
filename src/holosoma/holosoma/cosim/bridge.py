@@ -7,9 +7,13 @@ exports stay in shared CUDA allocations, ordered by interprocess ready and done 
   receiver's handler accepts ``meta``, picks the fields it reads and allocates exports; the reply carries them
   and its done event.
 - ``FRAME_AVAILABLE`` -> ``FRAME_COMPLETE``: one per :meth:`Publisher.publish`, numbered consecutively, with
-  the source's time and hook phase.
+  the source's time and hook phase. Each carries ``written``, the buffers its sender wrote since the last
+  frame (all on the first), and the other side bumps their versions as if written locally.
 - ``CLOSE`` -> ``UNMAPPED``: both sides release their mappings.
 - ``ERROR``: the receiver's failure, raised on the source.
+
+Each buffer is written only by the side that allocated it; the side mapping it checks every exchange that
+it made no in-place write.
 
 The source waits for each exchange. Startup and the first frame may take up to five minutes (first-use
 compilation); later source exchanges time out after :data:`FRAME_TIMEOUT_MS`. The receiver waits while the
@@ -27,7 +31,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, share
+from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, WriteLog, share
 
 if TYPE_CHECKING:
     import torch
@@ -191,26 +195,27 @@ class Publisher:
             if images != requested:
                 raise RuntimeError(f"Receiver exported {images}, requested {requested}")
             self._imports = MappedBuffers(specs, device=sim.sim_device)
+            self._written = WriteLog({name: allocator.tensors[name] for name in self.fields})
         except BaseException:
             self.control.close()
             raise
 
     @property
     def imports(self) -> dict[str, torch.Tensor]:
-        """The receiver's exports, by request name; valid after an exchange until the next one."""
+        """The receiver's exports, by request name, read in place; valid after an exchange until the next one.
+
+        The same tensors throughout, read-only; each version moves once per frame the receiver wrote it.
+        """
         return self._imports.tensors
 
     def values(self) -> dict[str, Any]:
         return {name: self.sim.state.get(name) for name in self.fields}
 
     def _exchange(self, command: str, **fields: Any) -> dict[str, Any]:
-        """Share current state, send ``command`` and order later work on this stream after the receiver's."""
+        """Send ``command`` and order later work on this stream after the receiver's."""
         import torch
         import warp as wp
 
-        if self.failed:
-            raise RuntimeError("An earlier co-simulation exchange failed")
-        self.values()  # Refresh the same persistent caches, without replacing storage.
         stream = wp.stream_from_torch(torch.cuda.current_stream(self.sim.sim_device))
         stream.record_event(self.ready)
         try:
@@ -227,11 +232,16 @@ class Publisher:
 
     def publish(self) -> None:
         """Have the receiver process current state as the next frame, at the source's current time."""
+        if self.failed:
+            raise RuntimeError("An earlier co-simulation exchange failed")
+        self._imports.verify_read_only()
+        self.values()  # Refresh the same persistent caches, without replacing storage.
         self.sequence += 1
         frame = Frame(self.sequence, self.sim.time(), self._phase())
-        reply = self._exchange("FRAME_AVAILABLE", frame=asdict(frame))
+        reply = self._exchange("FRAME_AVAILABLE", frame=asdict(frame), written=self._written())
         if reply["type"] != "FRAME_COMPLETE" or reply["sequence"] != frame.sequence:
             raise RuntimeError("Receiver completed the wrong frame")
+        self._imports.advance(reply["written"])
         if frame.sequence == 1:
             self.control.set_timeout(FRAME_TIMEOUT_MS)
 
@@ -268,11 +278,20 @@ class FrameHandler(Protocol):
     ) -> tuple[str, ...]:
         """Accept the source, allocate :attr:`owners` and return the exported fields to read; raise to refuse."""
 
+    def targets(self, reads: Sequence[str]) -> Mapping[str, torch.Tensor]:
+        """Tensors to move onto the mapped source fields in ``reads``, by name; they then serve as ``state``."""
+
     def process(self, frame: Frame, state: Mapping[str, torch.Tensor]) -> None:
         """Process the source's ``state`` for ``frame`` and fill the exports.
 
         ``state`` holds the read fields, read-only and valid only during the call.
         """
+
+    def written(self) -> list[str]:
+        """Exports written since the last call."""
+
+    def close(self) -> None:
+        """Release what :meth:`targets` linked; called once the mapping is released."""
 
 
 class Receiver:
@@ -317,7 +336,11 @@ class Receiver:
                         reads = self.handler.open(exported, requests, message["meta"])
                         if unknown := sorted(set(reads) - {spec.name for spec in exported}):
                             raise ValueError(f"Receiver reads state fields {unknown} the source does not share")
-                        mapped = MappedBuffers([spec for spec in exported if spec.name in reads], device=device)
+                        mapped = MappedBuffers(
+                            [spec for spec in exported if spec.name in reads],
+                            device=device,
+                            targets=self.handler.targets(reads),
+                        )
                         ready = wp.event_from_ipc_handle(bytes.fromhex(message["ready_handle"]), device=device)
                         done = wp.Event(device=device, interprocess=True)
                         source_pid = int(message["source_pid"])
@@ -334,11 +357,14 @@ class Receiver:
                         if frame.sequence != sequence + 1:
                             raise ValueError("Frames must be consecutive")
                         stream.wait_event(ready)
+                        mapped.advance(message["written"])
                         self.handler.process(frame, mapped.tensors)
                         mapped.verify_read_only()
                         stream.record_event(done)
                         sequence = frame.sequence
-                        self.control.socket.send_json({"type": "FRAME_COMPLETE", "sequence": sequence})
+                        self.control.socket.send_json(
+                            {"type": "FRAME_COMPLETE", "sequence": sequence, "written": self.handler.written()}
+                        )
                     elif command == "CLOSE" and mapped is not None:
                         torch.cuda.synchronize(device)
                         mapped.release()
@@ -357,4 +383,7 @@ class Receiver:
                     mapped.release()
             raise
         finally:
-            self.control.close()
+            try:
+                self.handler.close()
+            finally:
+                self.control.close()

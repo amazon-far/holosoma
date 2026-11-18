@@ -18,7 +18,8 @@ plugin by subclassing :class:`holosoma.cosim.base.BufferHandler`; :mod:`.rendere
   a ``body_names`` or ``object_names`` entry; and ``position`` and ``orientation`` ``[w, x, y, z]`` in the
   target's frame, or the environment's for ``world``. Identity looks along ``-Z`` with ``+Y`` up.
 
-Exports are filled after each step; the source copies them before its next exchange.
+Exports are filled after each step and read in place by the source, which copies due cameras' images
+before its next exchange. :class:`~holosoma.cosim.base.BufferHandler` reports which it wrote.
 """
 
 from __future__ import annotations

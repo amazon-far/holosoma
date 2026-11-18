@@ -85,7 +85,14 @@ def receiver(endpoint: str, output: Path, num_envs: int, loopback: bool, backend
     with create_render_task(config(num_envs, loopback, backend=backend)) as task:
         sim = task.simulator
         sim.hooks.add(Phase.FRAME_END, lambda: capture(sim, saved), after=sim.sensor_render_hook)
-        receiver_loop = Receiver(RenderHandler(task), endpoint=endpoint)
+
+        class LinkCheckingHandler(RenderHandler):
+            def step(self, frame: Any, state: Any) -> None:
+                # The renderer's state is the source's memory, not a copy of it.
+                saved["linked"] = all(state[name] is sim.state.get(name) for name in state)
+                super().step(frame, state)
+
+        receiver_loop = Receiver(LinkCheckingHandler(task), endpoint=endpoint)
         (output / "ready").write_text("ready\n")
         receiver_loop.run()
         # Inside the session: closing Isaac Sim's app ends the process.

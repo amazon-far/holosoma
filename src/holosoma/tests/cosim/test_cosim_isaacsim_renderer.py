@@ -21,7 +21,7 @@ from tests.cosim.cosim_pair_roles import run_pair  # noqa: E402
 def test_isaacsim_renderer_fills_the_source_remote_camera() -> None:
     sent, rendered = run_pair(2, "--loopback", renderer="isaacsim")
 
-    assert sent["frames"] == rendered["frames"] > 1
+    assert sent["frames"] == rendered["frames"] > 1 and rendered["linked"]
     torch.testing.assert_close(rendered["robot_root_states"], sent["robot_root_states"], atol=1e-4, rtol=0)
     torch.testing.assert_close(rendered["dof_pos"], sent["dof_pos"], atol=1e-4, rtol=0)
     # Isaac Sim's own kinematics poses every body where the source's does.

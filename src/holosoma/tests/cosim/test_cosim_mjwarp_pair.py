@@ -18,7 +18,7 @@ from tests.cosim.cosim_pair_roles import run_pair  # noqa: E402
 def test_mjwarp_receiver_renders_the_published_state() -> None:
     sent, rendered = run_pair(1)
 
-    assert sent["frames"] == rendered["frames"] > 1
+    assert sent["frames"] == rendered["frames"] > 1 and rendered["linked"]
     torch.testing.assert_close(rendered["robot_root_states"], sent["robot_root_states"])
     torch.testing.assert_close(rendered["dof_pos"], sent["dof_pos"])
     assert torch.equal(rendered["overview/rgb"], sent["overview/rgb"])
@@ -28,7 +28,7 @@ def test_receiver_images_become_the_source_remote_camera_data() -> None:
     sent, rendered = run_pair(2, "--loopback")
     outputs = ("loopback/rgb", "loopback/depth")
 
-    assert sent["frames"] == rendered["frames"] > 1
+    assert sent["frames"] == rendered["frames"] > 1 and rendered["linked"]
     torch.testing.assert_close(rendered["robot_root_states"], sent["robot_root_states"])
     torch.testing.assert_close(rendered["dof_pos"], sent["dof_pos"])
     for output in outputs:

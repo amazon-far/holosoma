@@ -16,7 +16,7 @@ here as ordinary cameras. Start the renderer before the source; it exits when th
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import replace
 from typing import Any
@@ -98,14 +98,15 @@ def create_render_task(run: RunSimConfig) -> AbstractContextManager[RenderTask]:
 class RenderHandler(BufferHandler):
     """Mirror the source's state into ``task``, render it, and export the camera outputs the source requests.
 
-    Adopts the source's environment origins, rejects any other scene difference, and reads the source fields
-    writable on ``task``'s simulator, applying them and the source's time before each render.
+    Adopts the source's environment origins, rejects any other scene difference, and links the source fields
+    writable on ``task``'s simulator to its state, so the source's changes reach it at each render.
     """
 
     def __init__(self, task: RenderTask) -> None:
         super().__init__(task.simulator.sim_device)
         self.task = task
         self.simulator = task.simulator
+        self._linked: tuple[str, ...] = ()
 
     def accept(self, meta: Mapping[str, Any]) -> None:
         """Adopt the source's origins and reject a different joint or object order; body state is not applied."""
@@ -123,6 +124,14 @@ class RenderHandler(BufferHandler):
             wanted[name] = (tuple(own.shape), str(own.dtype).removeprefix("torch."))
         return self.matching(exports, wanted)
 
+    def targets(self, reads: Sequence[str]) -> Mapping[str, torch.Tensor]:
+        self._linked = tuple(reads)
+        return self.simulator.state.link(reads)
+
+    def close(self) -> None:
+        self.simulator.state.unlink(self._linked)
+        self._linked = ()
+
     def export_source(self, request: BufferRequest) -> Callable[[], torch.Tensor]:
         manager = self.simulator.sensor_manager
         camera, data_type = camera_output(request.name)
@@ -139,7 +148,6 @@ class RenderHandler(BufferHandler):
 
     def step(self, frame: Frame, state: Mapping[str, torch.Tensor]) -> None:
         self.simulator.set_kinematic_time(frame.sim_time)
-        self.simulator.apply_state(state)
         self.task.render_frame()
 
 

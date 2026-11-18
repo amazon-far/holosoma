@@ -205,3 +205,31 @@ def test_mutation_flushes_first_and_marks_stale_after_even_on_error() -> None:
     reads_before = len(reads)
     state.get("x")
     assert len(reads) == reads_before + 1  # marked stale despite the error
+
+
+def test_linked_tensor_is_never_re_read_and_flushes_outside_writes() -> None:
+    state, backing, reads, flushed = _counting_state(rows=3)
+    linked = state.link(["x"])["x"]
+    outside = torch.zeros(3, 3)
+    linked.set_(outside)  # memory another writer owns
+    with state.mutation():
+        pass
+    assert flushed == [[0, 1, 2]] and state.get("x") is linked and len(reads) == 2  # first read, changed rows
+
+    outside[1] = 7.0  # the writer's change, then the version bump that reports it
+    torch.autograd.graph.increment_version(linked)
+    with state.mutation():
+        pass
+    assert flushed[-1] == [1] and torch.equal(backing[1], torch.full((3,), 7.0))
+    assert state.get("x") is linked and torch.equal(linked, outside)
+
+    linked.set_(outside.clone())  # off the outside memory, then served from the simulation again
+    state.unlink(["x"])
+    backing += 1
+    assert torch.equal(state.get("x"), backing)
+
+
+def test_only_writable_tensors_link() -> None:
+    state, *_ = _counting_state(writable=False)
+    with pytest.raises(ValueError, match="writable"):
+        state.link(["x"])

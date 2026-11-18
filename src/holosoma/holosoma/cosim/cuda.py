@@ -108,15 +108,24 @@ def shared_state(simulator: BaseSimulator) -> CacheAllocator:
 
 
 class MappedBuffers:
-    """Own imports until SDK and caller views have been released."""
+    """Own imports until SDK and caller views have been released.
 
-    def __init__(self, specs: Iterable[BufferSpec], *, device: str) -> None:
+    Each import is served as one tensor: the given target, moved onto it with ``set_``, or Warp's view. Its
+    version moves for local in-place writes and for :meth:`advance`, which records the owner's writes.
+    """
+
+    def __init__(
+        self, specs: Iterable[BufferSpec], *, device: str, targets: Mapping[str, torch.Tensor] | None = None
+    ) -> None:
+        import torch
         import warp as wp
 
+        targets = targets or {}
         self.arrays: dict[str, Any] = {}
         self.tensors: dict[str, torch.Tensor] = {}
         self.versions: dict[str, int] = {}
-        self.references: dict[str, tuple[Any, Any]] = {}
+        self.references: dict[str, tuple[Any, ...]] = {}
+        self.adopted: list[str] = []
         for spec in specs:
             if spec.name in self.arrays:
                 raise ValueError(f"Duplicate IPC buffer: {spec.name}")
@@ -126,20 +135,71 @@ class MappedBuffers:
                 bytes.fromhex(spec.handle), shape=spec.shape, dtype=getattr(wp, spec.dtype), device=device
             )
             tensor = wp.to_torch(owner)
-            self.arrays[spec.name], self.tensors[spec.name] = owner, tensor
-            self.versions[spec.name] = tensor._version
+            self.arrays[spec.name] = owner
             self.references[spec.name] = (weakref.ref(owner), weakref.ref(tensor))
+            target = targets.get(spec.name)
+            if target is not None:
+                if (target.shape, target.dtype, target.device) != (tensor.shape, tensor.dtype, tensor.device):
+                    raise ValueError(
+                        f"Target for {spec.name!r} is {target.dtype} {tuple(target.shape)} on {target.device}, "
+                        f"the import is {tensor.dtype} {tuple(tensor.shape)} on {tensor.device}"
+                    )
+                with torch.inference_mode(False):
+                    target.set_(tensor)
+                tensor = target
+                self.adopted.append(spec.name)
+            self.tensors[spec.name] = tensor
+            self.versions[spec.name] = tensor._version
+
+    def _written(self) -> list[str]:
+        return [name for name, tensor in self.tensors.items() if tensor._version != self.versions[name]]
 
     def verify_read_only(self) -> None:
-        """Raise if a caller wrote borrowed state; detects in-place writes through these Torch views only."""
-        if any(t._version != self.versions[name] for name, t in self.tensors.items()):
-            raise RuntimeError("A receiver modified borrowed IPC state")
+        """Raise if a caller wrote borrowed state; detects in-place writes through these Torch tensors only."""
+        if written := self._written():
+            raise RuntimeError(f"Borrowed IPC buffers {written} were written in place; their owner writes them")
+
+    def advance(self, names: Iterable[str]) -> None:
+        """Record that the owner wrote ``names``: bump each version as an in-place write would."""
+        import torch
+
+        self.verify_read_only()
+        names = list(names)
+        if unknown := sorted(set(names) - set(self.tensors)):
+            raise RuntimeError(f"The peer wrote buffers {unknown} that are not mapped here")
+        for name in names:
+            tensor = self.tensors[name]
+            torch.autograd.graph.increment_version(tensor)
+            self.versions[name] = tensor._version
 
     def release(self) -> None:
-        self.verify_read_only()
+        """Move adopted targets onto their own memory, holding the last values, and drop every mapping."""
+        import torch
+
+        written = self._written()
+        with torch.inference_mode(False):
+            for name in self.adopted:
+                tensor = self.tensors[name]
+                tensor.set_(tensor.clone())
         self.tensors.clear()
         self.arrays.clear()
         gc.collect()
+        if written:
+            raise RuntimeError(f"Borrowed IPC buffers {written} were written in place; their owner writes them")
         retained = [name for name, refs in self.references.items() if any(ref() is not None for ref in refs)]
         if retained:
             raise RuntimeError(f"IPC mappings are still referenced: {retained}")
+
+
+class WriteLog:
+    """Report which of ``tensors`` were written in place since the last call; the first call reports all."""
+
+    def __init__(self, tensors: Mapping[str, torch.Tensor]) -> None:
+        self.tensors = dict(tensors)
+        self.versions = dict.fromkeys(self.tensors, -1)
+
+    def __call__(self) -> list[str]:
+        written = [name for name, tensor in self.tensors.items() if tensor._version != self.versions[name]]
+        for name in written:
+            self.versions[name] = self.tensors[name]._version
+        return written
