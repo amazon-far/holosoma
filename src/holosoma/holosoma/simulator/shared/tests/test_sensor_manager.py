@@ -300,3 +300,13 @@ def test_writing_the_mount_pose_field_keeps_it_valid_and_matching_the_sensor() -
         state.flush_writes()
     state.flush_writes()  # the rejected write is discarded, not retried
     torch.testing.assert_close(state.get("mount_pose/cam"), stored)
+
+
+def test_setting_a_stored_mount_pose_again_changes_no_bits() -> None:
+    manager = SensorManager("cpu", 50.0, num_envs=256)
+    manager.register_camera("cam", _cam()).write_mount_pose = lambda _ids, _poses: None
+    quaternions = torch.nn.functional.normalize(torch.randn(256, 4, generator=torch.Generator().manual_seed(0)), dim=-1)
+    manager.set_mount_pose("cam", torch.cat([torch.zeros(256, 3), quaternions], dim=-1))
+    stored = manager.get_mount_pose("cam")
+    manager.set_mount_pose("cam", stored)
+    assert torch.equal(manager.get_mount_pose("cam"), stored)

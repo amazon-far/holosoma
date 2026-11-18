@@ -55,6 +55,14 @@ def config(num_envs: int, loopback: bool = False, *, endpoint: str | None = None
 
 
 def capture(sim: Any, saved: dict[str, Any]) -> None:
+    """Save the latest frame's cameras and state into ``saved``, and the first frame's into ``saved["first"]``."""
+    latest: dict[str, Any] = {}
+    _capture(sim, latest)
+    saved.update(latest)
+    saved.setdefault("first", latest)
+
+
+def _capture(sim: Any, saved: dict[str, Any]) -> None:
     for name in sim.sensor_manager.camera_names:
         for data_type in sim.sensor_manager.get(name).config.data_types:
             saved[f"{name}/{data_type}"] = sim.get_camera_data(name, data_type).clone().cpu()

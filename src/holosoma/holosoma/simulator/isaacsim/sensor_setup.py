@@ -179,32 +179,34 @@ def sync_camera_fabric_transforms(
     wrist camera); which cameras are hit is not explained. The USD offset stays correct, so it is
     copied back into Fabric for every camera.
     """
+    if not sim.tiled_cameras:
+        return
+    cameras = sim.tiled_cameras.values() if camera_name is None else [sim.tiled_cameras[camera_name]]
+    prims: list[Any] = []
+    for camera in cameras:
+        # Use the initialized view's cached ordering, matching set_local_poses' env indices.
+        view_prims = camera._view._prims
+        prims += view_prims if env_ids is None else [view_prims[i] for i in env_ids.tolist()]
+    copy_local_transforms_to_fabric(sim, prims)
+
+
+def copy_local_transforms_to_fabric(sim: IsaacSim, prims: list[Any]) -> None:
+    """Copy each prim's authored USD local transform into Fabric and recompute Fabric world transforms."""
     import carb
     import usdrt
     from pxr import Usd, UsdGeom
     from usdrt import Rt
 
-    # Isaac Lab's views keep camera poses in USD without Fabric or on a CPU device; the USD offset is
-    # then what renders, and there is no Fabric transform to correct.
-    if (
-        not sim.tiled_cameras
-        or sim.sim_device == "cpu"
-        or not carb.settings.get_settings().get("/physics/fabricEnabled")
-    ):
+    # Isaac Lab keeps poses in USD without Fabric or on a CPU device; there is then no Fabric transform.
+    if sim.sim_device == "cpu" or not carb.settings.get_settings().get("/physics/fabricEnabled"):
         return
     fabric_stage = usdrt.Usd.Stage.Attach(sim_utils.get_current_stage_id())
-    cameras = sim.tiled_cameras.values() if camera_name is None else [sim.tiled_cameras[camera_name]]
-    for camera in cameras:
-        # Use the initialized view's cached ordering, matching set_local_poses' env indices.
-        prims = camera._view._prims
-        if env_ids is not None:
-            prims = [prims[i] for i in env_ids.tolist()]
-        for prim in prims:
-            local = UsdGeom.Xformable(prim).GetLocalTransformation(Usd.TimeCode.Default())
-            fabric_prim = Rt.Xformable(fabric_stage.GetPrimAtPath(str(prim.GetPath())))
-            fabric_prim.GetFabricHierarchyLocalMatrixAttr().Set(
-                usdrt.Gf.Matrix4d(*(local[row][col] for row in range(4) for col in range(4)))
-            )
+    for prim in prims:
+        local = UsdGeom.Xformable(prim).GetLocalTransformation(Usd.TimeCode.Default())
+        fabric_prim = Rt.Xformable(fabric_stage.GetPrimAtPath(str(prim.GetPath())))
+        fabric_prim.GetFabricHierarchyLocalMatrixAttr().Set(
+            usdrt.Gf.Matrix4d(*(local[row][col] for row in range(4) for col in range(4)))
+        )
     usdrt.hierarchy.IFabricHierarchy().get_fabric_hierarchy(
         fabric_stage.GetFabricId(), fabric_stage.GetStageIdAsStageId()
     ).update_world_xforms()

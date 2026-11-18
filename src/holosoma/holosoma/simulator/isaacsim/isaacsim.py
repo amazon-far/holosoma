@@ -342,8 +342,11 @@ class IsaacSim(BaseSimulator):
         from pxr import Gf
 
         stage = stage_utils.get_current_stage()
-        for env, origin in enumerate(origins.tolist()):
-            stage.GetPrimAtPath(f"/World/envs/env_{env}").GetAttribute("xformOp:translate").Set(Gf.Vec3d(*origin))
+        prims = [stage.GetPrimAtPath(f"/World/envs/env_{env}") for env in range(len(origins))]
+        for prim, origin in zip(prims, origins.tolist(), strict=True):
+            prim.GetAttribute("xformOp:translate").Set(Gf.Vec3d(*origin))
+        # The renderer reads Fabric, which would pick up these USD edits only frames later.
+        sensor_setup.copy_local_transforms_to_fabric(self, prims)
         # InteractiveScene has no setter for its clone-grid origins.
         self.scene._default_env_origins = origins.to(self.scene.env_origins).clone()
         self.env_origins = self.scene.env_origins

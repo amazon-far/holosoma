@@ -30,6 +30,10 @@ def test_isaacsim_renderer_fills_the_source_remote_camera() -> None:
     assert bool(((rendered["body_rot"] * sent["body_rot"]).sum(-1).abs() > 1 - 1e-6).all())
     for output in ("loopback/rgb", "loopback/depth"):
         assert torch.equal(sent[output], rendered[output])
+    # From the first frame on, Isaac's remote view matches MJWarp's local one at the same pose.
+    first = sent["first"]
+    gap = (first["loopback/depth"] - first["overview/depth"]).abs()
+    assert (gap[gap.isfinite()] > 0.05).float().mean() < 0.002
     assert rendered["loopback/rgb"].float().std() > 0
     moved, still = rendered["loopback/depth"], rendered["still/depth"]
     finite = moved.isfinite() & still.isfinite()

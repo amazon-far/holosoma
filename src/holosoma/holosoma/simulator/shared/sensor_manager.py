@@ -116,6 +116,13 @@ class LidarRecord(SensorRecord):
         return self.pattern_provider.pattern_at(sim_time)
 
 
+def _unit_quaternions(quaternions: torch.Tensor) -> torch.Tensor:
+    """Normalise ``[..., 4]`` quaternions; ones within float32 rounding of unit length are returned unchanged."""
+    norms = torch.linalg.vector_norm(quaternions, dim=-1, keepdim=True)
+    unit = (norms - 1.0).abs() <= 4 * torch.finfo(torch.float32).eps
+    return quaternions / torch.where(unit, torch.ones_like(norms), norms)
+
+
 class SensorManager:
     """Cross-backend sensor registry and runtime mounts, available even without configured sensors."""
 
@@ -135,6 +142,7 @@ class SensorManager:
         mount = config.mount
         w, x, y, z = mount.orientation
         pose = torch.tensor([*mount.position, x, y, z, w], dtype=torch.float32, device=self.device)
+        pose[3:] = _unit_quaternions(pose[3:])
         return pose.repeat(self.num_envs, 1)
 
     def _assert_name_available(self, name: str) -> None:
@@ -251,7 +259,7 @@ class SensorManager:
         norms = torch.linalg.vector_norm(offsets[:, 3:], dim=-1, keepdim=True)
         if torch.any(torch.abs(norms - 1.0) > UNIT_QUATERNION_NORM_TOLERANCE):
             raise ValueError("Sensor mount orientation must be a unit quaternion in XYZW order.")
-        offsets[:, 3:] /= norms
+        offsets[:, 3:] = _unit_quaternions(offsets[:, 3:])
         if len(ids) == 0:
             return
         if record.write_mount_pose is not None:
