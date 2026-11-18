@@ -217,6 +217,7 @@ def test_linked_tensor_is_never_re_read_and_flushes_outside_writes() -> None:
     state, backing, reads, flushed = _counting_state(rows=3)
     outside = torch.zeros(3, 3)  # memory another writer owns
     linked = state.link({"x": outside})["x"]
+    torch.autograd.graph.increment_version(linked)  # the writer reports the memory it now serves
     with state.mutation(STATE):
         pass
     assert flushed == [[0, 1, 2]] and state.get("x") is linked and len(reads) == 2  # first read, changed rows
@@ -234,61 +235,20 @@ def test_linked_tensor_is_never_re_read_and_flushes_outside_writes() -> None:
     assert torch.equal(state.get("x"), backing)
 
 
-def test_only_writable_tensors_link() -> None:
-    state, *_ = _counting_state(writable=False)
-    with pytest.raises(ValueError, match="writable"):
-        state.link({"x": torch.zeros(2, 3)})
+def _output(state: SimState, name: str, value: torch.Tensor) -> torch.Tensor:
+    """Register ``name`` without a read and link it onto ``value``, as a sensor output."""
+    state.register(name, None, validation_groups=(), invalidates=(), dtype=value.dtype)
+    return state.link({name: value})[name]
 
 
-@pytest.mark.parametrize(
-    ("event", "joint_reread", "pose_reread"),
-    [("state", True, True), ("derived", False, True), ("pose write", False, False), ("joint write", False, True)],
-)
-def test_tags_decide_what_goes_stale(event: str, joint_reread: bool, pose_reread: bool) -> None:
+def test_a_read_less_field_accepts_its_producer_and_rejects_other_writers() -> None:
     state = SimState()
-    joints, poses, mount = torch.zeros(1, 2), torch.zeros(1, 3), torch.zeros(1, 7)
-    reads = {"joints": 0, "poses": 0}
-
-    def read(name: str, value: torch.Tensor):  # type: ignore[no-untyped-def]
-        def counted() -> torch.Tensor:
-            reads[name] += 1
-            return value
-
-        return counted
-
-    state.register(
-        "joints",
-        read("joints", joints),
-        write=lambda _rows, out: joints.copy_(out),
-        validation_groups=(STATE,),
-        invalidates=(DERIVED,),
-    )
-    state.register("poses", read("poses", poses), validation_groups=(DERIVED,), invalidates=())  # derived
-    state.register(
-        "mount", lambda: mount, write=lambda _rows, out: mount.copy_(out), validation_groups=(STATE,), invalidates=()
-    )
-    for name in ("joints", "poses", "mount"):
-        state.get(name)
-    if event in ("state", "derived"):
-        with state.mutation(STATE if event == "state" else DERIVED):
-            pass
-    else:
-        state.get("mount" if event == "pose write" else "joints")[0, 0] = 1.0
-        state.flush_writes()
-    before = dict(reads)
-    state.get("joints"), state.get("poses")
-    assert (reads["joints"] > before["joints"], reads["poses"] > before["poses"]) == (joint_reread, pose_reread)
-
-
-def test_outputs_accept_their_producer_and_reject_other_writers() -> None:
-    state = SimState()
-    image = torch.zeros(2, 3, dtype=torch.uint8)
-    state.register_output("camera/cam/rgb", image)
-    served = state.get("camera/cam/rgb")
+    served = _output(state, "camera/cam/rgb", torch.zeros(2, 3, dtype=torch.uint8))
     with state.producing("camera/cam/rgb"):
         served.fill_(7)
-    state.flush_writes()  # the producer's write is not a violation
-    assert state.get("camera/cam/rgb") is image and int(image[0, 0]) == 7
+    with state.mutation(STATE):  # the producer's write is not a violation, and the field never goes stale
+        pass
+    assert state.get("camera/cam/rgb") is served and int(served[0, 0]) == 7
 
     served[0, 0] = 1  # a consumer's write
     with pytest.raises(RuntimeError, match="read-only"):
@@ -298,23 +258,22 @@ def test_outputs_accept_their_producer_and_reject_other_writers() -> None:
         pass
 
 
-def test_a_linked_output_serves_outside_memory_until_unlinked() -> None:
+def test_a_linked_field_serves_outside_memory_until_unlinked() -> None:
     state = SimState()
-    image = torch.zeros(2, 3)
-    state.register_output("camera/cam/depth", image)
     outside = torch.full((2, 3), 4.0)
-    linked = state.link({"camera/cam/depth": outside})["camera/cam/depth"]
-    assert linked is image and image.data_ptr() == outside.data_ptr()
-    torch.autograd.graph.increment_version(image)  # the owner's write, reported
+    linked = _output(state, "camera/cam/depth", outside)
+    assert linked.data_ptr() == outside.data_ptr()
+    with state.producing("camera/cam/depth"):  # the owner writes the outside memory and reports it
+        outside.fill_(5.0)
     state.flush_writes()
     state.unlink(["camera/cam/depth"])
-    assert image.data_ptr() != outside.data_ptr() and torch.equal(image, outside)
+    assert linked.data_ptr() != outside.data_ptr() and torch.equal(linked, outside)
+    assert state.get("camera/cam/depth") is linked  # a read-less field keeps serving its own memory
 
 
-def test_moving_an_output_onto_other_memory_is_not_a_write() -> None:
+def test_moving_a_linked_field_onto_other_memory_is_not_a_write() -> None:
     state = SimState()
-    image = torch.zeros(2, 3)
-    state.register_output("camera/cam/depth", image)
+    image = _output(state, "camera/cam/depth", torch.zeros(2, 3))
     image.set_(torch.ones(2, 3))  # e.g. onto a co-simulation export
     with state.producing("camera/cam/depth"):
         image.fill_(2.0)

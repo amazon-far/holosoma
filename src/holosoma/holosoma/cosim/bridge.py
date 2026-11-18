@@ -211,8 +211,11 @@ class HeadBridge:
             if exported != (wanted := {name: fields[name] for name in writes}):
                 raise RuntimeError(f"Peer exported {exported}, the head asked it to write {wanted}")
             self._imports = MappedBuffers(specs, device=simulator.sim_device)
-            # The written fields are served from the peer's memory.
+            # The written fields are served from the peer's memory; its writes to read-only ones are recorded as
+            # their producer's, and writable ones flush into the simulation.
             self._linked = list(writes)
+            writable = set(simulator.state.writable_names())
+            self._produced = [name for name in writes if name not in writable]
             self._imports.serve(simulator.state.link({name: self._imports.tensors[name] for name in self._linked}))
         except BaseException:
             self.control.close()
@@ -262,6 +265,7 @@ class HeadBridge:
         if reply["type"] != MessageType.EXCHANGE_REPLY or reply["sequence"] != snapshot.sequence:
             raise RuntimeError("Peer completed the wrong exchange")
         self._imports.record_exchange()
+        self.simulator.state.produced(self._produced)
         if snapshot.sequence == 1:
             self.control.set_timeout(self.exchange_timeout_ms)
 

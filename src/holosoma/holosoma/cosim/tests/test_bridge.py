@@ -127,9 +127,9 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
         object_state_names=(),
         scene=SimpleNamespace(env_origins=torch.zeros(1, 3)),
         state=SimpleNamespace(
+            names=lambda: [*values, *sensors.state.names()],
             writable_names=lambda: list(values),
             get=lambda name: values[name] if name in values else sensors.state.get(name),
-            output_names=lambda: sensors.state.output_names(),
             link=lambda sources: {name: values[name] for name in sources},
             unlink=lambda names: calls.append(("unlink", list(names))),
         ),
@@ -395,10 +395,11 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     sim = _Simulator(
         sim_device="cuda:0",
         state=SimpleNamespace(
-            names=lambda: [*values, *manager.state.output_names()],
+            names=lambda: [*values, *manager.state.names()],
             get=lambda name: values[name] if name in values else manager.state.get(name),
             set_buffer_allocator=lambda _: None,
-            output_names=manager.state.output_names,
+            writable_names=list,
+            produced=manager.state.produced,
             link=manager.state.link,
             unlink=manager.state.unlink,
         ),

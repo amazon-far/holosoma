@@ -132,9 +132,9 @@ class RenderHandler(PeerHandler):
         self._linked = ()
 
     def export_source(self, request: FieldSpec) -> torch.Tensor:
-        """Export the SimState output ``request`` names, e.g. ``camera/<name>/rgb``; its writer renders into it."""
+        """Export the SimState field ``request`` names, e.g. ``camera/<name>/rgb``; its writer renders into it."""
         state = self.simulator.state
-        if request.name not in state.output_names():
+        if request.name not in state.names():
             raise ValueError(f"Peer has no output {request.name!r} for the head to read")
         output = state.get(request.name)
         own = FieldSpec(request.name, tuple(output.shape), str(output.dtype).removeprefix("torch."))

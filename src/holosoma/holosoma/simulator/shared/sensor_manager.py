@@ -28,8 +28,8 @@ SensorRecordT = TypeVar("SensorRecordT", bound="SensorRecord")
 class SensorRecord:
     """Bookkeeping shared by every mounted sensor type.
 
-    Each output is one fixed buffer, ``buffers[output]``, served as the SimState output
-    :meth:`field_name` and written in place every frame inside :meth:`writing`.
+    Each output is one fixed buffer, ``buffers[output]``, served as the read-less SimState field
+    :meth:`field_name` (linked onto it) and written in place every frame inside :meth:`writing`.
     """
 
     name: str
@@ -55,15 +55,16 @@ class SensorRecord:
     kind: ClassVar[str] = "sensor"
 
     def field_name(self, output: str) -> str:
-        """The SimState output serving ``output``."""
+        """The SimState field serving ``output``."""
         return f"{self.kind}/{self.name}/{output}"
 
     def allocate(self, output: str, shape: tuple[int, ...], dtype: torch.dtype, device: str) -> None:
         """Allocate ``output``'s fixed buffer, zero-filled, and serve it as :meth:`field_name`."""
+        name = self.field_name(output)
         with torch.inference_mode(False):
-            buffer = torch.zeros(shape, dtype=dtype, device=device)
-        self.buffers[output] = buffer
-        self.state.register_output(self.field_name(output), buffer)
+            frame = torch.zeros(shape, dtype=dtype, device=device)
+        self.state.register(name, None, validation_groups=(), invalidates=(), dtype=dtype)
+        self.buffers[output] = self.state.link({name: frame})[name]
 
     @contextmanager
     def writing(self, output: str, env_ids: torch.Tensor | None = None) -> Iterator[torch.Tensor]:

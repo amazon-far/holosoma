@@ -10,7 +10,7 @@ plugin by subclassing :class:`holosoma.cosim.base.PeerHandler`; :mod:`.renderer`
   ``rigid_body_pos_w`` and ``rigid_body_quat_w`` are each body's world position and xyzw orientation;
   ``mount_pose/<sensor>`` ``[E, 7]`` is a sensor's current offset from its mount, XYZ + XYZW. A renderer
   must apply it for remote cameras to follow ``set_mount_pose()``; the head warns once if one moves unread.
-- Writes: the remote cameras' SimState output fields, ``camera/<name>/rgb``
+- Writes: the remote cameras' SimState fields, ``camera/<name>/rgb``
   ``uint8 [E, H, W, 3]`` and ``camera/<name>/depth`` ``float32 [E, H, W, 1]``, metric distance to the image
   plane with the camera's ``depth_clipping_behavior`` applied. Each camera's settings (field of view, near/far,
   clipping, mount target) are its config's on both sides; the renderer writes the frames the head's cameras
