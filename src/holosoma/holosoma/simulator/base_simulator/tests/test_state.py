@@ -264,3 +264,34 @@ def test_tags_decide_what_goes_stale(event: str, joint_reread: bool, pose_reread
     before = dict(reads)
     state.get("joints"), state.get("poses")
     assert (reads["joints"] > before["joints"], reads["poses"] > before["poses"]) == (joint_reread, pose_reread)
+
+
+def test_outputs_accept_their_producer_and_reject_other_writers() -> None:
+    state = SimState()
+    image = torch.zeros(2, 3, dtype=torch.uint8)
+    state.register_output("camera/cam/rgb", image)
+    served = state.get("camera/cam/rgb")
+    with state.producing("camera/cam/rgb"):
+        served.fill_(7)
+    state.flush_writes()  # the producer's write is not a violation
+    assert state.get("camera/cam/rgb") is image and int(image[0, 0]) == 7
+
+    served[0, 0] = 1  # a consumer's write
+    with pytest.raises(RuntimeError, match="read-only"):
+        state.flush_writes()
+    served[0, 0] = 2
+    with pytest.raises(RuntimeError, match="read-only"), state.producing("camera/cam/rgb"):
+        pass
+
+
+def test_a_linked_output_serves_outside_memory_until_unlinked() -> None:
+    state = SimState()
+    image = torch.zeros(2, 3)
+    state.register_output("camera/cam/depth", image)
+    outside = torch.full((2, 3), 4.0)
+    linked = state.link({"camera/cam/depth": outside})["camera/cam/depth"]
+    assert linked is image and image.data_ptr() == outside.data_ptr()
+    torch.autograd.graph.increment_version(image)  # the owner's write, reported
+    state.flush_writes()
+    state.unlink(["camera/cam/depth"])
+    assert image.data_ptr() != outside.data_ptr() and torch.equal(image, outside)
