@@ -264,8 +264,8 @@ class HeadBridge:
         reply = self._exchange(MessageType.EXCHANGE_REQUEST, snapshot=asdict(snapshot))
         if reply["type"] != MessageType.EXCHANGE_REPLY or reply["sequence"] != snapshot.sequence:
             raise RuntimeError("Peer completed the wrong exchange")
-        self._imports.record_exchange()
-        self.simulator.state.produced(self._produced)
+        with self.simulator.state.producing(self._produced):
+            self._imports.record_exchange()
         if snapshot.sequence == 1:
             self.control.set_timeout(self.exchange_timeout_ms)
 

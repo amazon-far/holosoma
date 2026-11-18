@@ -256,7 +256,8 @@ class SimState:
     @contextmanager
     def producing(self, names: str | Iterable[str]) -> Iterator[None]:
         """Wrap the producer's writes to the read-only fields ``names``: raise first if another caller wrote one
-        in place, and record the write after, including writes made outside Torch (e.g. Warp kernels)."""
+        in place, and record the write after. A buffer whose version the body did not move (a write outside
+        Torch, e.g. a Warp kernel) gets a bump, so readers see one version change per write."""
         names = [names] if isinstance(names, str) else list(names)
         registrations = {id(self._by_name[name]): self._by_name[name] for name in names}.values()
         if writable := [name for name in names if self._by_name[name].write is not None]:
@@ -269,15 +270,10 @@ class SimState:
             yield
         finally:
             for registration in registrations:
-                for buffer in registration.buffers:
-                    torch.autograd.graph.increment_version(buffer)
-            self.produced(names)
-
-    def produced(self, names: str | Iterable[str]) -> None:
-        """Record that the producer of the read-only fields ``names`` wrote them, with their versions already
-        bumped (e.g. by the co-simulation bridge, which checks for other writers itself)."""
-        for name in [names] if isinstance(names, str) else names:
-            self._by_name[name].mark_clean()
+                for buffer, version in zip(registration.buffers, registration.clean, strict=True):
+                    if buffer._version == version:
+                        torch.autograd.graph.increment_version(buffer)
+                registration.mark_clean()
 
     def _serve(self, name: str, tensor: Any) -> None:
         """Serve ``tensor`` as ``name`` as is, outside the registry's reads and writes."""

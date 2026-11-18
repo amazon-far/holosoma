@@ -399,7 +399,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
             get=lambda name: values[name] if name in values else manager.state.get(name),
             set_buffer_allocator=lambda _: None,
             writable_names=list,
-            produced=manager.state.produced,
+            producing=manager.state.producing,
             link=manager.state.link,
             unlink=manager.state.unlink,
         ),
