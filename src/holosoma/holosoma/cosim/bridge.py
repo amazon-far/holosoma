@@ -25,6 +25,7 @@ or unmapped them.
 from __future__ import annotations
 
 import contextlib
+import enum
 import json
 import math
 import os
@@ -43,6 +44,18 @@ STARTUP_TIMEOUT_MS = 300000
 EXCHANGE_TIMEOUT_MS = 30000
 # How often an idle peer checks that its head is still running.
 HEAD_POLL_MS = 1000
+
+
+class MessageType(str, enum.Enum):
+    """The ``type`` of a bridge message: a head request, the peer's reply to it, or the peer's ``ERROR``."""
+
+    OPEN_REQUEST = "OPEN_REQUEST"
+    OPEN_REPLY = "OPEN_REPLY"
+    EXCHANGE_REQUEST = "EXCHANGE_REQUEST"
+    EXCHANGE_REPLY = "EXCHANGE_REPLY"
+    CLOSE_REQUEST = "CLOSE_REQUEST"
+    CLOSE_REPLY = "CLOSE_REPLY"
+    ERROR = "ERROR"
 
 
 @dataclass(frozen=True)
@@ -82,7 +95,7 @@ class ControlChannel:
         self.socket.setsockopt(zmq.RCVTIMEO, timeout_ms)
         self.socket.setsockopt(zmq.SNDTIMEO, timeout_ms)
 
-    def exchange(self, command: str, **fields: Any) -> dict[str, Any]:
+    def exchange(self, command: MessageType, **fields: Any) -> dict[str, Any]:
         if self.awaiting_reply:
             # A request interrupted before its reply, e.g. by a signal, leaves REQ waiting for that reply.
             self.receive()
@@ -91,7 +104,7 @@ class ControlChannel:
         self.awaiting_reply = True
         reply = self.receive()
         self.awaiting_reply = False
-        if reply["type"] == "ERROR":
+        if reply["type"] == MessageType.ERROR:
             raise RuntimeError(reply["message"])
         return reply
 
@@ -181,7 +194,7 @@ class HeadBridge:
         self.closed = self.failed = False
         try:
             reply = self.control.exchange(
-                "OPEN_REQUEST",
+                MessageType.OPEN_REQUEST,
                 state=[asdict(spec) for spec in allocator.specs(self.refresh())],
                 requests=[asdict(request) for request in requests],
                 ready_handle=self.ready.ipc_handle().hex(),
@@ -189,7 +202,7 @@ class HeadBridge:
                 head_pid=os.getpid(),
                 meta=as_received(dict(meta or {})),
             )
-            if reply["type"] != "OPEN_REPLY":
+            if reply["type"] != MessageType.OPEN_REPLY:
                 raise RuntimeError("Peer did not accept state buffers")
             self.done = wp.event_from_ipc_handle(bytes.fromhex(reply["done_handle"]), device=simulator.sim_device)
             if unknown := sorted(set(reply["reads"]) - set(shared)):
@@ -218,7 +231,7 @@ class HeadBridge:
         """Bring the caches the peer reads up to date, in place, and return them."""
         return {name: self.simulator.state.get(name) for name in self.reads}
 
-    def _exchange(self, command: str, **fields: Any) -> dict[str, Any]:
+    def _exchange(self, command: MessageType, **fields: Any) -> dict[str, Any]:
         """Send ``command`` and order later work on this stream after the peer's."""
         import torch
         import warp as wp
@@ -245,8 +258,8 @@ class HeadBridge:
         self.refresh()
         self.sequence += 1
         snapshot = Snapshot(self.sequence, self.simulator.time(), self._phase())
-        reply = self._exchange("EXCHANGE_REQUEST", snapshot=asdict(snapshot), written=self._written())
-        if reply["type"] != "EXCHANGE_REPLY" or reply["sequence"] != snapshot.sequence:
+        reply = self._exchange(MessageType.EXCHANGE_REQUEST, snapshot=asdict(snapshot), written=self._written())
+        if reply["type"] != MessageType.EXCHANGE_REPLY or reply["sequence"] != snapshot.sequence:
             raise RuntimeError("Peer completed the wrong exchange")
         self._imports.record_writes(reply["written"])
         if snapshot.sequence == 1:
@@ -263,8 +276,8 @@ class HeadBridge:
             torch.cuda.synchronize(self.simulator.sim_device)
             self._imports.release()
             if not self.failed:
-                reply = self.control.exchange("CLOSE_REQUEST")
-                if reply["type"] != "CLOSE_REPLY":
+                reply = self.control.exchange(MessageType.CLOSE_REQUEST)
+                if reply["type"] != MessageType.CLOSE_REPLY:
                     raise RuntimeError("Peer did not release shared state")
         finally:
             self.control.close()
@@ -337,7 +350,7 @@ class PeerBridge:
                 message = receive()
                 try:
                     command = message["type"]
-                    if command == "OPEN_REQUEST" and mapped is None:
+                    if command == MessageType.OPEN_REQUEST and mapped is None:
                         if (head_gpu := message["gpu_uuid"]) != (own_gpu := gpu_uuid(device)):
                             raise ValueError(f"Head GPU {head_gpu} differs from peer GPU {own_gpu}")
                         shared = [BufferSpec.from_message(raw) for raw in message["state"]]
@@ -355,7 +368,7 @@ class PeerBridge:
                         head_pid = int(message["head_pid"])
                         self.control.socket.send_json(
                             {
-                                "type": "OPEN_REPLY",
+                                "type": MessageType.OPEN_REPLY,
                                 "done_handle": done.ipc_handle().hex(),
                                 "exports": [
                                     asdict(share(name, allocation))
@@ -364,7 +377,7 @@ class PeerBridge:
                                 "reads": list(reads),
                             }
                         )
-                    elif command == "EXCHANGE_REQUEST" and mapped is not None:
+                    elif command == MessageType.EXCHANGE_REQUEST and mapped is not None:
                         snapshot = Snapshot(**message["snapshot"])
                         if snapshot.sequence != sequence + 1:
                             raise ValueError("Snapshots must be consecutive")
@@ -375,18 +388,22 @@ class PeerBridge:
                         stream.record_event(done)
                         sequence = snapshot.sequence
                         self.control.socket.send_json(
-                            {"type": "EXCHANGE_REPLY", "sequence": sequence, "written": self.handler.written()}
+                            {
+                                "type": MessageType.EXCHANGE_REPLY,
+                                "sequence": sequence,
+                                "written": self.handler.written(),
+                            }
                         )
-                    elif command == "CLOSE_REQUEST" and mapped is not None:
+                    elif command == MessageType.CLOSE_REQUEST and mapped is not None:
                         torch.cuda.synchronize(device)
                         mapped.release()
                         mapped = None
-                        self.control.socket.send_json({"type": "CLOSE_REPLY"})
+                        self.control.socket.send_json({"type": MessageType.CLOSE_REPLY})
                         return
                     else:
                         raise ValueError(f"Unexpected bridge command: {command}")
                 except Exception as error:
-                    self.control.socket.send_json({"type": "ERROR", "message": str(error)})
+                    self.control.socket.send_json({"type": MessageType.ERROR, "message": str(error)})
                     raise
         except BaseException:
             if mapped is not None:

@@ -279,9 +279,9 @@ def test_exchange_after_an_interrupted_request_takes_the_right_reply(tmp_path: P
     server.start()
     try:
         with pytest.raises(zmq.Again):
-            control.exchange("EXCHANGE_REQUEST")
+            control.exchange(bridge.MessageType.EXCHANGE_REQUEST)
         control.set_timeout(2000)
-        assert control.exchange("CLOSE_REQUEST") == {"type": "CLOSE_REPLY"}
+        assert control.exchange(bridge.MessageType.CLOSE_REQUEST) == {"type": "CLOSE_REPLY"}
     finally:
         server.join(timeout=5)
         control.close()
