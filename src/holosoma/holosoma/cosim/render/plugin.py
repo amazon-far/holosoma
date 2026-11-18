@@ -1,25 +1,25 @@
-"""Co-simulation rendering, source side: the ``cosim-render`` plugin and the contract a renderer serves.
+"""Co-simulation rendering, head side: the ``cosim-render`` plugin and the contract a renderer serves.
 
 A camera with ``remote`` set to the plugin's slot takes its images from the renderer. Any process can serve the
-plugin by subclassing :class:`holosoma.cosim.base.BufferHandler`; :mod:`.renderer` is the Holosoma one.
+plugin by subclassing :class:`holosoma.cosim.base.PeerHandler`; :mod:`.renderer` is the Holosoma one.
 
 - Handshake ``meta`` (:func:`scene_layout`): ``dof_names``, ``body_names`` and ``object_names`` give the column
-  order of the joint, robot-body and object fields; ``env_origins`` ``[E, 3]`` is where the source simulated
+  order of the joint, robot-body and object fields; ``env_origins`` ``[E, 3]`` is where the head simulated
   each environment, and the renderer places its environments there.
 - State: every non-empty SimState field. Roots are world-frame ``[pos, quat xyzw, lin vel, ang vel]``;
   ``_rigid_body_pos`` and ``_rigid_body_rot`` are each body's world position and xyzw orientation;
   ``mount_pose/<sensor>`` ``[E, 7]`` is a sensor's current offset from its mount, XYZ + XYZW. A renderer
-  must apply it for remote cameras to follow ``set_mount_pose()``; the source warns once if one moves unread.
+  must apply it for remote cameras to follow ``set_mount_pose()``; the head warns once if one moves unread.
 - Requests: one per remote-camera output, named :func:`image_name` and decoded by :func:`camera_output`. rgb is
   ``uint8 [E, H, W, 3]``; depth is ``float32 [E, H, W, 1]``, metric distance to the image plane, ``+inf`` for no
-  return. The source applies the camera's ``depth_clipping_behavior`` when it stores the image.
+  return. The head applies the camera's ``depth_clipping_behavior`` when it stores the image.
 - Request ``meta``: ``vertical_fov`` in degrees, ``near`` and ``far`` in meters, ``depth_clipping_behavior``,
   and ``mount`` (a ``SensorMountConfig``): ``target_kind`` ``robot_link``, ``actor`` or ``world``; ``target``,
   a ``body_names`` or ``object_names`` entry; and ``position`` and ``orientation`` ``[w, x, y, z]`` in the
   target's frame, or the environment's for ``world``. Identity looks along ``-Z`` with ``+Y`` up.
 
-Exports are filled after each step and read in place by the source, which copies due cameras' images
-before its next exchange. :class:`~holosoma.cosim.base.BufferHandler` reports which it wrote.
+Exports are filled after each step and read in place by the head, which copies due cameras' images
+before its next exchange. :class:`~holosoma.cosim.base.PeerHandler` reports which it wrote.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 from loguru import logger
 
-from holosoma.cosim.base import CosimPlugin
+from holosoma.cosim.base import HeadPlugin
 from holosoma.cosim.bridge import BufferRequest, as_received
 from holosoma.simulator.base_simulator.hooks import Phase
 
@@ -89,8 +89,8 @@ def camera_requests(record: CameraRecord, num_envs: int) -> list[BufferRequest]:
     ]
 
 
-class CosimRenderPlugin(CosimPlugin):
-    """Share ``simulator``'s state with a renderer and publish a frame whenever a camera is due.
+class CosimRenderPlugin(HeadPlugin):
+    """Share ``simulator``'s state with a renderer and publish a snapshot whenever a camera is due.
 
     Remote cameras take the renderer's images: each frame they are filled after local sensors render
     and before consumers read them. Without remote cameras, state is published after local cameras render.
@@ -99,11 +99,11 @@ class CosimRenderPlugin(CosimPlugin):
     def __init__(self, cfg: CosimRenderPluginConfig, simulator: BaseSimulator) -> None:
         manager = simulator.sensor_manager
         if not manager.cameras:
-            raise ValueError("The source publishes when its cameras are due; configure at least one camera")
+            raise ValueError("The head publishes when its cameras are due; configure at least one camera")
         slot = simulator.hooks.installing_slot
         self.remote = [record for record in manager.cameras if slot is not None and record.config.remote == slot]
         super().__init__(cfg, simulator)
-        read = set(self.publisher.fields)
+        read = set(self.bridge.reads)
         self._unread_mounts = [
             (record, record.mount_poses.clone())
             for record in self.remote
@@ -134,13 +134,13 @@ class CosimRenderPlugin(CosimPlugin):
             if not cameras:
                 return
             self._warn_if_unread_mount_moved()
-            self.publisher.publish()
-            images = self.publisher.imports
+            self.bridge.publish()
+            images = self.bridge.imports
             for record in cameras:
                 for data_type in record.config.data_types:
                     record.set_buffer(data_type, images[image_name(record.name, data_type)].clone())
         elif due:
-            self.publisher.publish()
+            self.bridge.publish()
 
     def _warn_if_unread_mount_moved(self) -> None:
         """Warn once if a remote camera moves although its renderer does not read its mount pose."""

@@ -1,9 +1,9 @@
-"""Co-simulation rendering, renderer side: render a source's state and export the cameras it requests.
+"""Co-simulation rendering, renderer side: render a head's state and export the cameras it requests.
 
 usage: python -m holosoma.cosim.render --endpoint ipc://... <run_sim arguments>
 
-The run_sim arguments describe the same scene as the source's, with the source's remote cameras configured
-here as ordinary cameras. Start the renderer before the source; it exits when the source closes.
+The run_sim arguments describe the same scene as the head's, with the head's remote cameras configured
+here as ordinary cameras. Start the renderer before the head; it exits when the head closes.
 
 :class:`RenderTask` also renders supplied state without the bridge::
 
@@ -26,8 +26,8 @@ from loguru import logger
 
 from holosoma.config_types.env import EnvConfig, get_run_sim_env_config
 from holosoma.config_types.run_sim import RunSimConfig
-from holosoma.cosim.base import BufferHandler
-from holosoma.cosim.bridge import BufferRequest, Frame, Receiver
+from holosoma.cosim.base import PeerHandler
+from holosoma.cosim.bridge import BufferRequest, PeerBridge, Snapshot
 from holosoma.cosim.cuda import BufferSpec
 from holosoma.cosim.render.plugin import camera_output, camera_requests, scene_layout
 from holosoma.envs.base_task.base_task import BaseTask
@@ -94,11 +94,11 @@ def create_render_task(run: RunSimConfig) -> AbstractContextManager[RenderTask]:
     return task_session(config, RenderTask)
 
 
-class RenderHandler(BufferHandler):
-    """Mirror the source's state into ``task``, render it, and export the camera outputs the source requests.
+class RenderHandler(PeerHandler):
+    """Mirror the head's state into ``task``, render it, and export the camera outputs the head requests.
 
-    Adopts the source's environment origins, rejects any other scene difference, and links the source fields
-    writable on ``task``'s simulator to its state, so the source's changes reach it at each render.
+    Adopts the head's environment origins, rejects any other scene difference, and links the head fields
+    writable on ``task``'s simulator to its state, so the head's changes reach it at each render.
     """
 
     def __init__(self, task: RenderTask) -> None:
@@ -108,20 +108,20 @@ class RenderHandler(BufferHandler):
         self._linked: tuple[str, ...] = ()
 
     def accept(self, meta: Mapping[str, Any]) -> None:
-        """Adopt the source's origins and reject a different joint or object order; body state is not applied."""
+        """Adopt the head's origins and reject a different joint or object order; body state is not applied."""
         origins = self.simulator.scene.env_origins
         self.simulator.match_env_origins(torch.tensor(meta["env_origins"], dtype=torch.float32, device=origins.device))
         own = scene_layout(self.simulator)
         if differing := [key for key in ("dof_names", "object_names", "env_origins") if meta.get(key) != own[key]]:
             raise ValueError(f"Scene {differing} differs between simulators")
 
-    def reads(self, exports: Mapping[str, BufferSpec]) -> tuple[str, ...]:
-        state = self.simulator.state
+    def reads(self, state: Mapping[str, BufferSpec]) -> tuple[str, ...]:
+        own_state = self.simulator.state
         wanted = {}
-        for name in state.writable_names():
-            own = state.get(name)
+        for name in own_state.writable_names():
+            own = own_state.get(name)
             wanted[name] = (tuple(own.shape), str(own.dtype).removeprefix("torch."))
-        return self.matching(exports, wanted)
+        return self.matching_fields(state, wanted)
 
     def targets(self, reads: Sequence[str]) -> Mapping[str, torch.Tensor]:
         self._linked = tuple(reads)
@@ -137,16 +137,15 @@ class RenderHandler(BufferHandler):
         record = manager.get(camera) if manager.has_camera(camera) else None
         own = {} if record is None else {output.name: output for output in camera_requests(record, self.task.num_envs)}
         if record is None or request.name not in own:
-            raise ValueError(f"Receiver has no camera output {request.name!r} for the source's request")
+            raise ValueError(f"Peer has no camera output {request.name!r} for the head's request")
         if request != own[request.name]:
             raise ValueError(
-                f"Camera output {request.name!r} differs between simulators: "
-                f"source {request}, receiver {own[request.name]}"
+                f"Camera output {request.name!r} differs between simulators: head {request}, peer {own[request.name]}"
             )
         return lambda: record.buffers[data_type]
 
-    def step(self, frame: Frame, state: Mapping[str, torch.Tensor]) -> None:
-        self.simulator.kinematic_time = frame.sim_time
+    def step(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:
+        self.simulator.kinematic_time = snapshot.sim_time
         self.task.render_frame()
 
 
@@ -164,5 +163,5 @@ def main(argv: list[str] | None = None) -> None:
     endpoint, rest = split_endpoint(list(sys.argv[1:] if argv is None else argv))
     config = parse_config(RunSimConfig, args=rest)
     with create_render_task(config) as task:
-        Receiver(RenderHandler(task), endpoint=endpoint).run()
-        logger.info(f"Co-simulation source closed after {task.frames_rendered} frames")
+        PeerBridge(RenderHandler(task), endpoint=endpoint).run()
+        logger.info(f"Co-simulation head closed after {task.frames_rendered} frames")

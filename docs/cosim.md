@@ -1,14 +1,14 @@
 # GPU co-simulation
 
-One process simulates; a peer process on the same GPU consumes its state each frame and can answer with
+One process, the head, simulates; a peer process on the same GPU consumes its state each frame and can answer with
 buffers of its own. State and answers stay in shared CUDA memory, and the two step in lockstep. There are
 three ways to use it, from least to most code:
 
-| Use | Source side | Peer side |
+| Use | Head side | Peer side |
 |---|---|---|
 | [Holosoma renders Holosoma](#render-cameras-in-another-holosoma-simulator) | `cosim-render` plugin | `python -m holosoma.cosim.render` |
-| [Any renderer](#render-with-an-engine-outside-holosoma) | `cosim-render` plugin | a `BufferHandler` subclass |
-| [Other co-simulations](#other-kinds-of-co-simulation) | a `CosimPlugin` subclass | a `BufferHandler` subclass |
+| [Any renderer](#render-with-an-engine-outside-holosoma) | `cosim-render` plugin | a `PeerHandler` subclass |
+| [Other co-simulations](#other-kinds-of-co-simulation) | a `HeadPlugin` subclass | a `PeerHandler` subclass |
 
 The module docstrings in `holosoma.cosim` document the protocol (`bridge`), shared memory (`cuda`), the bases
 (`base`) and the renderer contract (`render.plugin`).
@@ -16,8 +16,8 @@ The module docstrings in `holosoma.cosim` document the protocol (`bridge`), shar
 ## Render cameras in another Holosoma simulator
 
 Simulate in one backend and render cameras in another, for example MJWarp physics with Isaac Sim images.
-Start the renderer with the scene's `run_sim` arguments, then the source with the `cosim-render` plugin. A
-source camera whose `remote` names the plugin's slot takes its images from the renderer, which configures
+Start the renderer with the scene's `run_sim` arguments, then the head with the `cosim-render` plugin. A
+head camera whose `remote` names the plugin's slot takes its images from the renderer, which configures
 the same camera as an ordinary one:
 
 ```bash
@@ -31,14 +31,14 @@ python -m holosoma.run_sim \
   plugin.cosim:cosim-render --plugin.cosim.endpoint ipc:///tmp/$USER/cosim.sock
 ```
 
-Each time a camera is due, the source publishes after its local cameras render. The renderer applies the
+Each time a camera is due, the head publishes after its local cameras render. The renderer applies the
 state, renders, and returns the requested images, which fill the remote cameras before
 `simulator.sensor_render_hook`, so observation terms and camera plugins read them unchanged. The renderer
-exits when the source closes, including on Ctrl+C.
+exits when the head closes, including on Ctrl+C.
 
-- Local and remote cameras mix on one source.
+- Local and remote cameras mix on one head.
 - `set_mount_pose()` works on a remote camera: the pose travels with the state, as `mount_pose/<camera>`.
-  On the renderer, cameras the source also has follow the source's poses every frame.
+  On the renderer, cameras the head also has follow the head's poses every frame.
 - Several renderers: give each its own plugin slot and endpoint, and set each remote camera to the slot that
   supplies it.
 - `cosim-render` is an ordinary plugin, so any task that installs plugins can use it; the tested path is
@@ -47,19 +47,19 @@ exits when the source closes, including on Ctrl+C.
 ## Render with an engine outside Holosoma
 
 Any process on the same GPU can serve `cosim-render` without a Holosoma simulator or task: subclass
-`holosoma.cosim.base.BufferHandler` and run it under `holosoma.cosim.bridge.Receiver`.
+`holosoma.cosim.base.PeerHandler` and run it under `holosoma.cosim.bridge.PeerBridge`.
 
 ```python
-from holosoma.cosim.base import BufferHandler
-from holosoma.cosim.bridge import Receiver
+from holosoma.cosim.base import PeerHandler
+from holosoma.cosim.bridge import PeerBridge
 from holosoma.cosim.render.plugin import camera_output
 
 
-class EngineRenderer(BufferHandler):
+class EngineRenderer(PeerHandler):
     def accept(self, meta):  # joint, body and object order; environment origins
         self.engine.load_layout(meta)
 
-    def reads(self, exports):  # state fields to receive each frame
+    def reads(self, state):  # head state fields to receive each exchange
         return ("_rigid_body_pos", "_rigid_body_rot", "object_root_states")
 
     def export_source(self, request):  # one per remote-camera output, e.g. "overview/rgb"
@@ -67,29 +67,29 @@ class EngineRenderer(BufferHandler):
         self.engine.add_camera(camera, data_type, request.shape, request.meta)
         return lambda: self.engine.image(camera, data_type)
 
-    def step(self, frame, state):
-        self.engine.render(state, time=frame.sim_time)
+    def step(self, snapshot, state):
+        self.engine.render(state, time=snapshot.sim_time)
 
 
-Receiver(EngineRenderer("cuda:0"), endpoint=endpoint).run()
+PeerBridge(EngineRenderer("cuda:0"), endpoint=endpoint).run()
 ```
 
-The source runs unchanged, as above. Body poses arrive in world coordinates, so the engine needs no
+The head runs unchanged, as above. Body poses arrive in world coordinates, so the engine needs no
 kinematics; the `holosoma.cosim.render.plugin` docstring lists the fields, conventions and image layouts it
 must follow.
 
 ## Other kinds of co-simulation
 
-`holosoma.cosim.base` assumes nothing about rendering. `CosimPlugin` owns the source side, and a subclass
-chooses what to request, the handshake metadata, and the hooks that publish. `BufferHandler` is the peer.
+`holosoma.cosim.base` assumes nothing about rendering. `HeadPlugin` owns the head side, and a subclass
+chooses what to request, the handshake metadata, and the hooks that publish. `PeerHandler` is the peer.
 
 ```python
-from holosoma.cosim.base import BufferHandler, CosimPlugin
+from holosoma.cosim.base import PeerHandler, HeadPlugin
 from holosoma.cosim.bridge import BufferRequest
 from holosoma.simulator.base_simulator.hooks import Phase
 
 
-class ForcePlugin(CosimPlugin):  # source: before every physics substep, exchange and apply the peer's forces
+class ForcePlugin(HeadPlugin):  # head: before every physics substep, exchange and apply the peer's forces
     def requests(self):
         return [BufferRequest("forces", (self.simulator.num_envs, self.simulator.num_bodies, 3), "float32")]
 
@@ -97,40 +97,41 @@ class ForcePlugin(CosimPlugin):  # source: before every physics substep, exchang
         yield hooks.add(Phase.PRE_STEP, self._exchange, name="forces.exchange")
 
     def _exchange(self):
-        self.publisher.publish()
-        self.simulator.apply_external_force("robot", forces=self.publisher.imports["forces"])
+        self.bridge.publish()
+        self.simulator.apply_external_force("robot", forces=self.bridge.imports["forces"])
 
 
-class ForceSolver(BufferHandler):  # peer: read contacts, write forces
-    def reads(self, exports):
+class ForceSolver(PeerHandler):  # peer: read contacts, write forces
+    def reads(self, state):
         return ("contact_forces",)
 
     def export_source(self, request):
         return lambda: self.forces
 
-    def step(self, frame, state):
+    def step(self, snapshot, state):
         self.forces = solve(state["contact_forces"])
 ```
 
 Register the plugin's config like any other plugin (subclass `CosimPluginConfig`). A peer that only reads
-state needs no new source code: a `cosim-render` plugin that no camera names still publishes whenever a
-local camera is due. Several co-simulations on one source share its state buffers; each refreshes only the
+state needs no new head code: a `cosim-render` plugin that no camera names still publishes whenever a
+local camera is due. Several co-simulations on one head share its state buffers; each refreshes only the
 fields its peer reads.
 
 ## Requirements and limits
 
 - Same host and same physical GPU (checked by UUID), CUDA on both sides, and a shared PID namespace: the
-  peer waits while the source process runs.
-- The source's plugin selects where SimState caches are allocated, so list it before any plugin that reads
+  peer waits while the head process runs.
+- The head's plugin selects where SimState caches are allocated, so list it before any plugin that reads
   state.
-- A Holosoma renderer needs the same scene: joint and object order must match, and it adopts the source's
+- A Holosoma renderer needs the same scene: joint and object order must match, and it adopts the head's
   environment origins (Isaac Sim moves its clone grid; MuJoCo re-places world-mounted sensors). It renders
   every camera each frame, so its sensors must not be decimated; an Isaac Sim renderer serves cameras only.
-- Lockstep: the source waits for every exchange, with no overlap between physics and the peer's work.
-- Each shared buffer is written only by the process that allocated it: the source's state and the peer's
+- Lockstep: the head waits for every exchange, with no overlap between physics and the peer's work.
+- Each shared buffer is written only by the process that allocated it: the head's state and the peer's
   exports. The other reads it in place and fails the exchange if it wrote one; the Holosoma renderer serves
-  the source's state as its own SimState this way.
+  the head's state as its own SimState this way.
 - After a reset, a remote camera keeps the reset environment's frame from before the reset until the next
   frame, as local cameras do.
-- Failures propagate to both processes; there is no reconnection. Startup and the first frame may take
-  minutes on first use; later exchanges time out after 30 seconds.
+- Failures propagate to both processes; there is no reconnection. The handshake and the first exchange time
+  out after five minutes (`STARTUP_TIMEOUT_MS`, first use compiles); later exchanges after 30 seconds
+  (`EXCHANGE_TIMEOUT_MS`). Both are `HeadBridge` arguments.

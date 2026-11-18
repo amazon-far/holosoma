@@ -299,7 +299,7 @@ class MotionPlaybackPluginConfig(PluginConfig):
     7-column pose blocks appear after the robot block. Empty (default) drives only the robot."""
 
     fps: float = 50.0
-    """Frame rate of the clip (rows per second), for mapping playback time to a row index."""
+    """Snapshot rate of the clip (rows per second), for mapping playback time to a row index."""
 
     quat_order: Literal["xyzw", "wxyz"] = "wxyz"
     """Quaternion column order in the file's pose blocks (root and objects). Written to the sim

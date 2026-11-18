@@ -76,7 +76,7 @@ def _capture(sim: Any, saved: dict[str, Any]) -> None:
 def receiver(endpoint: str, output: Path, num_envs: int, loopback: bool, backend: str) -> None:
     import torch
 
-    from holosoma.cosim.bridge import Receiver
+    from holosoma.cosim.bridge import PeerBridge
     from holosoma.cosim.render.renderer import RenderHandler, create_render_task
     from holosoma.simulator.base_simulator.hooks import Phase
 
@@ -87,12 +87,12 @@ def receiver(endpoint: str, output: Path, num_envs: int, loopback: bool, backend
         sim.hooks.add(Phase.FRAME_END, lambda: capture(sim, saved), after=sim.sensor_render_hook)
 
         class LinkCheckingHandler(RenderHandler):
-            def step(self, frame: Any, state: Any) -> None:
-                # The renderer's state is the source's memory, not a copy of it.
+            def step(self, snapshot: Any, state: Any) -> None:
+                # The renderer's state is the head's memory, not a copy of it.
                 saved["linked"] = all(state[name] is sim.state.get(name) for name in state)
-                super().step(frame, state)
+                super().step(snapshot, state)
 
-        receiver_loop = Receiver(LinkCheckingHandler(task), endpoint=endpoint)
+        receiver_loop = PeerBridge(LinkCheckingHandler(task), endpoint=endpoint)
         (output / "ready").write_text("ready\n")
         receiver_loop.run()
         # Inside the session: closing Isaac Sim's app ends the process.
@@ -119,7 +119,7 @@ def source(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bo
                 for name in ("overview", "loopback"):
                     manager.set_mount_pose(name, moved)
             task.step()
-        saved["frames"] = cosim.publisher.sequence
+        saved["frames"] = cosim.bridge.sequence
     torch.save(saved, output / "source.pt")
 
 

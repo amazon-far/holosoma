@@ -1,7 +1,7 @@
 """Shared CUDA allocations and the lifetime of imported ones.
 
 Exports are Warp arrays allocated outside Warp's memory pool and shared through CUDA IPC (Warp 1.15 to 1.19).
-An owner must outlive every peer mapping of it. Importing this module loads no GPU SDK.
+An allocation must outlive every peer mapping of it. Importing this module loads no GPU SDK.
 """
 
 from __future__ import annotations
@@ -47,22 +47,22 @@ def allocate_shared(shape: tuple[int, ...], dtype: str, device: Any) -> Any:
         return wp.empty(tuple(shape), dtype=getattr(wp, dtype), device=wp.device_from_torch(selected))
 
 
-def share(name: str, owner: Any) -> BufferSpec:
+def share(name: str, allocation: Any) -> BufferSpec:
     """Describe an :func:`allocate_shared` array for import by another process."""
-    return BufferSpec(name, tuple(owner.shape), owner.ipc_handle().hex(), owner.dtype.__name__)
+    return BufferSpec(name, tuple(allocation.shape), allocation.ipc_handle().hex(), allocation.dtype.__name__)
 
 
-class CacheAllocator:
+class SharedStateAllocator:
     """Allocate selected SimState caches outside Warp's memory pool.
 
-    Retain this owner until the receiver has unmapped its imports. Other caches,
+    Retain this allocator until the peer has unmapped its imports. Other caches,
     and empty selected ones, keep ordinary Torch storage. Warp is imported only
     when a selected cache is allocated.
     """
 
     def __init__(self, fields: Iterable[str]) -> None:
         self.fields = frozenset(fields)
-        self.owners: dict[str, Any] = {}
+        self.allocations: dict[str, Any] = {}
         self.tensors: dict[str, torch.Tensor] = {}
 
     def __call__(self, name: str, value: torch.Tensor, device: Any) -> torch.Tensor:
@@ -72,38 +72,38 @@ class CacheAllocator:
         selected = torch.device(device or value.device)
         if name not in self.fields or not value.numel():
             return torch.empty(value.shape, dtype=torch.float32, device=selected)
-        if name in self.owners:
+        if name in self.allocations:
             raise RuntimeError(f"Published cache allocation was replaced: {name}")
-        owner = allocate_shared(tuple(value.shape), "float32", selected)
-        tensor = wp.to_torch(owner)
-        self.owners[name], self.tensors[name] = owner, tensor
+        allocation = allocate_shared(tuple(value.shape), "float32", selected)
+        tensor = wp.to_torch(allocation)
+        self.allocations[name], self.tensors[name] = allocation, tensor
         return tensor
 
-    def exports(self, values: Mapping[str, torch.Tensor]) -> list[BufferSpec]:
+    def specs(self, values: Mapping[str, torch.Tensor]) -> list[BufferSpec]:
         result = []
         for name, tensor in values.items():
-            owner = self.owners[name]
-            if tensor.data_ptr() != owner.ptr or tensor.numel() != self.tensors[name].numel():
+            allocation = self.allocations[name]
+            if tensor.data_ptr() != allocation.ptr or tensor.numel() != self.tensors[name].numel():
                 raise RuntimeError(f"State tensor no longer aliases its published cache: {name}")
             if not tensor.is_contiguous():
                 raise RuntimeError(f"Published state tensors must be contiguous: {name}")
-            result.append(share(name, owner))
+            result.append(share(name, allocation))
         return result
 
 
-_SHARED_STATE: weakref.WeakKeyDictionary[BaseSimulator, CacheAllocator] = weakref.WeakKeyDictionary()
+_ALLOCATORS: weakref.WeakKeyDictionary[BaseSimulator, SharedStateAllocator] = weakref.WeakKeyDictionary()
 
 
-def shared_state(simulator: BaseSimulator) -> CacheAllocator:
+def shared_state_allocator(simulator: BaseSimulator) -> SharedStateAllocator:
     """The allocator sharing every non-empty state field of ``simulator``, installed by the first caller.
 
     Co-simulation plugins on one simulator share it; it must be installed before state is first read.
     """
-    allocator = _SHARED_STATE.get(simulator)
+    allocator = _ALLOCATORS.get(simulator)
     if allocator is None:
-        allocator = CacheAllocator(simulator.state.names())
+        allocator = SharedStateAllocator(simulator.state.names())
         simulator.state.set_buffer_allocator(allocator)
-        _SHARED_STATE[simulator] = allocator
+        _ALLOCATORS[simulator] = allocator
     return allocator
 
 
@@ -111,7 +111,7 @@ class MappedBuffers:
     """Own imports until SDK and caller views have been released.
 
     Each import is served as one tensor: the given target, moved onto it with ``set_``, or Warp's view. Its
-    version moves for local in-place writes and for :meth:`advance`, which records the owner's writes.
+    version moves for local in-place writes and for :meth:`record_writes`, which records the owner's writes.
     """
 
     def __init__(
@@ -131,12 +131,12 @@ class MappedBuffers:
                 raise ValueError(f"Duplicate IPC buffer: {spec.name}")
             if spec.dtype not in SHARED_DTYPES:
                 raise ValueError(f"IPC buffer {spec.name} must be one of {SHARED_DTYPES}, got {spec.dtype}")
-            owner = wp.from_ipc_handle(
+            allocation = wp.from_ipc_handle(
                 bytes.fromhex(spec.handle), shape=spec.shape, dtype=getattr(wp, spec.dtype), device=device
             )
-            tensor = wp.to_torch(owner)
-            self.arrays[spec.name] = owner
-            self.references[spec.name] = (weakref.ref(owner), weakref.ref(tensor))
+            tensor = wp.to_torch(allocation)
+            self.arrays[spec.name] = allocation
+            self.references[spec.name] = (weakref.ref(allocation), weakref.ref(tensor))
             target = targets.get(spec.name)
             if target is not None:
                 if (target.shape, target.dtype, target.device) != (tensor.shape, tensor.dtype, tensor.device):
@@ -157,9 +157,11 @@ class MappedBuffers:
     def verify_read_only(self) -> None:
         """Raise if a caller wrote borrowed state; detects in-place writes through these Torch tensors only."""
         if written := self._written():
-            raise RuntimeError(f"Borrowed IPC buffers {written} were written in place; their owner writes them")
+            raise RuntimeError(
+                f"Borrowed IPC buffers {written} were written in place; only their allocating process writes them"
+            )
 
-    def advance(self, names: Iterable[str]) -> None:
+    def record_writes(self, names: Iterable[str]) -> None:
         """Record that the owner wrote ``names``: bump each version as an in-place write would."""
         import torch
 
@@ -185,13 +187,15 @@ class MappedBuffers:
         self.arrays.clear()
         gc.collect()
         if written:
-            raise RuntimeError(f"Borrowed IPC buffers {written} were written in place; their owner writes them")
+            raise RuntimeError(
+                f"Borrowed IPC buffers {written} were written in place; only their allocating process writes them"
+            )
         retained = [name for name, refs in self.references.items() if any(ref() is not None for ref in refs)]
         if retained:
             raise RuntimeError(f"IPC mappings are still referenced: {retained}")
 
 
-class WriteLog:
+class WriteTracker:
     """Report which of ``tensors`` were written in place since the last call; the first call reports all."""
 
     def __init__(self, tensors: Mapping[str, torch.Tensor]) -> None:

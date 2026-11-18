@@ -1,24 +1,25 @@
-"""Lockstep CUDA-IPC exchange between a source and a receiver process on the same GPU.
+"""Lockstep CUDA-IPC exchange between a head and a peer process on the same GPU.
 
-:class:`Publisher` (source) and :class:`Receiver` exchange metadata over a ZeroMQ REQ/REP socket; state and
+:class:`HeadBridge` and :class:`PeerBridge` exchange metadata over a ZeroMQ REQ/REP socket; state and
 exports stay in shared CUDA allocations, ordered by interprocess ready and done events.
 
-- ``OPEN`` -> ``OPENED``: the source sends its exports, requests, ``meta``, ready event, GPU UUID and PID. The
-  receiver's handler accepts ``meta``, picks the fields it reads and allocates exports; the reply carries them
-  and its done event.
-- ``FRAME_AVAILABLE`` -> ``FRAME_COMPLETE``: one per :meth:`Publisher.publish`, numbered consecutively, with
-  the source's time and hook phase. Each carries ``written``, the buffers its sender wrote since the last
-  frame (all on the first), and the other side bumps their versions as if written locally.
-- ``CLOSE`` -> ``UNMAPPED``: both sides release their mappings.
-- ``ERROR``: the receiver's failure, raised on the source.
+- ``OPEN_REQUEST`` -> ``OPEN_REPLY``: the head sends its shared ``state``, requests, ``meta``, ready event,
+  GPU UUID and PID. The peer's handler accepts ``meta``, picks the state fields it reads and allocates one
+  export per request; the reply carries the reads, the exports and its done event.
+- ``EXCHANGE_REQUEST`` -> ``EXCHANGE_REPLY``: one per :meth:`HeadBridge.publish`, with a :class:`Snapshot`
+  numbered consecutively. Each carries ``written``, the buffers its sender wrote since the last exchange
+  (all on the first), and the other side bumps their versions as if written locally.
+- ``CLOSE_REQUEST`` -> ``CLOSE_REPLY``: both sides release their mappings.
+- ``ERROR``: the peer's failure, raised on the head.
 
 Each buffer is written only by the side that allocated it; the side mapping it checks every exchange that
 it made no in-place write.
 
-The source waits for each exchange. Startup and the first frame may take up to five minutes (first-use
-compilation); later source exchanges time out after :data:`FRAME_TIMEOUT_MS`. The receiver waits while the
-source process runs, so both must share a PID namespace. There is no reconnection; after losing a peer,
-keep exported allocations until it has exited or unmapped them.
+The head waits for each exchange. The handshake and the first exchange may take up to
+:data:`STARTUP_TIMEOUT_MS` (first-use compilation); later head exchanges time out after
+:data:`EXCHANGE_TIMEOUT_MS`. The peer waits while the head process runs, so both must share a PID
+namespace. There is no reconnection; after losing a peer, keep exported allocations until it has exited
+or unmapped them.
 """
 
 from __future__ import annotations
@@ -31,43 +32,46 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, WriteLog, share
+from holosoma.cosim.cuda import BufferSpec, MappedBuffers, SharedStateAllocator, WriteTracker, share
 
 if TYPE_CHECKING:
     import torch
 
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
-FRAME_TIMEOUT_MS = 30000
-# How often an idle receiver checks that its source is still running.
-SOURCE_POLL_MS = 1000
+STARTUP_TIMEOUT_MS = 300000
+EXCHANGE_TIMEOUT_MS = 30000
+# How often an idle peer checks that its head is still running.
+HEAD_POLL_MS = 1000
 
 
 @dataclass(frozen=True)
-class Frame:
+class Snapshot:
+    """The head's state as handed over at one exchange."""
+
     sequence: int
     sim_time: float
     phase: str | None = None
-    """The source's hook phase the frame was published from, or ``None`` unless exactly one phase is emitting."""
+    """The head's hook phase the snapshot was published from, or ``None`` unless exactly one phase is emitting."""
 
     def __post_init__(self) -> None:
         if self.sequence < 1 or not math.isfinite(self.sim_time) or self.sim_time < 0:
-            raise ValueError("Frame sequence and simulation time must be valid")
+            raise ValueError("Snapshot sequence and simulation time must be valid")
 
 
 class ControlChannel:
     """Metadata-only REQ/REP exchange; callers supply their private endpoint."""
 
-    def __init__(self, *, endpoint: str, receiver: bool = False, startup_timeout_ms: int = 300000) -> None:
+    def __init__(self, *, endpoint: str, peer: bool = False, timeout_ms: int = STARTUP_TIMEOUT_MS) -> None:
         import zmq
 
         self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.REP if receiver else zmq.REQ)
+        self.socket = self.context.socket(zmq.REP if peer else zmq.REQ)
         self.socket.setsockopt(zmq.LINGER, 0)
         self.awaiting_reply = False
-        self.set_timeout(startup_timeout_ms)
+        self.set_timeout(timeout_ms)
         try:
-            (self.socket.bind if receiver else self.socket.connect)(endpoint)
+            (self.socket.bind if peer else self.socket.connect)(endpoint)
         except BaseException:
             self.close()
             raise
@@ -127,7 +131,7 @@ def as_received(value: Any) -> Any:
 
 @dataclass(frozen=True)
 class BufferRequest:
-    """A buffer one side reads from its peer: its layout and the settings both sides must share."""
+    """A buffer the head reads from its peer: its layout and the settings both sides must share."""
 
     name: str
     shape: tuple[int, ...]
@@ -139,84 +143,87 @@ class BufferRequest:
         return cls(raw["name"], tuple(raw["shape"]), raw["dtype"], dict(raw["meta"]))
 
 
-class Publisher:
-    """Share a source's state caches with a receiver and exchange frames with it in lockstep.
+class HeadBridge:
+    """Share a head's state caches with a peer and exchange snapshots with it in lockstep.
 
     The handshake runs at construction: every state field ``allocator`` shares, ``requests`` and ``meta``,
-    which the receiver interprets, go to the receiver. It answers with the fields it reads and one export
-    per request, mapped as :attr:`imports`. Callers decide when to :meth:`publish`; each exchange refreshes
-    the fields the receiver reads and orders later work after the receiver's. After an exchange fails,
-    other than by interruption, the publisher refuses further exchanges and closes without contacting the
-    receiver.
+    which the peer interprets, go to the peer. It answers with the fields it reads and one export per
+    request, mapped as :attr:`imports`. Callers decide when to :meth:`publish`; each exchange refreshes the
+    fields the peer reads and orders later work after the peer's. After an exchange fails, other than by
+    interruption, the bridge refuses further exchanges and closes without contacting the peer.
     """
 
     def __init__(
         self,
-        sim: BaseSimulator,
-        allocator: CacheAllocator,
+        simulator: BaseSimulator,
+        allocator: SharedStateAllocator,
         *,
         endpoint: str,
         requests: Sequence[BufferRequest] = (),
         meta: Mapping[str, Any] | None = None,
+        startup_timeout_ms: int = STARTUP_TIMEOUT_MS,
+        exchange_timeout_ms: int = EXCHANGE_TIMEOUT_MS,
     ) -> None:
         import warp as wp
 
-        self.sim, self.allocator = sim, allocator
-        state = sim.state
+        self.simulator, self.allocator = simulator, allocator
+        self.exchange_timeout_ms = exchange_timeout_ms
+        state = simulator.state
         for name in sorted(allocator.fields):
             state.get(name)
-        exported = tuple(name for name in state.names() if name in allocator.owners)
-        if not exported:
+        shared = tuple(name for name in state.names() if name in allocator.allocations)
+        if not shared:
             raise ValueError("The allocator shares no state; install it before simulator state is first read")
-        self.fields = exported
-        self.control = ControlChannel(endpoint=endpoint)
-        self.ready = wp.Event(device=sim.sim_device, interprocess=True)
+        self.reads = shared
+        self.control = ControlChannel(endpoint=endpoint, timeout_ms=startup_timeout_ms)
+        self.ready = wp.Event(device=simulator.sim_device, interprocess=True)
         self.sequence = 0
         self.closed = self.failed = False
         try:
             reply = self.control.exchange(
-                "OPEN",
-                exports=[asdict(spec) for spec in allocator.exports(self.values())],
+                "OPEN_REQUEST",
+                state=[asdict(spec) for spec in allocator.specs(self.refresh())],
                 requests=[asdict(request) for request in requests],
                 ready_handle=self.ready.ipc_handle().hex(),
-                gpu_uuid=gpu_uuid(sim.sim_device),
-                source_pid=os.getpid(),
+                gpu_uuid=gpu_uuid(simulator.sim_device),
+                head_pid=os.getpid(),
                 meta=as_received(dict(meta or {})),
             )
-            if reply["type"] != "OPENED":
-                raise RuntimeError("Receiver did not accept state buffers")
-            self.done = wp.event_from_ipc_handle(bytes.fromhex(reply["done_handle"]), device=sim.sim_device)
-            if unknown := sorted(set(reply["reads"]) - set(exported)):
-                raise RuntimeError(f"Receiver reads state fields {unknown} the source does not share")
-            self.fields = tuple(reply["reads"])
+            if reply["type"] != "OPEN_REPLY":
+                raise RuntimeError("Peer did not accept state buffers")
+            self.done = wp.event_from_ipc_handle(bytes.fromhex(reply["done_handle"]), device=simulator.sim_device)
+            if unknown := sorted(set(reply["reads"]) - set(shared)):
+                raise RuntimeError(f"Peer reads state fields {unknown} the head does not share")
+            self.reads = tuple(reply["reads"])
             specs = [BufferSpec.from_message(raw) for raw in reply["exports"]]
             images = {spec.name: (spec.shape, spec.dtype) for spec in specs}
             requested = {request.name: (request.shape, request.dtype) for request in requests}
             if images != requested:
-                raise RuntimeError(f"Receiver exported {images}, requested {requested}")
-            self._imports = MappedBuffers(specs, device=sim.sim_device)
-            self._written = WriteLog({name: allocator.tensors[name] for name in self.fields})
+                raise RuntimeError(f"Peer exported {images}, requested {requested}")
+            self._imports = MappedBuffers(specs, device=simulator.sim_device)
+            self._written = WriteTracker({name: allocator.tensors[name] for name in self.reads})
         except BaseException:
             self.control.close()
             raise
 
     @property
     def imports(self) -> dict[str, torch.Tensor]:
-        """The receiver's exports, by request name, read in place; valid after an exchange until the next one.
+        """The peer's exports, by request name, read in place; valid after an exchange until the next one.
 
-        The same tensors throughout, read-only; each version moves once per frame the receiver wrote it.
+        The same tensors throughout, read-only; each version moves once per exchange the peer wrote it.
         """
         return self._imports.tensors
 
-    def values(self) -> dict[str, Any]:
-        return {name: self.sim.state.get(name) for name in self.fields}
+    def refresh(self) -> dict[str, Any]:
+        """Bring the caches the peer reads up to date, in place, and return them."""
+        return {name: self.simulator.state.get(name) for name in self.reads}
 
     def _exchange(self, command: str, **fields: Any) -> dict[str, Any]:
-        """Send ``command`` and order later work on this stream after the receiver's."""
+        """Send ``command`` and order later work on this stream after the peer's."""
         import torch
         import warp as wp
 
-        stream = wp.stream_from_torch(torch.cuda.current_stream(self.sim.sim_device))
+        stream = wp.stream_from_torch(torch.cuda.current_stream(self.simulator.sim_device))
         stream.record_event(self.ready)
         try:
             reply = self.control.exchange(command, **fields)
@@ -227,23 +234,23 @@ class Publisher:
         return reply
 
     def _phase(self) -> str | None:
-        emitting = self.sim.hooks.emitting
+        emitting = self.simulator.hooks.emitting
         return next(iter(emitting)).value if len(emitting) == 1 else None
 
     def publish(self) -> None:
-        """Have the receiver process current state as the next frame, at the source's current time."""
+        """Have the peer process the current state as the next snapshot, at the head's current time."""
         if self.failed:
             raise RuntimeError("An earlier co-simulation exchange failed")
         self._imports.verify_read_only()
-        self.values()  # Refresh the same persistent caches, without replacing storage.
+        self.refresh()
         self.sequence += 1
-        frame = Frame(self.sequence, self.sim.time(), self._phase())
-        reply = self._exchange("FRAME_AVAILABLE", frame=asdict(frame), written=self._written())
-        if reply["type"] != "FRAME_COMPLETE" or reply["sequence"] != frame.sequence:
-            raise RuntimeError("Receiver completed the wrong frame")
-        self._imports.advance(reply["written"])
-        if frame.sequence == 1:
-            self.control.set_timeout(FRAME_TIMEOUT_MS)
+        snapshot = Snapshot(self.sequence, self.simulator.time(), self._phase())
+        reply = self._exchange("EXCHANGE_REQUEST", snapshot=asdict(snapshot), written=self._written())
+        if reply["type"] != "EXCHANGE_REPLY" or reply["sequence"] != snapshot.sequence:
+            raise RuntimeError("Peer completed the wrong exchange")
+        self._imports.record_writes(reply["written"])
+        if snapshot.sequence == 1:
+            self.control.set_timeout(self.exchange_timeout_ms)
 
     def close(self) -> None:
         import torch
@@ -252,37 +259,37 @@ class Publisher:
             return
         self.closed = True
         try:
-            # Unmap imports before the receiver may free them.
-            torch.cuda.synchronize(self.sim.sim_device)
+            # Unmap imports before the peer may free them.
+            torch.cuda.synchronize(self.simulator.sim_device)
             self._imports.release()
             if not self.failed:
-                reply = self.control.exchange("CLOSE")
-                if reply["type"] != "UNMAPPED":
-                    raise RuntimeError("Receiver did not release shared state")
+                reply = self.control.exchange("CLOSE_REQUEST")
+                if reply["type"] != "CLOSE_REPLY":
+                    raise RuntimeError("Peer did not release shared state")
         finally:
             self.control.close()
 
 
-class FrameHandler(Protocol):
-    """A receiver's side of the exchange; :class:`holosoma.cosim.base.BufferHandler` implements it."""
+class PeerHandlerProtocol(Protocol):
+    """A peer's side of the exchange; :class:`holosoma.cosim.base.PeerHandler` implements it."""
 
     device: str
     """CUDA device for imported state, exports and events."""
 
     @property
-    def owners(self) -> Mapping[str, Any]:
-        """Shared allocations answering the source's requests, by name, once :meth:`open` returns."""
+    def allocations(self) -> Mapping[str, Any]:
+        """Shared allocations answering the head's requests, by name, once :meth:`open` returns."""
 
     def open(
-        self, exports: Sequence[BufferSpec], requests: Sequence[BufferRequest], meta: Mapping[str, Any]
+        self, state: Sequence[BufferSpec], requests: Sequence[BufferRequest], meta: Mapping[str, Any]
     ) -> tuple[str, ...]:
-        """Accept the source, allocate :attr:`owners` and return the exported fields to read; raise to refuse."""
+        """Accept the head, allocate :attr:`allocations` and return the state fields to read; raise to refuse."""
 
     def targets(self, reads: Sequence[str]) -> Mapping[str, torch.Tensor]:
-        """Tensors to move onto the mapped source fields in ``reads``, by name; they then serve as ``state``."""
+        """Tensors to move onto the mapped head fields in ``reads``, by name; they then serve as ``state``."""
 
-    def process(self, frame: Frame, state: Mapping[str, torch.Tensor]) -> None:
-        """Process the source's ``state`` for ``frame`` and fill the exports.
+    def process(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:
+        """Process the head's ``state`` for ``snapshot`` and fill the exports.
 
         ``state`` holds the read fields, read-only and valid only during the call.
         """
@@ -294,16 +301,18 @@ class FrameHandler(Protocol):
         """Release what :meth:`targets` linked; called once the mapping is released."""
 
 
-class Receiver:
-    """Map the source state ``handler`` reads and have ``handler`` process each frame.
+class PeerBridge:
+    """Map the head state ``handler`` reads and have ``handler`` process each snapshot.
 
-    After the handshake it waits for frames as long as the source process is running, so the source
-    and receiver must share a PID namespace.
+    After the handshake it waits for exchanges as long as the head process is running, so the head and
+    peer must share a PID namespace.
     """
 
-    def __init__(self, handler: FrameHandler, *, endpoint: str) -> None:
+    def __init__(
+        self, handler: PeerHandlerProtocol, *, endpoint: str, startup_timeout_ms: int = STARTUP_TIMEOUT_MS
+    ) -> None:
         self.handler = handler
-        self.control = ControlChannel(endpoint=endpoint, receiver=True)
+        self.control = ControlChannel(endpoint=endpoint, peer=True, timeout_ms=startup_timeout_ms)
 
     def run(self) -> None:
         import torch
@@ -312,15 +321,15 @@ class Receiver:
         device = self.handler.device
         mapped: MappedBuffers | None = None
         ready = done = None
-        source_pid: int | None = None
+        head_pid: int | None = None
         sequence = 0
         stream = wp.stream_from_torch(torch.cuda.current_stream(device))
 
         def receive() -> dict[str, Any]:
-            if source_pid is not None:
-                while not self.control.socket.poll(SOURCE_POLL_MS):
-                    if not process_alive(source_pid):
-                        raise RuntimeError(f"The co-simulation source (pid {source_pid}) exited without closing")
+            if head_pid is not None:
+                while not self.control.socket.poll(HEAD_POLL_MS):
+                    if not process_alive(head_pid):
+                        raise RuntimeError(f"The co-simulation head (pid {head_pid}) exited without closing")
             return self.control.receive()
 
         try:
@@ -328,48 +337,51 @@ class Receiver:
                 message = receive()
                 try:
                     command = message["type"]
-                    if command == "OPEN" and mapped is None:
-                        if (source_gpu := message["gpu_uuid"]) != (own_gpu := gpu_uuid(device)):
-                            raise ValueError(f"Source GPU {source_gpu} differs from receiver GPU {own_gpu}")
-                        exported = [BufferSpec.from_message(raw) for raw in message["exports"]]
+                    if command == "OPEN_REQUEST" and mapped is None:
+                        if (head_gpu := message["gpu_uuid"]) != (own_gpu := gpu_uuid(device)):
+                            raise ValueError(f"Head GPU {head_gpu} differs from peer GPU {own_gpu}")
+                        shared = [BufferSpec.from_message(raw) for raw in message["state"]]
                         requests = [BufferRequest.from_message(raw) for raw in message["requests"]]
-                        reads = self.handler.open(exported, requests, message["meta"])
-                        if unknown := sorted(set(reads) - {spec.name for spec in exported}):
-                            raise ValueError(f"Receiver reads state fields {unknown} the source does not share")
+                        reads = self.handler.open(shared, requests, message["meta"])
+                        if unknown := sorted(set(reads) - {spec.name for spec in shared}):
+                            raise ValueError(f"Peer reads state fields {unknown} the head does not share")
                         mapped = MappedBuffers(
-                            [spec for spec in exported if spec.name in reads],
+                            [spec for spec in shared if spec.name in reads],
                             device=device,
                             targets=self.handler.targets(reads),
                         )
                         ready = wp.event_from_ipc_handle(bytes.fromhex(message["ready_handle"]), device=device)
                         done = wp.Event(device=device, interprocess=True)
-                        source_pid = int(message["source_pid"])
+                        head_pid = int(message["head_pid"])
                         self.control.socket.send_json(
                             {
-                                "type": "OPENED",
+                                "type": "OPEN_REPLY",
                                 "done_handle": done.ipc_handle().hex(),
-                                "exports": [asdict(share(name, owner)) for name, owner in self.handler.owners.items()],
+                                "exports": [
+                                    asdict(share(name, allocation))
+                                    for name, allocation in self.handler.allocations.items()
+                                ],
                                 "reads": list(reads),
                             }
                         )
-                    elif command == "FRAME_AVAILABLE" and mapped is not None:
-                        frame = Frame(**message["frame"])
-                        if frame.sequence != sequence + 1:
-                            raise ValueError("Frames must be consecutive")
+                    elif command == "EXCHANGE_REQUEST" and mapped is not None:
+                        snapshot = Snapshot(**message["snapshot"])
+                        if snapshot.sequence != sequence + 1:
+                            raise ValueError("Snapshots must be consecutive")
                         stream.wait_event(ready)
-                        mapped.advance(message["written"])
-                        self.handler.process(frame, mapped.tensors)
+                        mapped.record_writes(message["written"])
+                        self.handler.process(snapshot, mapped.tensors)
                         mapped.verify_read_only()
                         stream.record_event(done)
-                        sequence = frame.sequence
+                        sequence = snapshot.sequence
                         self.control.socket.send_json(
-                            {"type": "FRAME_COMPLETE", "sequence": sequence, "written": self.handler.written()}
+                            {"type": "EXCHANGE_REPLY", "sequence": sequence, "written": self.handler.written()}
                         )
-                    elif command == "CLOSE" and mapped is not None:
+                    elif command == "CLOSE_REQUEST" and mapped is not None:
                         torch.cuda.synchronize(device)
                         mapped.release()
                         mapped = None
-                        self.control.socket.send_json({"type": "UNMAPPED"})
+                        self.control.socket.send_json({"type": "CLOSE_REPLY"})
                         return
                     else:
                         raise ValueError(f"Unexpected bridge command: {command}")

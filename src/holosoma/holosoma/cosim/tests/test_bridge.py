@@ -1,4 +1,4 @@
-"""Backend-neutral receiver and metadata control without GPU simulator SDKs."""
+"""Backend-neutral peer bridge and metadata control without GPU simulator SDKs."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
 from holosoma.cosim import base as cosim_base
 from holosoma.cosim import bridge
 from holosoma.cosim import cuda as cosim_cuda
-from holosoma.cosim.base import BufferHandler
-from holosoma.cosim.cuda import BufferSpec, CacheAllocator
+from holosoma.cosim.base import PeerHandler
+from holosoma.cosim.cuda import BufferSpec, SharedStateAllocator
 from holosoma.cosim.render.plugin import CosimRenderPlugin, camera_requests
 from holosoma.cosim.render.renderer import RenderHandler, RenderTask
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
@@ -28,10 +28,10 @@ from holosoma.simulator.shared.sensor_manager import SensorManager
 pytestmark = pytest.mark.no_sim
 
 
-@pytest.mark.parametrize("frame", [(0, 0), (1, float("nan")), (1, -1)])
-def test_invalid_frame_is_rejected(frame: tuple[int, float]) -> None:
+@pytest.mark.parametrize("snapshot", [(0, 0), (1, float("nan")), (1, -1)])
+def test_invalid_snapshot_is_rejected(snapshot: tuple[int, float]) -> None:
     with pytest.raises(ValueError, match="must be valid"):
-        bridge.Frame(*frame)
+        bridge.Snapshot(*snapshot)
 
 
 def _camera(manager: SensorManager, name: str, *, remote: str | None, data_types: list[Any]) -> Any:
@@ -56,26 +56,26 @@ def _fake_cuda(monkeypatch: pytest.MonkeyPatch, stream: Any, synchronize: Any = 
     monkeypatch.setattr(torch.cuda, "synchronize", synchronize)
 
 
-ReceiverFixture = tuple[bridge.Receiver, list[Any], list[dict[str, Any]], list[dict[str, Any]]]
+PeerFixture = tuple[bridge.PeerBridge, list[Any], list[dict[str, Any]], list[dict[str, Any]]]
 
 
 @pytest.fixture
-def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
+def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
     calls: list[Any] = []
     replies: list[dict[str, Any]] = []
     values = {"robot_root_states": torch.ones(1, 13), "dof_pos": torch.zeros(1, 2), "dof_vel": torch.zeros(1, 2)}
     messages: list[dict[str, Any]] = [
         {
-            "type": "OPEN",
-            "exports": [],
+            "type": "OPEN_REQUEST",
+            "state": [],
             "requests": [],
             "ready_handle": "00",
             "gpu_uuid": "gpu-a",
-            "source_pid": os.getpid(),
+            "head_pid": os.getpid(),
             "meta": {"dof_names": ["a", "b"], "object_names": [], "env_origins": [[0.0, 0.0, 0.0]]},
         },
-        {"type": "FRAME_AVAILABLE", "frame": {"sequence": 1, "sim_time": 0.035}, "written": ["dof_pos"]},
-        {"type": "CLOSE"},
+        {"type": "EXCHANGE_REQUEST", "snapshot": {"sequence": 1, "sim_time": 0.035}, "written": ["dof_pos"]},
+        {"type": "CLOSE_REQUEST"},
     ]
     socket = SimpleNamespace(send_json=replies.append, poll=lambda _ms: True)
     control = SimpleNamespace(
@@ -95,8 +95,8 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
             Mapped.names = [spec.name for spec in descriptions]
             self.tensors = values
 
-        def advance(self, names: list[str]) -> None:
-            calls.append(("advance", names))
+        def record_writes(self, names: list[str]) -> None:
+            calls.append(("record_writes", names))
 
         def verify_read_only(self) -> None:
             calls.append("readonly")
@@ -137,7 +137,7 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
         render_frame=lambda: calls.append("capture"),
     )
     handler = RenderHandler(cast("RenderTask", task))
-    return bridge.Receiver(handler, endpoint="ipc:///unused"), calls, replies, messages
+    return bridge.PeerBridge(handler, endpoint="ipc:///unused"), calls, replies, messages
 
 
 def _in_order(calls: list[Any], *expected: Any) -> bool:
@@ -146,25 +146,25 @@ def _in_order(calls: list[Any], *expected: Any) -> bool:
     return all(item in remaining for item in expected)
 
 
-def test_receiver_frame_lifecycle(receiver: ReceiverFixture) -> None:
-    worker, calls, replies, _messages = receiver
+def test_peer_frame_lifecycle(peer: PeerFixture) -> None:
+    worker, calls, replies, _messages = peer
     worker.run()
     place = ("place", [[0.0, 0.0, 0.0]])
-    assert _in_order(calls, place, ("map", []), "ready", ("advance", ["dof_pos"]), "capture")
+    assert _in_order(calls, place, ("map", []), "ready", ("record_writes", ["dof_pos"]), "capture")
     assert cast("Any", worker.handler).simulator.kinematic_time == 0.035
     assert _in_order(calls, "capture", "readonly", "done", "unmap", ("unlink", []), "close")
     assert replies == [
-        {"type": "OPENED", "done_handle": "01", "exports": [], "reads": []},
-        {"type": "FRAME_COMPLETE", "sequence": 1, "written": []},
-        {"type": "UNMAPPED"},
+        {"type": "OPEN_REPLY", "done_handle": "01", "exports": [], "reads": []},
+        {"type": "EXCHANGE_REPLY", "sequence": 1, "written": []},
+        {"type": "CLOSE_REPLY"},
     ]
 
 
 @pytest.mark.parametrize("mismatch", ["dof_names", "object_names", "env_origins", "gpu_uuid", "state_layout"])
-def test_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture, mismatch: str) -> None:
-    worker, calls, replies, messages = receiver
+def test_layout_mismatch_fails_before_mapping(peer: PeerFixture, mismatch: str) -> None:
+    worker, calls, replies, messages = peer
     if mismatch == "state_layout":
-        messages[0]["exports"] = [{"name": "dof_pos", "shape": [1, 3], "handle": "00"}]
+        messages[0]["state"] = [{"name": "dof_pos", "shape": [1, 3], "handle": "00"}]
     else:
         wrong: list[Any] = [[1.0, 0.0, 0.0]] if mismatch == "env_origins" else ["wrong"]
         (messages[0] if mismatch == "gpu_uuid" else messages[0]["meta"])[mismatch] = wrong
@@ -184,8 +184,8 @@ def test_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture, mismatc
         {"meta": {"vertical_fov": 90.0}},
     ],
 )
-def test_remote_camera_mismatch_fails_before_mapping(receiver: ReceiverFixture, change: dict[str, Any]) -> None:
-    worker, calls, replies, messages = receiver
+def test_remote_camera_mismatch_fails_before_mapping(peer: PeerFixture, change: dict[str, Any]) -> None:
+    worker, calls, replies, messages = peer
     record = _camera(cast("Any", worker.handler).simulator.sensor_manager, "cam", remote=None, data_types=["rgb"])
     (request,) = camera_requests(record, 1)
     if "meta" in change:
@@ -197,7 +197,7 @@ def test_remote_camera_mismatch_fails_before_mapping(receiver: ReceiverFixture, 
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
 
 
-class _ReadingHandler(BufferHandler):
+class _ReadingHandler(PeerHandler):
     """A peer that only reads ``fields``, with no simulator."""
 
     def __init__(self, fields: tuple[str, ...]) -> None:
@@ -205,23 +205,23 @@ class _ReadingHandler(BufferHandler):
         self.fields = fields
         self.seen: list[dict[str, Any]] = []
 
-    def reads(self, exports: Any) -> tuple[str, ...]:
+    def reads(self, state: Any) -> tuple[str, ...]:
         return self.fields
 
-    def step(self, frame: Any, state: Any) -> None:
+    def step(self, snapshot: Any, state: Any) -> None:
         self.seen.append(dict(state))
 
 
 @pytest.mark.parametrize("reader", [False, True])
-def test_receiver_maps_only_the_fields_its_handler_reads(receiver: ReceiverFixture, reader: bool) -> None:
+def test_peer_maps_only_the_fields_its_handler_reads(peer: PeerFixture, reader: bool) -> None:
     # The render handler reads, and links, what it can write; another handler may read derived fields.
-    worker, calls, replies, messages = receiver
-    messages[0]["exports"] = [
+    worker, calls, replies, messages = peer
+    messages[0]["state"] = [
         {"name": "dof_pos", "shape": [1, 2], "handle": "00"},
         {"name": "contact_forces", "shape": [1, 3], "handle": "00"},
     ]
     handler = _ReadingHandler(("contact_forces",)) if reader else worker.handler
-    bridge.Receiver(cast("Any", handler), endpoint="ipc:///unused").run()
+    bridge.PeerBridge(cast("Any", handler), endpoint="ipc:///unused").run()
     expected = ["contact_forces"] if reader else ["dof_pos"]
     assert replies[0]["reads"] == expected
     assert bridge.MappedBuffers.names == expected  # type: ignore[attr-defined]
@@ -230,18 +230,16 @@ def test_receiver_maps_only_the_fields_its_handler_reads(receiver: ReceiverFixtu
         assert len(cast("Any", handler).seen) == 1
 
 
-def test_reading_a_field_the_source_does_not_share_fails_before_mapping(receiver: ReceiverFixture) -> None:
-    worker, calls, replies, _messages = receiver
+def test_reading_a_field_the_head_does_not_share_fails_before_mapping(peer: PeerFixture) -> None:
+    worker, calls, replies, _messages = peer
     handler = _ReadingHandler(("contact_forces",))
     with pytest.raises(ValueError, match="does not share"):
-        bridge.Receiver(cast("Any", handler), endpoint="ipc:///unused").run()
+        bridge.PeerBridge(cast("Any", handler), endpoint="ipc:///unused").run()
     assert not any(call[0] == "map" for call in calls if isinstance(call, tuple)) and replies[-1]["type"] == "ERROR"
 
 
-def test_duplicate_frame_is_rejected_and_import_is_released(
-    receiver: ReceiverFixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    worker, calls, replies, messages = receiver
+def test_duplicate_frame_is_rejected_and_import_is_released(peer: PeerFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+    worker, calls, replies, messages = peer
     messages.insert(2, dict(messages[1]))
     monkeypatch.setattr(bridge.MappedBuffers, "release_error", RuntimeError("cleanup failed"))
     with pytest.raises(ValueError, match="consecutive"):
@@ -250,11 +248,11 @@ def test_duplicate_frame_is_rejected_and_import_is_released(
     assert replies[-1]["type"] == "ERROR" and calls[-3:] == ["unmap", ("unlink", []), "close"]
 
 
-def test_receiver_stops_waiting_when_the_source_exits(receiver: ReceiverFixture) -> None:
-    worker, calls, _replies, messages = receiver
-    source = subprocess.Popen([sys.executable, "-c", "pass"])
-    source.wait()
-    messages[0]["source_pid"] = source.pid
+def test_peer_stops_waiting_when_the_head_exits(peer: PeerFixture) -> None:
+    worker, calls, _replies, messages = peer
+    head = subprocess.Popen([sys.executable, "-c", "pass"])
+    head.wait()
+    messages[0]["head_pid"] = head.pid
     cast("Any", worker.control).socket.poll = lambda _ms: False
     with pytest.raises(RuntimeError, match="exited without closing"):
         worker.run()
@@ -267,27 +265,27 @@ def test_exchange_after_an_interrupted_request_takes_the_right_reply(tmp_path: P
     import zmq
 
     endpoint = f"ipc://{tmp_path}/control.sock"
-    receiver = bridge.ControlChannel(endpoint=endpoint, receiver=True, startup_timeout_ms=3000)
-    control = bridge.ControlChannel(endpoint=endpoint, startup_timeout_ms=100)
+    peer = bridge.ControlChannel(endpoint=endpoint, peer=True, timeout_ms=3000)
+    control = bridge.ControlChannel(endpoint=endpoint, timeout_ms=100)
 
     def serve() -> None:
         for _ in range(2):  # Ends by timeout if the second request never arrives.
-            message = receiver.receive()
-            if message["type"] == "FRAME_AVAILABLE":
+            message = peer.receive()
+            if message["type"] == "EXCHANGE_REQUEST":
                 threading.Event().wait(0.3)
-            receiver.socket.send_json({"type": f"{message['type']}_REPLY"})
+            peer.socket.send_json({"type": message["type"].removesuffix("_REQUEST") + "_REPLY"})
 
     server = threading.Thread(target=serve, daemon=True)
     server.start()
     try:
         with pytest.raises(zmq.Again):
-            control.exchange("FRAME_AVAILABLE")
+            control.exchange("EXCHANGE_REQUEST")
         control.set_timeout(2000)
-        assert control.exchange("CLOSE") == {"type": "CLOSE_REPLY"}
+        assert control.exchange("CLOSE_REQUEST") == {"type": "CLOSE_REPLY"}
     finally:
         server.join(timeout=5)
         control.close()
-        receiver.close()
+        peer.close()
 
 
 class _Owner:
@@ -298,27 +296,27 @@ class _Owner:
 
 
 def test_mapped_buffers_serve_the_target_and_tell_owner_writes_from_local_ones(monkeypatch: pytest.MonkeyPatch) -> None:
-    owners: list[_Owner] = []
+    allocations: list[_Owner] = []
 
     def import_buffer(_handle: bytes, *, shape: tuple[int, ...], dtype: str, device: str) -> _Owner:
-        owners.append(_Owner(shape, dtype))
-        return owners[-1]
+        allocations.append(_Owner(shape, dtype))
+        return allocations[-1]
 
     warp = SimpleNamespace(from_ipc_handle=import_buffer, to_torch=lambda owner: owner.tensor, float32="float32")
     monkeypatch.setitem(sys.modules, "warp", warp)
     target = torch.ones(2, 3)
     mapped = cosim_cuda.MappedBuffers([BufferSpec("x", (2, 3), "00")], device="cpu", targets={"x": target})
-    assert mapped.tensors["x"] is target and target.data_ptr() == owners[0].tensor.data_ptr()
+    assert mapped.tensors["x"] is target and target.data_ptr() == allocations[0].tensor.data_ptr()
 
     version = target._version
-    mapped.advance(["x"])  # the owner wrote it
+    mapped.record_writes(["x"])  # the owner wrote it
     mapped.verify_read_only()
     assert target._version == version + 1
 
     target.add_(1)  # a local write
     with pytest.raises(RuntimeError, match=r"\['x'\] were written in place"):
-        mapped.advance(["x"])
-    owners.clear()
+        mapped.record_writes(["x"])
+    allocations.clear()
     with pytest.raises(RuntimeError, match="written in place"):
         mapped.release()
     assert torch.equal(target, torch.ones(2, 3))  # on its own memory, holding the last values
@@ -330,8 +328,8 @@ def test_publisher_without_shared_state_fails_before_connecting(monkeypatch: pyt
     monkeypatch.setitem(sys.modules, "warp", SimpleNamespace())
     monkeypatch.setattr(bridge, "ControlChannel", lambda **_: pytest.fail("connected before validation"))
     with pytest.raises(ValueError, match="shares no state"):
-        bridge.Publisher(
-            cast("Any", SimpleNamespace(state=state)), CacheAllocator(("dof_pos",)), endpoint="ipc:///unused"
+        bridge.HeadBridge(
+            cast("Any", SimpleNamespace(state=state)), SharedStateAllocator(("dof_pos",)), endpoint="ipc:///unused"
         )
 
 
@@ -354,8 +352,8 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     images = {"cam/rgb": torch.ones(2, 3, 4, 3, dtype=torch.uint8), "cam/depth": torch.ones(2, 3, 4, 1)}
     calls: list[Any] = []
     replies: dict[str, dict[str, Any]] = {
-        "OPEN": {
-            "type": "OPENED",
+        "OPEN_REQUEST": {
+            "type": "OPEN_REPLY",
             "done_handle": "00",
             "exports": [
                 {"name": name, "shape": list(image.shape), "dtype": str(image.dtype)[6:], "handle": "00"}
@@ -363,13 +361,13 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
             ],
             "reads": ["dof_pos"],
         },
-        "CLOSE": {"type": "UNMAPPED"},
+        "CLOSE_REQUEST": {"type": "CLOSE_REPLY"},
     }
 
     def exchange(command: str, **fields: Any) -> dict[str, Any]:
         calls.append((command, fields))
-        if command == "FRAME_AVAILABLE":
-            return {"type": "FRAME_COMPLETE", "sequence": fields["frame"]["sequence"], "written": list(images)}
+        if command == "EXCHANGE_REQUEST":
+            return {"type": "EXCHANGE_REPLY", "sequence": fields["snapshot"]["sequence"], "written": list(images)}
         return replies[command]
 
     control = SimpleNamespace(exchange=exchange, set_timeout=lambda _: None, close=lambda: None)
@@ -377,7 +375,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     mapped = SimpleNamespace(
         tensors=images,
         verify_read_only=lambda: calls.append("readonly"),
-        advance=lambda names: calls.append(("advance", names)),
+        record_writes=lambda names: calls.append(("record_writes", names)),
         release=lambda: calls.append("unmap"),
     )
     monkeypatch.setattr(bridge, "MappedBuffers", lambda *_args, **_kw: mapped)
@@ -397,9 +395,9 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     )
     monkeypatch.setattr(
         cosim_cuda,
-        "CacheAllocator",
+        "SharedStateAllocator",
         lambda fields: SimpleNamespace(
-            fields=frozenset(fields), owners=dict.fromkeys(fields), tensors=values, exports=lambda _: []
+            fields=frozenset(fields), allocations=dict.fromkeys(fields), tensors=values, specs=lambda _: []
         ),
     )
     fake: Any = sim
@@ -408,21 +406,21 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
         Phase.FRAME_END, lambda: None, name="sensors.render", after=fake.sensor_capture_hook
     )
     with fake.hooks.installing("cosim"):
-        source = CosimRenderPlugin(CosimRenderPluginConfig(endpoint="ipc:///unused"), cast("Any", sim))
-    return source, manager, images, calls
+        head = CosimRenderPlugin(CosimRenderPluginConfig(endpoint="ipc:///unused"), cast("Any", sim))
+    return head, manager, images, calls
 
 
-def test_remote_due_cameras_get_copies_of_the_receiver_images(plugin: PluginFixture) -> None:
-    source, manager, images, calls = plugin
+def test_remote_due_cameras_get_copies_of_the_peer_images(plugin: PluginFixture) -> None:
+    head, manager, images, calls = plugin
     assert [request["name"] for request in calls[0][1]["requests"]] == ["cam/rgb", "cam/depth"]
-    hooks = source.simulator.hooks
+    hooks = head.simulator.hooks
     remote = manager.get("cam")
     seen: list[set[str]] = []
-    hooks.add(Phase.FRAME_END, lambda: seen.append(set(remote.buffers)), after=source.simulator.sensor_render_hook)
+    hooks.add(Phase.FRAME_END, lambda: seen.append(set(remote.buffers)), after=head.simulator.sensor_render_hook)
     hooks.emit(Phase.FRAME_END)
-    assert calls[1:4] == ["readonly", calls[2], ("advance", ["cam/rgb", "cam/depth"])]
-    assert calls[2][0] == "FRAME_AVAILABLE" and calls[2][1]["frame"]["phase"] == "frame_end"
-    assert calls[2][1]["written"] == ["dof_pos"]  # the first frame reports every field the receiver reads
+    assert calls[1:4] == ["readonly", calls[2], ("record_writes", ["cam/rgb", "cam/depth"])]
+    assert calls[2][0] == "EXCHANGE_REQUEST" and calls[2][1]["snapshot"]["phase"] == "frame_end"
+    assert calls[2][1]["written"] == ["dof_pos"]  # the first exchange reports every field the peer reads
     assert seen == [{"rgb", "depth"}]  # filled before consumers of the sensor render hook
     for data_type in ("rgb", "depth"):
         buffer = remote.buffers[data_type]
@@ -432,27 +430,27 @@ def test_remote_due_cameras_get_copies_of_the_receiver_images(plugin: PluginFixt
         )
     assert not manager.get("local").buffers and not manager.get("elsewhere").buffers
 
-    source.close()
-    assert calls[-2:] == ["unmap", ("CLOSE", {})]
+    head.close()
+    assert calls[-2:] == ["unmap", ("CLOSE_REQUEST", {})]
     hooks.emit(Phase.FRAME_END)
-    assert calls[-1] == ("CLOSE", {})  # no more frames after close
+    assert calls[-1] == ("CLOSE_REQUEST", {})  # no more frames after close
 
 
-@pytest.mark.parametrize(("failure", "closes"), [(RuntimeError("receiver failed"), False), (KeyboardInterrupt(), True)])
-def test_only_an_interrupted_exchange_still_closes_with_the_receiver(
+@pytest.mark.parametrize(("failure", "closes"), [(RuntimeError("peer failed"), False), (KeyboardInterrupt(), True)])
+def test_only_an_interrupted_exchange_still_closes_with_the_peer(
     plugin: PluginFixture, failure: BaseException, closes: bool
 ) -> None:
-    source, _manager, _images, calls = plugin
-    exchange = cast("Any", source.publisher.control).exchange
+    head, _manager, _images, calls = plugin
+    exchange = cast("Any", head.bridge.control).exchange
 
     def fail(command: str, **fields: Any) -> Any:
-        if command != "CLOSE":
+        if command != "CLOSE_REQUEST":
             calls.append((command, fields))
             raise failure
         return exchange(command, **fields)
 
-    cast("Any", source.publisher.control).exchange = fail
+    cast("Any", head.bridge.control).exchange = fail
     with pytest.raises(type(failure)):
-        source.simulator.hooks.emit(Phase.FRAME_END)
-    source.close()
-    assert (calls[-1] == ("CLOSE", {})) is closes and "unmap" in calls
+        head.simulator.hooks.emit(Phase.FRAME_END)
+    head.close()
+    assert (calls[-1] == ("CLOSE_REQUEST", {})) is closes and "unmap" in calls
