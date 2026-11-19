@@ -107,12 +107,14 @@ class RenderHandler(PeerHandler):
         self.simulator = task.simulator
         self._linked: tuple[str, ...] = ()
 
-    def accept(self, meta: Mapping[str, Any]) -> None:
+    def accept(self, handshake: Mapping[str, Any]) -> None:
         """Adopt the head's origins and reject a different joint or object order; body state is not applied."""
         origins = self.simulator.scene.env_origins
-        self.simulator.match_env_origins(torch.tensor(meta["env_origins"], dtype=torch.float32, device=origins.device))
+        self.simulator.match_env_origins(
+            torch.tensor(handshake["env_origins"], dtype=torch.float32, device=origins.device)
+        )
         own = scene_layout(self.simulator)
-        if differing := [key for key in ("dof_names", "object_names", "env_origins") if meta.get(key) != own[key]]:
+        if differing := [key for key in ("dof_names", "object_names", "env_origins") if handshake.get(key) != own[key]]:
             raise ValueError(f"Scene {differing} differs between simulators")
 
     def reads(self, fields: Mapping[str, BufferSpec]) -> tuple[str, ...]:

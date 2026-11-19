@@ -56,8 +56,8 @@ from holosoma.cosim.bridge import PeerBridge
 
 
 class EngineRenderer(PeerHandler):
-    def accept(self, meta):  # joint, body and object order; environment origins
-        self.engine.load_layout(meta)
+    def accept(self, handshake):  # joint, body and object order; environment origins
+        self.engine.load_layout(handshake)
 
     def reads(self, fields):  # head state fields to receive each exchange
         return ("rigid_body_pos_w", "rigid_body_quat_w", "object_root_states")
@@ -102,7 +102,7 @@ must follow.
 
 `holosoma.cosim.base` assumes nothing about rendering. The handshake is by SimState field name: the head
 offers its fields, the peer picks the shared ones it `reads`, and the head names the ones the peer `writes`.
-`HeadPlugin` owns the head side, and a subclass chooses those writes, the handshake metadata, and the hooks
+`HeadPlugin` owns the head side, and a subclass chooses those writes, the handshake, and the hooks
 that publish. `PeerHandler` is the peer. A written output (a camera image) serves the peer's memory; a
 written writable field flushes into the head's simulation at its next mutation.
 

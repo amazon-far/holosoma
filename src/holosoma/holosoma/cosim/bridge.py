@@ -4,8 +4,8 @@
 exports stay in shared CUDA allocations, ordered by interprocess ready and done events.
 
 - ``OPEN_REQUEST`` -> ``OPEN_REPLY``: the head sends its SimState ``fields`` (name, shape, dtype), the
-  ``handles`` of those it shares, the names of the fields the peer is to ``write``, ``meta``, ready event, GPU
-  UUID and PID. The peer's handler accepts ``meta``, picks the shared fields it reads and allocates one export
+  ``handles`` of those it shares, the names of the fields the peer is to ``write``, ``handshake``, ready event, GPU
+  UUID and PID. The peer's handler accepts ``handshake``, picks the shared fields it reads and allocates one export
   per written field; the reply carries the reads, the exports and its done event.
 - ``EXCHANGE_REQUEST`` -> ``EXCHANGE_REPLY``: one per :meth:`HeadBridge.publish`, with a :class:`Snapshot`
   numbered consecutively. Each hands over every shared buffer: the side receiving it bumps the versions
@@ -147,7 +147,7 @@ class HeadBridge:
     """Share a head's state caches with a peer and exchange snapshots with it in lockstep.
 
     The handshake runs at construction: the head's SimState fields (shared ones with their memory), the
-    names of those the peer is to ``write`` and ``meta``, which the peer interprets, go to the peer. It
+    names of those the peer is to ``write`` and ``handshake``, which the peer interprets, go to the peer. It
     answers with the shared fields it reads and one export per written field, mapped as :attr:`imports`;
     the written fields are linked onto them (``SimState.link``). Callers decide when to :meth:`publish`; each
     exchange refreshes the fields the peer reads and orders later work after the peer's. After an exchange
@@ -162,7 +162,7 @@ class HeadBridge:
         *,
         endpoint: str,
         writes: Sequence[str] = (),
-        meta: Mapping[str, Any] | None = None,
+        handshake: Mapping[str, Any] | None = None,
         startup_timeout_ms: int = STARTUP_TIMEOUT_MS,
         exchange_timeout_ms: int = EXCHANGE_TIMEOUT_MS,
     ) -> None:
@@ -196,7 +196,7 @@ class HeadBridge:
                 ready_handle=self.ready.ipc_handle().hex(),
                 gpu_uuid=gpu_uuid(simulator.sim_device),
                 head_pid=os.getpid(),
-                meta=as_received(dict(meta or {})),
+                handshake=as_received(dict(handshake or {})),
             )
             if reply["type"] != MessageType.OPEN_REPLY:
                 raise RuntimeError("Peer did not accept state buffers")
@@ -300,7 +300,7 @@ class PeerHandlerProtocol(Protocol):
         """Shared allocations of the fields the peer writes, by name, once :meth:`open` returns."""
 
     def open(
-        self, fields: Sequence[BufferSpec], writes: Sequence[FieldSpec], meta: Mapping[str, Any]
+        self, fields: Sequence[BufferSpec], writes: Sequence[FieldSpec], handshake: Mapping[str, Any]
     ) -> tuple[str, ...]:
         """Accept the head, allocate :attr:`allocations` for ``writes`` and return the shared ``fields`` to read;
         raise to refuse."""
@@ -363,7 +363,7 @@ class PeerBridge:
                             for name, handle in message["handles"].items()
                         ]
                         writes = [fields[name] for name in message["writes"]]
-                        reads = self.handler.open(shared, writes, message["meta"])
+                        reads = self.handler.open(shared, writes, message["handshake"])
                         if unknown := sorted(set(reads) - {spec.name for spec in shared}):
                             raise ValueError(f"Peer reads state fields {unknown} the head does not share")
                         mapped = MappedBuffers([spec for spec in shared if spec.name in reads], device=device)

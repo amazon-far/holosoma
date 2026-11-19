@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 class HeadPlugin:
     """Share ``simulator``'s state with a peer through a :class:`HeadBridge` and close it with the simulator.
 
-    Subclasses choose the fields the peer writes, the metadata the peer receives, and the hooks that
+    Subclasses choose the fields the peer writes, the handshake the peer checks, and the hooks that
     publish. Installs the shared cache allocator, so it must run before anything reads simulator state;
     construction blocks until the peer accepts.
     """
@@ -45,7 +45,7 @@ class HeadPlugin:
             shared_state_allocator(simulator),
             endpoint=cfg.endpoint,
             writes=self.writes(),
-            meta=self.meta(),
+            handshake=self.handshake(),
         )
         self._hooks = list(self.install(simulator.hooks))
         simulator.hooks.add(Phase.CLOSE, self.close, name=f"{self.name}.close")
@@ -55,8 +55,8 @@ class HeadPlugin:
         exchange (outputs), or flush into the simulation at its next mutation (writable fields)."""
         return []
 
-    def meta(self) -> dict[str, Any]:
-        """JSON metadata sent to the peer at the handshake."""
+    def handshake(self) -> dict[str, Any]:
+        """JSON sent to the peer when it connects; the peer checks it (``PeerHandler.accept``) before mapping state."""
         return {}
 
     def install(self, hooks: HookRegistry) -> Iterable[HookHandle]:
@@ -86,12 +86,12 @@ class PeerHandler:
         self._exports: list[tuple[torch.Tensor, Callable[[], torch.Tensor]]] = []
 
     def open(
-        self, fields: Sequence[BufferSpec], writes: Sequence[FieldSpec], meta: Mapping[str, Any]
+        self, fields: Sequence[BufferSpec], writes: Sequence[FieldSpec], handshake: Mapping[str, Any]
     ) -> tuple[str, ...]:
         """Accept the head and allocate one export per written field; return the shared ``fields`` to read."""
         import warp as wp
 
-        self.accept(meta)
+        self.accept(handshake)
         reads = self.reads({spec.name: spec for spec in fields})
         sources = [(spec, self.write_source(spec)) for spec in writes]
         for spec, source in sources:
@@ -116,8 +116,8 @@ class PeerHandler:
         for export, source in self._exports:
             export.copy_(source())
 
-    def accept(self, meta: Mapping[str, Any]) -> None:
-        """Check the head's handshake metadata; raise to refuse it."""
+    def accept(self, handshake: Mapping[str, Any]) -> None:
+        """Check the head's ``handshake`` JSON; raise to refuse it."""
 
     def reads(self, fields: Mapping[str, BufferSpec]) -> tuple[str, ...]:
         """Names of the head's shared ``fields`` to map and receive each exchange."""

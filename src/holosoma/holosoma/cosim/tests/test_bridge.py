@@ -67,7 +67,7 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
             "ready_handle": "00",
             "gpu_uuid": "gpu-a",
             "head_pid": os.getpid(),
-            "meta": {"dof_names": ["a", "b"], "object_names": [], "env_origins": [[0.0, 0.0, 0.0]]},
+            "handshake": {"dof_names": ["a", "b"], "object_names": [], "env_origins": [[0.0, 0.0, 0.0]]},
         },
         {"type": "EXCHANGE_REQUEST", "snapshot": {"sequence": 1, "sim_time": 0.035}},
         {"type": "CLOSE_REQUEST"},
@@ -171,7 +171,7 @@ def test_layout_mismatch_fails_before_mapping(peer: PeerFixture, mismatch: str) 
         messages[0].update(_shared({"name": "dof_pos", "shape": [1, 3], "dtype": "float32"}))
     else:
         wrong: list[Any] = [[1.0, 0.0, 0.0]] if mismatch == "env_origins" else ["wrong"]
-        (messages[0] if mismatch == "gpu_uuid" else messages[0]["meta"])[mismatch] = wrong
+        (messages[0] if mismatch == "gpu_uuid" else messages[0]["handshake"])[mismatch] = wrong
     with pytest.raises(ValueError, match="differs|differ"):
         worker.run()
     assert not any(isinstance(call, tuple) and call[0] not in ("place", "unlink") for call in calls)

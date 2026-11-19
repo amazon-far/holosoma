@@ -3,7 +3,7 @@
 A camera with ``remote`` set to the plugin's slot takes its images from the renderer. Any process can serve the
 plugin by subclassing :class:`holosoma.cosim.base.PeerHandler`; :mod:`.renderer` is the Holosoma one.
 
-- Handshake ``meta`` (:func:`scene_layout`): ``dof_names``, ``body_names`` and ``object_names`` give the column
+- ``handshake`` (:func:`scene_layout`): ``dof_names``, ``body_names`` and ``object_names`` give the column
   order of the joint, robot-body and object fields; ``env_origins`` ``[E, 3]`` is where the head simulated
   each environment, and the renderer places its environments there.
 - State: every non-empty SimState field. Roots are world-frame ``[pos, quat xyzw, lin vel, ang vel]``;
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 
 
 def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
-    """The handshake ``meta``: joint, body and object order of the state fields, and environment origins."""
+    """The ``handshake``: joint, body and object order of the state fields, and environment origins."""
     layout: dict[str, Any] = as_received(
         {
             "dof_names": list(sim.dof_names),
@@ -79,7 +79,7 @@ class CosimRenderPlugin(HeadPlugin):
     def writes(self) -> list[str]:
         return [record.field_name(data_type) for record in self.remote for data_type in record.config.data_types]
 
-    def meta(self) -> dict[str, Any]:
+    def handshake(self) -> dict[str, Any]:
         return scene_layout(self.simulator)
 
     def install(self, hooks: HookRegistry) -> Iterable[HookHandle]:
