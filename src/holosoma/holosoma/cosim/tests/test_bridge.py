@@ -133,7 +133,6 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
     task = SimpleNamespace(
         simulator=sim,
         num_envs=1,
-        emit_episodes=lambda _episodes: None,
         render_frame=lambda: calls.append("capture"),
     )
     handler = RenderHandler(cast("RenderTask", task))

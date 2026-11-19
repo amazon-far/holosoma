@@ -21,7 +21,8 @@ from tests.cosim.cosim_pair_roles import run_pair  # noqa: E402
 def test_isaacsim_renderer_fills_the_head_remote_camera() -> None:
     sent, rendered = run_pair(2, "--loopback", renderer="isaacsim")
 
-    assert sent["frames"] == rendered["frames"] > 1 and rendered["linked"]
+    assert rendered["frames"] > 1 and rendered["linked"]
+    assert sent["exchanges"] == rendered["frames"] + len(rendered["episodes"])  # each renders or emits
     assert rendered["exports_in_place"] and sent["imports_in_place"]
     torch.testing.assert_close(rendered["robot_root_states"], sent["robot_root_states"], atol=1e-4, rtol=0)
     torch.testing.assert_close(rendered["dof_pos"], sent["dof_pos"], atol=1e-4, rtol=0)

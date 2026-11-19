@@ -8,9 +8,8 @@ exports stay in shared CUDA allocations, ordered by interprocess ready and done 
   UUID and PID. The peer's handler accepts ``handshake``, picks the shared fields it reads and allocates one export
   per written field; the reply carries the reads, the exports and its done event.
 - ``EXCHANGE_REQUEST`` -> ``EXCHANGE_REPLY``: one per :meth:`HeadBridge.publish`, with a :class:`Snapshot`
-  numbered consecutively and carrying the head's episode boundaries since the previous one. Each hands over
-  every shared buffer: the side receiving it bumps the versions of everything it maps, as if each were written
-  locally.
+  numbered consecutively. Each hands over every shared buffer: the side receiving it bumps the versions
+  of everything it maps, as if each were written locally.
 - ``CLOSE_REQUEST`` -> ``CLOSE_REPLY``: both sides release their mappings.
 - ``ERROR``: the peer's failure, raised on the head.
 
@@ -31,17 +30,17 @@ import enum
 import json
 import math
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from holosoma.cosim.cuda import BufferSpec, FieldSpec, MappedBuffers, SharedStateAllocator, share
-from holosoma.simulator.base_simulator.hooks import Phase
 
 if TYPE_CHECKING:
     import torch
 
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.simulator.base_simulator.hooks import Phase
 
 STARTUP_TIMEOUT_MS = 300000
 EXCHANGE_TIMEOUT_MS = 30000
@@ -69,17 +68,14 @@ class Snapshot:
     sim_time: float
     phase: str | None = None
     """The head's hook phase the snapshot was published from, or ``None`` unless exactly one phase is emitting."""
-    episodes: tuple[tuple[str, tuple[int, ...]], ...] = ()
-    """The head's ``episode_end``/``episode_start`` emissions since the previous snapshot, in order, with their
-    env ids."""
+    env_ids: tuple[int, ...] | None = None
+    """The ``env_ids`` payload of an episode phase."""
 
     def __post_init__(self) -> None:
         if self.sequence < 1 or not math.isfinite(self.sim_time) or self.sim_time < 0:
             raise ValueError("Snapshot sequence and simulation time must be valid")
-        episodes = tuple((str(phase), tuple(int(i) for i in env_ids)) for phase, env_ids in self.episodes)
-        if any(phase not in (Phase.EPISODE_END.value, Phase.EPISODE_START.value) for phase, _ in episodes):
-            raise ValueError("Snapshot episodes must be episode_end or episode_start emissions")
-        object.__setattr__(self, "episodes", episodes)
+        if self.env_ids is not None:
+            object.__setattr__(self, "env_ids", tuple(int(env_id) for env_id in self.env_ids))
 
 
 class ControlChannel:
@@ -227,19 +223,6 @@ class HeadBridge:
         except BaseException:
             self.control.close()
             raise
-        self._episodes: list[tuple[str, tuple[int, ...]]] = []
-        self._episode_hooks = [
-            simulator.hooks.add(Phase.EPISODE_END, self._record_episodes(Phase.EPISODE_END), name="cosim.episode_end"),
-            simulator.hooks.add(
-                Phase.EPISODE_START, self._record_episodes(Phase.EPISODE_START), name="cosim.episode_start"
-            ),
-        ]
-
-    def _record_episodes(self, phase: Phase) -> Callable[[torch.Tensor], None]:
-        def record(env_ids: torch.Tensor) -> None:
-            self._episodes.append((phase.value, tuple(env_ids.tolist())))
-
-        return record
 
     @property
     def imports(self) -> dict[str, torch.Tensor]:
@@ -273,15 +256,24 @@ class HeadBridge:
         emitting = self.simulator.hooks.emitting
         return next(iter(emitting)).value if len(emitting) == 1 else None
 
-    def publish(self) -> None:
-        """Have the peer process the current state as the next snapshot, at the head's current time."""
+    def publish(self, phase: Phase | None = None, env_ids: torch.Tensor | None = None) -> None:
+        """Have the peer process the current state as the next snapshot, at the head's current time.
+
+        Args:
+            phase: The hook phase publishing; by default the one emitting, if exactly one is.
+            env_ids: The phase's ``env_ids`` payload, for an episode phase.
+        """
         if self.failed:
             raise RuntimeError("An earlier co-simulation exchange failed")
         self._imports.verify_read_only()
         self.refresh()
         self.sequence += 1
-        snapshot = Snapshot(self.sequence, self.simulator.time(), self._phase(), tuple(self._episodes))
-        self._episodes.clear()
+        snapshot = Snapshot(
+            self.sequence,
+            self.simulator.time(),
+            self._phase() if phase is None else phase.value,
+            None if env_ids is None else tuple(env_ids.tolist()),
+        )
         reply = self._exchange(MessageType.EXCHANGE_REQUEST, snapshot=asdict(snapshot))
         if reply["type"] != MessageType.EXCHANGE_REPLY or reply["sequence"] != snapshot.sequence:
             raise RuntimeError("Peer completed the wrong exchange")
@@ -296,8 +288,6 @@ class HeadBridge:
         if self.closed:
             return
         self.closed = True
-        for hook in self._episode_hooks:
-            hook.remove()
         try:
             # Unmap imports before the peer may free them.
             torch.cuda.synchronize(self.simulator.sim_device)

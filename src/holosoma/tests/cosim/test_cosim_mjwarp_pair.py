@@ -19,7 +19,8 @@ def test_peer_images_become_the_head_remote_camera_data() -> None:
     sent, rendered = run_pair(2, "--loopback")
     outputs = ("loopback/rgb", "loopback/depth")
 
-    assert sent["frames"] == rendered["frames"] > 1 and rendered["linked"]
+    assert rendered["frames"] > 1 and rendered["linked"]
+    assert sent["exchanges"] == rendered["frames"] + len(rendered["episodes"])  # each renders or emits
     assert rendered["exports_in_place"] and sent["imports_in_place"]
     assert (
         rendered["episodes"]

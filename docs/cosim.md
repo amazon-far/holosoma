@@ -38,6 +38,8 @@ camera plugins read them unchanged. Each camera renders with its own config on e
 them the same. The renderer exits when the head closes, including on Ctrl+C.
 
 - Local and remote cameras mix on one head.
+- Episode boundaries publish too: the renderer emits the head's `episode_end` and `episode_start` for the
+  same environments, so its plugins (e.g. video recording) split episodes as the head does.
 - `set_mount_pose()` works on a remote camera: the pose travels with the state, as `mount_pose/<camera>`.
   On the renderer, cameras the head also has follow the head's poses every frame.
 - Several renderers: give each its own plugin slot and endpoint, and set each remote camera to the slot that
@@ -63,7 +65,8 @@ class EngineRenderer(PeerHandler):
         return ("rigid_body_pos_w", "rigid_body_quat_w", "object_root_states")
 
     def step(self, snapshot, state):
-        self.engine.render(state, time=snapshot.sim_time)
+        if snapshot.env_ids is None:  # episode boundaries carry env_ids and are not rendered
+            self.engine.render(state, time=snapshot.sim_time)
 
 
 PeerBridge(EngineRenderer("cuda:0"), endpoint=endpoint).run()

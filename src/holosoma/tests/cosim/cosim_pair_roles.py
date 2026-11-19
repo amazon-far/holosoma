@@ -133,7 +133,7 @@ def head(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bool
                 for name in ("overview", "loopback"):
                     manager.set_mount_pose(name, moved)
             task.step()
-        saved["frames"] = cosim.bridge.sequence
+        saved["exchanges"] = cosim.bridge.sequence
         saved["episodes"] = list(saved["episodes"])  # without the episode ends that close emits
         # Remote camera outputs are the renderer's exports, not copies.
         saved["imports_in_place"] = all(

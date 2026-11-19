@@ -44,7 +44,7 @@ class RenderTask(BaseTask):
     backend's native placement where it has one, otherwise where a :class:`SimulationTask` would place them.
     Drive each frame by writing writable simulator state in place, then :meth:`render_frame`; every sensor
     renders each frame. ``simulator.time()`` reports ``simulator.kinematic_time``, which the caller sets.
-    Episodes open and end only through :meth:`emit_episodes`; close ends those still open.
+    Episodes open and end only through :meth:`emit_episode`; close ends those still open.
     """
 
     def __init__(self, tyro_config: EnvConfig) -> None:
@@ -73,14 +73,15 @@ class RenderTask(BaseTask):
         origins = self.simulator.native_env_origins()
         return simulation_env_origins(self) if origins is None else origins
 
-    def emit_episodes(self, episodes: Sequence[tuple[str, Sequence[int]]]) -> None:
-        """Emit ``episode_end``/``episode_start`` for each ``(phase, env_ids)`` in order, e.g. a head's boundaries."""
-        for phase, ids in episodes:
-            env_ids = torch.tensor(ids, dtype=torch.long, device=self.device)
-            if phase == Phase.EPISODE_END:
-                self._end_episodes(env_ids)
-            else:
-                self._start_episodes(env_ids)
+    def emit_episode(self, phase: str, env_ids: Sequence[int]) -> None:
+        """Emit ``episode_end`` or ``episode_start`` for ``env_ids``, e.g. as a head did."""
+        ids = torch.tensor(env_ids, dtype=torch.long, device=self.device)
+        if phase == Phase.EPISODE_END:
+            self._end_episodes(ids)
+        elif phase == Phase.EPISODE_START:
+            self._start_episodes(ids)
+        else:
+            raise ValueError(f"{phase!r} is not an episode phase")
 
     def render_frame(self) -> None:
         """Render the applied state and publish sensors, without physics.
@@ -108,8 +109,8 @@ class RenderHandler(PeerHandler):
     """Mirror the head's state into ``task``, render it, and export the camera outputs the head names to write.
 
     Adopts the head's environment origins, rejects any other scene difference, and links the head fields
-    writable on ``task``'s simulator to its state, so the head's changes reach it at each render. Each
-    snapshot's episode boundaries are emitted on ``task`` before it renders.
+    writable on ``task``'s simulator to its state, so the head's changes reach it at each render. A snapshot
+    published from an episode phase emits that phase on ``task`` instead of rendering.
     """
 
     def __init__(self, task: RenderTask) -> None:
@@ -157,8 +158,10 @@ class RenderHandler(PeerHandler):
 
     def step(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:
         self.simulator.kinematic_time = snapshot.sim_time
-        self.task.emit_episodes(snapshot.episodes)
-        self.task.render_frame()
+        if snapshot.env_ids is not None and snapshot.phase is not None:
+            self.task.emit_episode(snapshot.phase, snapshot.env_ids)
+        else:
+            self.task.render_frame()
 
 
 def split_endpoint(argv: list[str]) -> tuple[str, list[str]]:
