@@ -77,14 +77,14 @@ class SimTask(Task):
             RunSimConfig,
             args=cls.with_selection(args),
             description="Run simulation with direct simulator control and bridge support.\n\n"
-            "Usage: python -m holosoma.run_sim simulator:<sim> robot:<robot> terrain:<terrain>\n"
+            "Usage: holosoma simulator:<sim> robot:<robot> terrain:<terrain>\n"
             "Examples:\n"
-            "  python -m holosoma.run_sim # defaults \n"
-            "  python -m holosoma.run_sim simulator:sim-mujoco robot:t1_29dof_waist_wrist "
+            "  holosoma # defaults \n"
+            "  holosoma simulator:sim-mujoco robot:t1_29dof_waist_wrist "
             "terrain:terrain_locomotion_plane\n"
-            "  python -m holosoma.run_sim simulator:sim-isaacsim robot:g1_29dof terrain:terrain_locomotion_mix\n"
-            "  python -m holosoma.run_sim --config run.yaml [--config-path a.b] [overrides...]\n"
-            "  python -m holosoma.run_sim task:train exp:g1_29dof simulator:isaacsim  # also task:eval, task:replay",
+            "  holosoma simulator:sim-isaacsim robot:g1_29dof terrain:terrain_locomotion_mix\n"
+            "  holosoma --config run.yaml [--config-path a.b] [overrides...]\n"
+            "  holosoma task:train exp:g1_29dof simulator:isaacsim  # also task:eval, task:replay",
         )
         return cls(config)
 

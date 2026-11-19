@@ -22,8 +22,8 @@ class RunSimConfig(ExperimentConfig):
     gantry on), paced to real time, with no policy managers.
 
     Usage Examples:
-        python -m holosoma.run_sim simulator:sim-mujoco robot:t1-29dof-waist-wrist
-        python -m holosoma.run_sim simulator:sim-isaacsim robot:g1-29dof terrain:terrain-locomotion-mix
+        holosoma simulator:sim-mujoco robot:t1-29dof-waist-wrist
+        holosoma simulator:sim-isaacsim robot:g1-29dof terrain:terrain-locomotion-mix
     """
 
     task: Annotated[TaskConfig, UseRegistry(holosoma.config_values.task.TASK_REGISTRY)] = (

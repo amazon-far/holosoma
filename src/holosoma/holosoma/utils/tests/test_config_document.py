@@ -144,8 +144,8 @@ def test_select_task(tmp_path: Path, cli: list[str], doc_task: str | None, expec
     assert remaining == [t for t in args if t != f"task:{expected}"]
 
 
-def test_run_sim_runs_the_selected_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from holosoma import run_sim
+def test_cli_runs_the_selected_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from holosoma import cli
     from holosoma.tasks.replay import ReplayTask
 
     seen: list[Any] = []
@@ -160,10 +160,30 @@ def test_run_sim_runs_the_selected_task(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr(ReplayTask, "from_args", classmethod(from_args))
     config = _write(tmp_path, {**DOCUMENT, "task": "replay"})
-    monkeypatch.setattr(sys, "argv", ["run_sim", "--config", config, "--training.seed", "3"])
-    run_sim.main()
+    monkeypatch.setattr(sys, "argv", ["holosoma", "--config", config, "--training.seed", "3"])
+    cli.main()
     assert seen == [["--config", config, "--training.seed", "3"], "run"]
 
-    monkeypatch.setattr(sys, "argv", ["run_sim", "task:fly"])
+    monkeypatch.setattr(sys, "argv", ["holosoma", "task:fly"])
     with pytest.raises(SystemExit, match="Unknown task 'fly'"):
-        run_sim.main()
+        cli.main()
+
+
+@pytest.mark.parametrize("alias", ["train_agent", "eval_agent", "replay"])
+def test_task_aliases_run_the_holosoma_command_with_their_task(monkeypatch: pytest.MonkeyPatch, alias: str) -> None:
+    import importlib
+
+    from holosoma import cli
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "main", lambda: seen.append(list(sys.argv[1:])))
+    monkeypatch.setattr(sys, "argv", [alias, "--training.seed", "3"])
+    importlib.import_module(f"holosoma.{alias}").main()
+    task = {"train_agent": "train", "eval_agent": "eval", "replay": "replay"}[alias]
+    assert seen == [[f"task:{task}", "--training.seed", "3"]]
+
+
+def test_run_sim_is_the_holosoma_command() -> None:
+    from holosoma import cli, run_sim
+
+    assert run_sim.main is cli.main

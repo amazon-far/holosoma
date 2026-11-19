@@ -3,7 +3,7 @@
 Document shape (YAML or JSON)::
 
     version: 1
-    task: sim                    # workflow run_sim launches; see select_task
+    task: sim                    # workflow the holosoma command runs
     arguments:
       simulator: sim-mujoco      # <group>:<preset>
       robot: g1-29dof

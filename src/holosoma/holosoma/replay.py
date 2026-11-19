@@ -1,6 +1,6 @@
-"""Replay a whole-body-tracking motion: ``python -m holosoma.run_sim task:replay ...``."""
+"""Alias for ``holosoma task:replay``."""
 
-from holosoma.run_sim import run_task
+from holosoma.cli import run_task
 
 
 def main() -> None:

@@ -1,6 +1,6 @@
 # G1 velocity tracking with PPO on Isaac Sim.
 #
-#   python -m holosoma.run_sim --config @holosoma/examples/configs/g1_locomotion_train.yaml
+#   holosoma --config @holosoma/examples/configs/g1_locomotion_train.yaml
 #
 # Command-line tokens after --config take precedence, e.g. another backend or a smaller run:
 #   ... --config @holosoma/examples/configs/g1_locomotion_train.yaml simulator:mjwarp --training.num_envs 1024

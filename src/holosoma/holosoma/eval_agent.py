@@ -1,6 +1,6 @@
-"""Evaluate a checkpoint: ``python -m holosoma.run_sim task:eval ...``."""
+"""Alias for ``holosoma task:eval``."""
 
-from holosoma.run_sim import run_task
+from holosoma.cli import run_task
 
 
 def main() -> None:

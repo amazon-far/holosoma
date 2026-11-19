@@ -67,6 +67,9 @@ dependencies = [
     "zmq",
 ]
 
+[project.scripts]
+holosoma = "holosoma.cli:main"
+
 [project.optional-dependencies]
 # Robot SDKs are published to PyPI (FAR forks). The import names are unchanged
 # (`unitree_interface`, `booster_robotics_sdk`) — only the distribution names

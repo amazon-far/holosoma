@@ -53,7 +53,7 @@ Run it (MuJoCo CPU needs no GPU; the others need their SDK + a CUDA device):
     python -m holosoma.examples.object_managers_demo --backend isaacsim
 
 The scene is the ``object-managers-demo`` preset (``config_values/scene.py``); it is also
-selectable from the normal CLI, e.g. ``run_sim.py simulator:sim-mujoco scene:object-managers-demo``.
+selectable from the normal CLI, e.g. ``holosoma simulator:sim-mujoco scene:object-managers-demo``.
 
 Exits 0 on success, non-zero on failure, so it doubles as a smoke test (see
 ``tests/simulators/mujoco/test_object_managers_demo.py``).

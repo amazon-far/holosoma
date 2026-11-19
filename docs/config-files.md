@@ -1,18 +1,19 @@
 # Running from a config file
 
-`run_sim` launches every workflow. The document's `task` (or a `task:<name>` token on the
-command line) selects a workflow task from `TASK_REGISTRY`; every task reads the same config type,
+The `holosoma` command (also `python -m holosoma`) launches every workflow. The document's
+`task` (or a `task:<name>` token on the command line) selects a workflow task from `TASK_REGISTRY`; every task reads the same config type,
 `ExperimentConfig`, where `env_class` names the environment the task builds and drives:
 
-| `task` | Runs | Environment class | Shortcut |
+| `task` | Runs | Environment class | Alias |
 |---|---|---|---|
-| `sim` (default) | the simulation loop, no policy | `SimulationTask` | — |
+| `sim` (default) | the simulation loop, no policy | `SimulationTask` | `run_sim` |
 | `train` | training | `PolicyTask` | `train_agent` |
 | `eval` | checkpoint evaluation | `PolicyTask` | `eval_agent` |
 | `replay` | motion replay | `WholeBodyTrackingManager` | `replay` |
 
-`train_agent`, `eval_agent` and `replay` are shortcuts for `run_sim task:<name>` and accept the
-same arguments and documents. Extensions add tasks through the `holosoma.config.task` entry-point
+The aliases (`python -m holosoma.run_sim`, `holosoma.train_agent`, `holosoma.eval_agent`,
+`holosoma.replay`, or the same files run as scripts) are `holosoma` with that task selected and
+accept the same arguments and documents. Extensions add tasks through the `holosoma.config.task` entry-point
 group. Each entry in `arguments` maps to the token you would type on the command line, so any
 preset from an installed extension or an `--import-file` works the same way here.
 
@@ -45,19 +46,19 @@ passed as `@holosoma/examples/configs/<name>.yaml`; copy one as a starting point
 
 ```bash
 # Simulate
-python -m holosoma.run_sim --config @holosoma/examples/configs/g1_lidar.yaml
-python -m holosoma.run_sim --config @holosoma/examples/configs/g1_lidar.yaml terrain:terrain-locomotion-mix --training.seed 7
+holosoma --config @holosoma/examples/configs/g1_lidar.yaml
+holosoma --config @holosoma/examples/configs/g1_lidar.yaml terrain:terrain-locomotion-mix --training.seed 7
 
 # Train; the document sets `task: train` and selects the experiment with `exp:`
-python -m holosoma.run_sim --config @holosoma/examples/configs/g1_locomotion_train.yaml
-python -m holosoma.run_sim --config @holosoma/examples/configs/g1_locomotion_train.yaml \
+holosoma --config @holosoma/examples/configs/g1_locomotion_train.yaml
+holosoma --config @holosoma/examples/configs/g1_locomotion_train.yaml \
     simulator:mjwarp --training.num_envs 1024
 
 # Evaluate; the checkpoint supplies the experiment and the document overrides it
-python -m holosoma.run_sim task:eval --task.checkpoint=<CHECKPOINT_PATH> --config eval.yaml
+holosoma task:eval --task.checkpoint=<CHECKPOINT_PATH> --config eval.yaml
 
 # Replay a whole-body-tracking motion in the Isaac Sim viewer
-python -m holosoma.run_sim --config replay.yaml
+holosoma --config replay.yaml
 ```
 
 ```yaml

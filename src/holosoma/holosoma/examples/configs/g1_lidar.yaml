@@ -1,12 +1,12 @@
 # G1 with a pelvis LiDAR on MuJoCo, headless.
 #
-#   python -m holosoma.run_sim --config @holosoma/examples/configs/g1_lidar.yaml
+#   holosoma --config @holosoma/examples/configs/g1_lidar.yaml
 #
 # Command-line tokens after --config take precedence, e.g.
 #   ... --config @holosoma/examples/configs/g1_lidar.yaml terrain:terrain-locomotion-mix --training.seed 7
 # See docs/config-files.md for the format.
 version: 1
-# The workflow run_sim launches: sim (the default), train, eval or replay.
+# The workflow holosoma runs: sim (the default), train, eval or replay.
 task: sim
 arguments:
   # Group selections: <group>:<preset>

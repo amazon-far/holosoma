@@ -1,6 +1,6 @@
-"""Train a policy: ``python -m holosoma.run_sim task:train ...``."""
+"""Alias for ``holosoma task:train``."""
 
-from holosoma.run_sim import run_task
+from holosoma.cli import run_task
 
 
 def main() -> None:
