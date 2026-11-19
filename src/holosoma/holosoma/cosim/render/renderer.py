@@ -131,7 +131,7 @@ class RenderHandler(PeerHandler):
         self.simulator.state.unlink(self._linked)
         self._linked = ()
 
-    def export_source(self, field: FieldSpec) -> torch.Tensor:
+    def write_source(self, field: FieldSpec) -> torch.Tensor:
         """Export the SimState field ``field`` names, e.g. ``camera/<name>/rgb``; its writer renders into it."""
         state = self.simulator.state
         if field.name not in state.names():

@@ -70,14 +70,14 @@ PeerBridge(EngineRenderer("cuda:0"), endpoint=endpoint).run()
 ```
 
 The head names the fields the peer writes, one per remote-camera output, e.g. `camera/overview/rgb`.
-`export_source(field)` says where each one's data comes from, once, at the handshake. It has two forms.
+`write_source(field)` says where each one's data comes from, once, at the handshake. It has two forms.
 
 **The engine renders into a buffer you give it**: return a tensor shaped like the field. It is moved onto
 the shared export, so the engine writes the head's image directly, with no copy. The Holosoma renderer
 works this way.
 
 ```python
-    def export_source(self, field):
+    def write_source(self, field):
         _, camera, data_type = field.name.split("/")
         image = torch.empty(field.shape, dtype=getattr(torch, field.dtype), device=self.device)
         self.engine.add_camera(camera, data_type, out=image)
@@ -88,7 +88,7 @@ works this way.
 every `step`.
 
 ```python
-    def export_source(self, field):
+    def write_source(self, field):
         _, camera, data_type = field.name.split("/")
         self.engine.add_camera(camera, data_type)
         return lambda: self.engine.image(camera, data_type)
@@ -140,7 +140,7 @@ class ForceSolver(PeerHandler):  # peer: read contacts, write forces
     def reads(self, fields):
         return ("contact_forces",)
 
-    def export_source(self, field):  # a new tensor each step, so copied after it
+    def write_source(self, field):  # a new tensor each step, so copied after it
         return lambda: self.forces
 
     def step(self, snapshot, state):

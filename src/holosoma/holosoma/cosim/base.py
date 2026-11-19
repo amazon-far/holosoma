@@ -74,9 +74,9 @@ class HeadPlugin:
 class PeerHandler:
     """A peer's side of the exchange: choose the head fields to read, and write the ones the head names.
 
-    Each export is filled from its :meth:`export_source`: a tensor is moved onto the export, so writes to it
+    Each export is filled from its :meth:`write_source`: a tensor is moved onto the export, so writes to it
     land there; a callable is copied into the export after every :meth:`step`. Subclasses override :meth:`accept`,
-    :meth:`reads`, :meth:`export_source` and :meth:`step`, and :meth:`link` and :meth:`unlink` to read the
+    :meth:`reads`, :meth:`write_source` and :meth:`step`, and :meth:`link` and :meth:`unlink` to read the
     head's state through tensors of their own.
     """
 
@@ -93,7 +93,7 @@ class PeerHandler:
 
         self.accept(meta)
         reads = self.reads({spec.name: spec for spec in fields})
-        sources = [(spec, self.export_source(spec)) for spec in writes]
+        sources = [(spec, self.write_source(spec)) for spec in writes]
         for spec, source in sources:
             allocation = allocate_shared(spec.shape, spec.dtype, self.device)
             self.allocations[spec.name] = allocation
@@ -130,7 +130,7 @@ class PeerHandler:
     def unlink(self) -> None:
         """Move what :meth:`link` linked off the mapping; called before the mapping is released."""
 
-    def export_source(self, field: FieldSpec) -> torch.Tensor | Callable[[], torch.Tensor]:
+    def write_source(self, field: FieldSpec) -> torch.Tensor | Callable[[], torch.Tensor]:
         """Return what fills the export for the written head field ``field``; raise if it cannot be answered.
 
         A tensor shaped like the field is moved onto the export (``set_``), so whoever writes it writes the
