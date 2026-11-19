@@ -220,13 +220,16 @@ def test_linked_tensor_is_never_re_read_and_flushes_outside_writes() -> None:
     torch.autograd.graph.increment_version(linked)  # the writer reports the memory it now serves
     with state.mutation(STATE):
         pass
-    assert flushed == [[0, 1, 2]] and state.get("x") is linked and len(reads) == 2  # first read, changed rows
+    assert flushed == [[0, 1, 2]] and state.get("x") is linked and len(reads) == 1  # only the first read
 
     outside[1] = 7.0  # the writer's change, then the version bump that reports it
     torch.autograd.graph.increment_version(linked)
     with state.mutation(STATE):
         pass
-    assert flushed[-1] == [1] and torch.equal(backing[1], torch.full((3,), 7.0))
+    assert flushed[-1] == [0, 1, 2] and torch.equal(backing[1], torch.full((3,), 7.0))  # every row, uncompared
+    with state.mutation(STATE):  # nothing reported, nothing flushed
+        pass
+    assert len(flushed) == 2 and len(reads) == 1
     assert state.get("x") is linked and torch.equal(linked, outside)
 
     state.unlink(["x"])

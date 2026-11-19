@@ -852,6 +852,10 @@ class BaseSimulator:
 
         def register(record: Any) -> None:
             def write(rows: torch.Tensor, poses: torch.Tensor) -> None:
+                # Unchanged rows skip the backend writer, which is costly on some renderers.
+                rows = rows[(poses[rows] != record.mount_poses[rows]).any(-1)]
+                if not rows.numel():
+                    return
                 try:
                     manager.set_mount_pose(record.name, poses[rows], rows, notify=False)
                 finally:

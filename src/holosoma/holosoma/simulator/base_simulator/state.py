@@ -10,7 +10,7 @@ Every served tensor keeps its identity, so references to it stay valid. Reads se
 simulation state. In-place writes reach the simulation before its next physics step, FK pass or any
 state write that would replace them: the changed rows (environments) are flushed through the tensor's
 ``write``. A tensor bound without ``write`` is read-only. :meth:`SimState.link` serves a tensor from memory
-written outside the simulation instead of its read: a writable one flushes the changed rows its owner reports,
+written outside the simulation instead of its read: a writable one flushes every row its owner reports written,
 and a read-only one (e.g. a sensor output, registered without a read) is written inside
 :meth:`SimState.producing`.
 
@@ -43,6 +43,7 @@ DERIVED = "derived"
 
 class _Registration:
     __slots__ = (
+        "all_rows",
         "buffers",
         "clean",
         "dtype",
@@ -74,6 +75,7 @@ class _Registration:
         self.buffers: tuple[torch.Tensor, ...] = ()
         self.valid = False
         self.linked = False
+        self.all_rows: torch.Tensor | None = None
         self.clean: tuple[int, ...] = ()
         self.memory: tuple[int, ...] = ()
 
@@ -319,8 +321,12 @@ class SimState:
             names = ", ".join(name for registration in read_only for name in registration.names)
             raise RuntimeError(f"Simulator state {names} is read-only")
         marked: set[str] = set()
-        # Compare every written tensor with the simulation before writing any of them back.
-        for registration, rows in [(registration, registration.changed_rows()) for registration in written]:
+        # Compare every written tensor with the simulation before writing any of them back. A linked tensor's
+        # owner reported the write, so all its rows go without re-reading the simulation.
+        for registration, rows in [
+            (registration, registration.changed_rows() if registration.all_rows is None else registration.all_rows)
+            for registration in written
+        ]:
             if rows.numel():
                 assert registration.write is not None
                 registration.write(rows, *registration.buffers)
@@ -350,10 +356,10 @@ class SimState:
         """Serve tensors from ``sources``' memory (``set_``) in place of their read, and return them.
 
         Linked tensors are never re-read, and their versions do not follow writes made through ``sources``: the
-        writer reports each write as a version bump on the returned tensor. A writable tensor then flushes its
-        changed rows into the simulation; a read-only one is recorded with :meth:`producing`. The co-simulation
-        bridge reports every linked tensor each exchange; any other link must do this itself. Each
-        registration's names are linked together.
+        writer reports each write as a version bump on the returned tensor. A writable tensor then flushes all
+        its rows into the simulation, without comparing them; a read-only one is recorded with
+        :meth:`producing`. The co-simulation bridge reports every linked tensor each exchange; any other link must
+        do this itself. Each registration's names are linked together.
         """
         registrations = {id(self._by_name[name]): self._by_name[name] for name in sources}.values()
         for registration in registrations:
@@ -380,6 +386,10 @@ class SimState:
                 tensors[name].set_(source)
         for registration in registrations:
             registration.linked = True
+            if registration.buffers and registration.read is not None:
+                registration.all_rows = torch.arange(
+                    registration.buffers[0].shape[0], device=registration.buffers[0].device
+                )
             registration.valid = True
             registration.mark_clean()
         return tensors
@@ -394,6 +404,7 @@ class SimState:
                 buffer = registration.buffers[registration.names.index(name)]
                 buffer.set_(buffer.clone())
                 registration.linked = False
+                registration.all_rows = None
                 registration.valid = registration.read is None
                 registration.mark_clean()
 
