@@ -29,6 +29,7 @@ def test_peer_images_become_the_head_remote_camera_data() -> None:
             ("episode_start", [0, 1]),
             ("episode_end", [1]),
             ("episode_start", [1]),
+            ("episode_end", [0, 1]),
         ]
     )
     torch.testing.assert_close(rendered["robot_root_states"], sent["robot_root_states"])
