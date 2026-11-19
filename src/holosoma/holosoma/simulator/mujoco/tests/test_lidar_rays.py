@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from types import ModuleType, SimpleNamespace
 
 import numpy as np
@@ -418,7 +420,7 @@ def test_mjwarp_lidar_reuses_camera_bvh_without_duplicate_same_frame_refit(
 
     camera_context = SimpleNamespace(render_rgb=_Mask(), render_depth=_Mask())
     camera_graph = object()
-    render_stream = object()
+    render_stream = SimpleNamespace(wait_stream=lambda _stream: None)
     backend = object.__new__(warp_backend.WarpBackend)
     backend.device = "cuda:0"
     backend.mjw_device = "cuda:0"
@@ -765,14 +767,19 @@ def test_mjwarp_replayed_graph_reads_current_directions_and_updates_cloud(monkey
                 "mujoco_site_id": 0,
                 "mujoco_body_exclude_id": -1,
             }
-            self.buffers = {}
+            self.buffers = {
+                "ranges": torch.zeros((1, 1)),
+                "points": torch.zeros((1, 1, 3)),
+                "geom_ids": torch.zeros((1, 1), dtype=torch.int32),
+            }
 
         def pattern_at(self, sim_time: float):
             direction = [0.0, 0.0, -1.0] if sim_time < 0.5 else [1.0, 0.0, 0.0]
             return SimpleNamespace(directions=torch.tensor([direction], dtype=torch.float32))
 
-        def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
-            self.buffers[output] = tensor.clone()
+        @contextmanager
+        def writing(self, output: str, env_ids: torch.Tensor | None = None) -> Iterator[torch.Tensor]:
+            yield self.buffers[output]
 
     record = _Record()
     backend = SimpleNamespace(
