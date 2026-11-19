@@ -131,15 +131,15 @@ class RenderHandler(PeerHandler):
         self.simulator.state.unlink(self._linked)
         self._linked = ()
 
-    def export_source(self, request: FieldSpec) -> torch.Tensor:
-        """Export the SimState field ``request`` names, e.g. ``camera/<name>/rgb``; its writer renders into it."""
+    def export_source(self, field: FieldSpec) -> torch.Tensor:
+        """Export the SimState field ``field`` names, e.g. ``camera/<name>/rgb``; its writer renders into it."""
         state = self.simulator.state
-        if request.name not in state.names():
-            raise ValueError(f"Peer has no output {request.name!r} for the head to read")
-        output = state.get(request.name)
-        own = FieldSpec(request.name, tuple(output.shape), str(output.dtype).removeprefix("torch."))
-        if request != own:
-            raise ValueError(f"Output {request.name!r} differs between simulators: head {request}, peer {own}")
+        if field.name not in state.names():
+            raise ValueError(f"Peer has no output {field.name!r} for the head to read")
+        output = state.get(field.name)
+        own = FieldSpec(field.name, tuple(output.shape), str(output.dtype).removeprefix("torch."))
+        if field != own:
+            raise ValueError(f"Output {field.name!r} differs between simulators: head {field}, peer {own}")
         return output
 
     def step(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:

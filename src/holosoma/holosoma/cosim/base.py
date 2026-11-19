@@ -130,13 +130,13 @@ class PeerHandler:
     def unlink(self) -> None:
         """Move what :meth:`link` linked off the mapping; called before the mapping is released."""
 
-    def export_source(self, request: FieldSpec) -> torch.Tensor | Callable[[], torch.Tensor]:
-        """Return what fills the export for the written head field ``request``; raise if it cannot be answered.
+    def export_source(self, field: FieldSpec) -> torch.Tensor | Callable[[], torch.Tensor]:
+        """Return what fills the export for the written head field ``field``; raise if it cannot be answered.
 
         A tensor shaped like the field is moved onto the export (``set_``), so whoever writes it writes the
         export and it keeps that memory; a callable returns the tensor to copy into the export after each step.
         """
-        raise ValueError(f"Peer has no export for the head's field {request.name!r}")
+        raise ValueError(f"Peer has no export for the head's field {field.name!r}")
 
     def step(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:
         """Process the head's read-only ``state`` for ``snapshot``; it is valid only during the call."""
