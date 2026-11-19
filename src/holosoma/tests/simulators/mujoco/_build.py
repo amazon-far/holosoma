@@ -20,7 +20,7 @@ import torch
 
 import holosoma.config_values.robot as robot_values
 import holosoma.config_values.simulator as sim_values
-from holosoma.config_types.experiment import TrainingConfig
+from holosoma.config_types.experiment import RunConfig
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import BridgeConfig, MujocoBackend, VirtualGantryCfg
@@ -80,10 +80,10 @@ def build_classic_sim(
                 sim_cfg.config, sim=dataclasses.replace(sim_cfg.config.sim, kinematic_playback=True)
             ),
         )
-    config = dataclasses.replace(
-        RunSimConfig(simulator=sim_cfg, robot=robot_values.g1_29dof, scene=scene or SceneConfig(), plugin=plugin or {}),
-        device="cpu",
+    base = RunSimConfig(
+        simulator=sim_cfg, robot=robot_values.g1_29dof, scene=scene or SceneConfig(), plugin=plugin or {}
     )
+    config = dataclasses.replace(base, run=dataclasses.replace(base.run, device="cpu"))
     sim, device, _ = launch_simulator(config, device="cpu")
     return _finish_build(sim, 1, torch.zeros(1, 3, device=device), _robot_base_init())
 
@@ -115,14 +115,13 @@ def build_warp_sim(
             sim_cfg,
             config=dataclasses.replace(sim_cfg.config, sim=dataclasses.replace(sim_cfg.config.sim, mujoco=native)),
         )
-    config = dataclasses.replace(
-        RunSimConfig(
-            simulator=sim_cfg,
-            robot=robot_values.g1_29dof,
-            scene=scene or SceneConfig(),
-            training=TrainingConfig(num_envs=num_envs, headless=True, seed=seed, torch_deterministic=False),
+    config = RunSimConfig(
+        simulator=sim_cfg,
+        robot=robot_values.g1_29dof,
+        scene=scene or SceneConfig(),
+        run=RunConfig(
+            num_envs=num_envs, headless=True, seed=seed, torch_deterministic=False, time_scale=1.0, device="cuda:0"
         ),
-        device="cuda:0",
     )
     sim, device, _ = launch_simulator(config, device="cuda:0")
     if env_origins is None:

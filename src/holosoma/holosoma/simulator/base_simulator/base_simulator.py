@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from holosoma.config_types.experiment import TrainingConfig
+from holosoma.config_types.experiment import RunConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
@@ -144,7 +144,7 @@ class BaseSimulator:
     An object (non-robot actor) body state is its root state — use :meth:`get_actor_states`.
     """
 
-    training_config: TrainingConfig
+    run_config: RunConfig
     simulator_config: SimulatorInitConfig
     scene_config: SceneConfig
     robot_config: RobotConfig
@@ -203,7 +203,7 @@ class BaseSimulator:
         self.state = SimState()
         self.viewer = None
         self.terrain_manager = terrain_manager
-        self.training_config = tyro_config.training
+        self.run_config = tyro_config.run
         self.simulator_config = tyro_config.simulator
         self.scene_config = tyro_config.scene
         self.sensor_config = tyro_config.sensors
@@ -247,7 +247,7 @@ class BaseSimulator:
         # The registry stays available even without sensors; native resources are created at setup.
         sim_cfg = self.simulator_config.sim
         self.sensor_manager = SensorManager(
-            device, sim_cfg.fps / sim_cfg.control_decimation_steps, num_envs=self.training_config.num_envs
+            device, sim_cfg.fps / sim_cfg.control_decimation_steps, num_envs=self.run_config.num_envs
         )
 
         # To be overridden by subclasses

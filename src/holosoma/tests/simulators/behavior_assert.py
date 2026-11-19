@@ -1433,7 +1433,7 @@ def main() -> int:
     config = dataclasses.replace(
         config,
         device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        run=dataclasses.replace(config.run, num_envs=args.num_envs),
     )
 
     # Apply the scenario's link_physics onto the one-link robot's asset, so the robot link carries the

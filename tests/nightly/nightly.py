@@ -12,10 +12,11 @@ import sys
 import time
 from os import getenv
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.simulator import MujocoBackend
+from holosoma.config_types.task import TrainTaskConfig
 from holosoma.config_values.experiment import get_annotated_experiment_config
 from holosoma.tasks.train import split_envs_across_ranks, train_on_task
 from holosoma.utils.config_registry import parse_config
@@ -243,7 +244,8 @@ def main():
     config = parse_config(get_annotated_experiment_config)
 
     # Check if multigpu is requested and we're not already in a distributed process
-    if config.training.multigpu and "RANK" not in os.environ:
+    multigpu = cast("TrainTaskConfig", config.task).multigpu
+    if multigpu and "RANK" not in os.environ:
         # The Isaac Sim environment does not install the torchrun console script,
         # but its bundled PyTorch still provides the equivalent module entry point.
         env = os.environ.copy()
@@ -263,16 +265,16 @@ def main():
 
         sys.exit(result.returncode)
 
-    config = dataclasses.replace(config, training=dataclasses.replace(config.training, seed=42))
+    config = dataclasses.replace(config, run=dataclasses.replace(config.run, seed=42))
     # Get experiment name from config instead of hydra runtime choices
-    exp = config.training.name or config.logger.name
+    exp = config.run.name or config.logger.name
     # Sanitize experiment name for wandb project name (cannot contain /,\,#,?,%,:)
     sanitized_exp = (
         exp.replace("/", "-").replace("\\", "-").replace("#", "-").replace("?", "-").replace("%", "-").replace(":", "-")
     )
 
     # Add multigpu suffix if enabled
-    multigpu_suffix = "-multigpu" if config.training.multigpu else ""
+    multigpu_suffix = "-multigpu" if multigpu else ""
 
     config = config.get_nightly_config()
 
@@ -286,7 +288,7 @@ def main():
     if GITHUB_RUN_ID:
         run_tags.append(f"gha-run-id-{GITHUB_RUN_ID}")
 
-    if config.training.multigpu:
+    if multigpu:
         run_tags.append("multigpu")
         run_tags.append(f"gpus-{MULTIGPU_NUM_GPUS}")
     else:
@@ -298,7 +300,7 @@ def main():
     cell_tags = [
         sanitized_exp,
         simulator,
-        f"gpus-{MULTIGPU_NUM_GPUS}" if config.training.multigpu else "gpus-1",
+        f"gpus-{MULTIGPU_NUM_GPUS}" if multigpu else "gpus-1",
     ]
 
     # Also the wandb run id, so it has to identify the matrix cell: one experiment runs on

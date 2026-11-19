@@ -29,7 +29,7 @@ def test_a_timeout_term_ends_and_restarts_the_episode():
             config=dataclasses.replace(sim_cfg, sim=dataclasses.replace(sim_cfg.sim, max_episode_length_s=EPISODE_S)),
         ),
         termination=termination.TERMINATION_REGISTRY.get("g1_29dof"),
-        training=dataclasses.replace(base.training, headless=True),
+        run=dataclasses.replace(base.run, headless=True),
         time_scale=0.0,
     )
 
@@ -58,7 +58,7 @@ def test_a_reset_randomization_term_sets_the_joint_state():
     config = dataclasses.replace(
         base,
         randomization=RandomizationManagerCfg(reset_terms={"randomize_dof_state": scale_twice}),
-        training=dataclasses.replace(base.training, headless=True),
+        run=dataclasses.replace(base.run, headless=True),
         time_scale=0.0,
     )
 

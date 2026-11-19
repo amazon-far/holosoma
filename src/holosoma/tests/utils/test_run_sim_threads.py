@@ -60,7 +60,9 @@ def requested(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
 def _config(preset: str, device: str | None) -> RunSimConfig:
     """A real simulator preset plus the device. The rest of RunSimConfig the guard never reads."""
-    return cast("RunSimConfig", SimpleNamespace(simulator=SIMULATOR_REGISTRY.get(preset), device=device))
+    return cast(
+        "RunSimConfig", SimpleNamespace(simulator=SIMULATOR_REGISTRY.get(preset), run=SimpleNamespace(device=device))
+    )
 
 
 def test_thread_limit_variables_match_production() -> None:
@@ -169,7 +171,7 @@ _CHILD = textwrap.dedent(
 
     config = parse_config(RunSimConfig, args=[f"simulator:sim-{PRESET}"])
     if DEVICE is not None:
-        config = dataclasses.replace(config, device=DEVICE)
+        config = dataclasses.replace(config, run=dataclasses.replace(config.run, device=DEVICE))
     runner.run_simulation(config)
     """
 )

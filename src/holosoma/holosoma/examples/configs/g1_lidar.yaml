@@ -3,7 +3,7 @@
 #   holosoma --config @holosoma/examples/configs/g1_lidar.yaml
 #
 # Command-line tokens after --config take precedence, e.g.
-#   ... --config @holosoma/examples/configs/g1_lidar.yaml terrain:terrain-locomotion-mix --training.seed 7
+#   ... --config @holosoma/examples/configs/g1_lidar.yaml terrain:terrain-locomotion-mix --run.seed 7
 # See docs/config-files.md for the format.
 version: 1
 # The workflow holosoma runs: sim (the default), train, eval or replay.
@@ -17,7 +17,7 @@ arguments:
     scan: g1-pelvis-lidar
   # Field overrides: --<dotted.path>=<value>; nested mappings expand to one flag per leaf.
   overrides:
-    training.headless: true
+    run.headless: true
     robot.init_state.pos: [0.0, 0.0, 0.8]
     sensor.scan:
       update_decimation: 10Hz

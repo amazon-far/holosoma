@@ -55,7 +55,7 @@ def _backend(xml: str = _MJCF) -> ClassicBackend:
     model = mujoco.MjModel.from_xml_string(xml)
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
-    config = cast("FullSimConfig", SimpleNamespace(training=SimpleNamespace(num_envs=1)))
+    config = cast("FullSimConfig", SimpleNamespace(run=SimpleNamespace(num_envs=1)))
     return ClassicBackend(model, data, config, "cpu")
 
 

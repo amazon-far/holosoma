@@ -170,7 +170,7 @@ class StudentTeacher(nn.Module):
         if missing:
             raise RuntimeError(
                 f"Teacher weights are not loaded for slots {missing}. "
-                "Set training.teacher_checkpoint for a new run or resume from a full "
+                "Set train.teacher_checkpoint for a new run or resume from a full "
                 "distillation checkpoint."
             )
 

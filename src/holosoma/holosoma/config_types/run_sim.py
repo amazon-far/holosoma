@@ -4,17 +4,18 @@ from __future__ import annotations
 
 from typing import Annotated
 
+from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
 import holosoma.config_values.simulator
 import holosoma.config_values.task
-from holosoma.config_types.experiment import ExperimentConfig, TrainingConfig
+from holosoma.config_types.experiment import ExperimentConfig, RunConfig
 from holosoma.config_types.simulator import SimulatorConfig
-from holosoma.config_types.task import TaskConfig
+from holosoma.config_types.task import TaskConfigType
 from holosoma.utils.config_registry import UseRegistry
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class RunSimConfig(ExperimentConfig):
     """``ExperimentConfig`` with the ``sim`` task's defaults.
 
@@ -26,12 +27,11 @@ class RunSimConfig(ExperimentConfig):
         holosoma simulator:sim-isaacsim robot:g1-29dof terrain:terrain-locomotion-mix
     """
 
-    task: Annotated[TaskConfig, UseRegistry(holosoma.config_values.task.TASK_REGISTRY)] = (
+    task: Annotated[TaskConfigType, UseRegistry(holosoma.config_values.task.TASK_REGISTRY)] = (
         holosoma.config_values.task.sim
     )
     env_class: str = "holosoma.envs.simulation_task.SimulationTask"
     simulator: Annotated[SimulatorConfig, UseRegistry(holosoma.config_values.simulator.SIMULATOR_REGISTRY)] = (
         holosoma.config_values.simulator.sim_mujoco
     )
-    training: TrainingConfig = TrainingConfig(num_envs=1, headless=False, seed=42, torch_deterministic=False)
-    time_scale: float = 1.0
+    run: RunConfig = RunConfig(num_envs=1, headless=False, seed=42, time_scale=1.0)

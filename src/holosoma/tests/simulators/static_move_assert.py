@@ -89,12 +89,11 @@ def _build(simulator: str, num_envs: int):
         config,
         simulator=sim_cfg,
         scene=_scene(),
-        device=("cpu" if simulator == "mujoco" else "cuda:0"),
-        training=dataclasses.replace(config.training, num_envs=num_envs),
+        run=dataclasses.replace(config.run, device=("cpu" if simulator == "mujoco" else "cuda:0"), num_envs=num_envs),
     )
     import torch
 
-    s, device, _ = launch_simulator(config, device=config.device)
+    s, device, _ = launch_simulator(config, device=config.run.device)
     s.set_headless(True)
     s.setup()
     s.setup_terrain()

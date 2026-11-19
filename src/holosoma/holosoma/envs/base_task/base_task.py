@@ -80,12 +80,12 @@ class BaseTask:
         simulator_config = tyro_config.simulator
         terrain_config = tyro_config.terrain
         robot_config = tyro_config.robot
-        training_config = tyro_config.training
+        run_config = tyro_config.run
 
-        self.training_config = training_config
+        self.run_config = run_config
         self.robot_config = robot_config
 
-        seeding(get_process_seed(tyro_config), torch_deterministic=training_config.torch_deterministic)
+        seeding(get_process_seed(tyro_config), torch_deterministic=run_config.torch_deterministic)
 
         # optimization flags for pytorch JIT
         torch._C._jit_set_profiling_mode(False)
@@ -94,7 +94,7 @@ class BaseTask:
         # Compute experiment directory from logger config
         timestamp = get_timestamp()
         experiment_dir = get_experiment_dir(
-            tyro_config.logger, tyro_config.training, timestamp, task_name=self._get_task_name()
+            tyro_config.logger, tyro_config.run, timestamp, task_name=self._get_task_name()
         )
 
         SimulatorClass = get_class(simulator_config._target_)
@@ -104,18 +104,18 @@ class BaseTask:
             scene=tyro_config.scene,
             sensors=tyro_config.sensors,
             plugin=tyro_config.plugin,
-            training=training_config,
+            run=run_config,
             logger=tyro_config.logger,
             experiment_dir=str(experiment_dir),
         )
 
-        self.num_envs = training_config.num_envs
+        self.num_envs = run_config.num_envs
         self.device = resolve_simulation_device(tyro_config, get_local_rank())
 
         # Episodes each environment has started, incremented on reset before the reset DR runs. With
         # dr_base_seed it keys every DR draw as f(seed, term, env, episode), so async per-env resets
         # reproduce. Set before any manager is constructed so setup-stage DR already sees them.
-        self.dr_base_seed = training_config.seed
+        self.dr_base_seed = run_config.seed
         self.episode_count = torch.zeros(self.num_envs, dtype=torch.long, device="cpu")
 
         self.terrain_manager = TerrainManager(terrain_config, self, self.device)
@@ -124,7 +124,7 @@ class BaseTask:
         )
         self.hooks = self.simulator.hooks
 
-        self.headless = training_config.headless
+        self.headless = run_config.headless
         self.simulator.set_headless(self.headless)
         self.simulator.setup()
         self.sim_dt = self.simulator.sim_dt
@@ -175,9 +175,11 @@ class BaseTask:
         Registered after every other hook, so pacing runs last in each substep.
         """
         if self.viewer is not None:
-            self.hooks.add(Phase.POST_STEP, self.render, name="task.viewer", every=self.config.viewer_update_decimation)
-        if self.config.time_scale > 0:
-            rate_limiter = RateLimiter(self.config.time_scale / self.sim_dt)
+            self.hooks.add(
+                Phase.POST_STEP, self.render, name="task.viewer", every=self.config.run.viewer_update_decimation
+            )
+        if self.config.run.time_scale > 0:
+            rate_limiter = RateLimiter(self.config.run.time_scale / self.sim_dt)
             self.hooks.add(Phase.POST_STEP, rate_limiter.sleep, name="task.rate_limit")
 
     @property

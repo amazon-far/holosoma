@@ -3,7 +3,7 @@
 #   holosoma --config @holosoma/examples/configs/g1_locomotion_train.yaml
 #
 # Command-line tokens after --config take precedence, e.g. another backend or a smaller run:
-#   ... --config @holosoma/examples/configs/g1_locomotion_train.yaml simulator:mjwarp --training.num_envs 1024
+#   ... --config @holosoma/examples/configs/g1_locomotion_train.yaml simulator:mjwarp --run.num_envs 1024
 # See docs/config-files.md for the format.
 version: 1
 task: train
@@ -12,5 +12,5 @@ arguments:
   exp: g1-29dof
   simulator: isaacsim
   overrides:
-    training.seed: 1
-    training.headless: true
+    run.seed: 1
+    run.headless: true

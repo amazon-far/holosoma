@@ -39,7 +39,7 @@ def main() -> int:
     tyro_config = dataclasses.replace(
         preset,
         simulator=SIMULATOR_REGISTRY[args.simulator],
-        training=dataclasses.replace(preset.training, num_envs=NUM_ENVS, headless=True),
+        run=dataclasses.replace(preset.run, num_envs=NUM_ENVS, headless=True),
     )
 
     failures: list[str] = []

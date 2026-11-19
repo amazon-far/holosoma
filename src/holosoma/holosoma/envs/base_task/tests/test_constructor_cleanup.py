@@ -115,12 +115,21 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
         randomization=object(),
         command=object(),
         curriculum=object(),
-        training=SimpleNamespace(num_envs=1, seed=0, headless=False, torch_deterministic=False),
+        run=SimpleNamespace(
+            num_envs=1,
+            seed=0,
+            headless=False,
+            torch_deterministic=False,
+            device="cpu",
+            time_scale=0.0,
+            viewer_update_decimation="<60Hz",
+            project="p",
+            name="n",
+        ),
         logger=object(),
         scene=object(),
         sensors={},
         plugin={},
-        device="cpu",
     )
 
     monkeypatch.setattr(base_task_module, "get_class", lambda _target: _Simulator)

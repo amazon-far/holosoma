@@ -31,7 +31,7 @@ Two settings control it, and each trades something:
   nothing in the pipeline reads that channel. The cost is not the publish itself but the simulator
   state read and world→body conversion in front of it.
 
-To size either for a given configuration, run with `--time-scale 0` and compare the
+To size either for a given configuration, run with `--run.time-scale 0` and compare the
 `Simulation performance:` lines the simulation loop logs, toggling one setting at a time.
 
 ### Unitree bridges

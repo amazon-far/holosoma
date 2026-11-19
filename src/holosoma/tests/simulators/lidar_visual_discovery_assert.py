@@ -115,9 +115,8 @@ def main() -> int:
     )
     config = dataclasses.replace(
         config,
-        device="cuda:0",
         scene=dataclasses.replace(config.scene, rigid_objects=scene_objects),
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        run=dataclasses.replace(config.run, device="cuda:0", num_envs=args.num_envs),
     )
 
     sim, device, _app = launch_simulator(config, device="cuda:0")

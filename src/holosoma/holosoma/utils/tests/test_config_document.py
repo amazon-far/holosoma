@@ -22,7 +22,7 @@ DOCUMENT: dict[str, Any] = {
         "robot": "t1-29dof-waist-wrist",
         "plugin": {"clock": "clock_publish"},
         "overrides": {
-            "training.headless": False,
+            "run.headless": False,
             "robot.init_state.pos": [1.0, -2.0, 0.8],
             "plugin.clock": {"publish_every": "100Hz"},
         },
@@ -32,7 +32,7 @@ EQUIVALENT_CLI = [
     "simulator:sim-mjwarp",
     "robot:t1-29dof-waist-wrist",
     "plugin.clock:clock_publish",
-    "--training.headless",
+    "--run.headless",
     "False",
     "--robot.init_state.pos",
     "[1.0, -2.0, 0.8]",
@@ -66,10 +66,10 @@ def test_document_parses_like_equivalent_cli(tmp_path: Path, content: dict[str, 
 def test_command_line_overrides_document(tmp_path: Path) -> None:
     doc = {
         "version": 1,
-        "arguments": {"robot": "g1-29dof", "robot.asset.link_physics": "none", "overrides": {"training.seed": 3}},
+        "arguments": {"robot": "g1-29dof", "robot.asset.link_physics": "none", "overrides": {"run.seed": 3}},
     }
-    args = ["--config", _write(tmp_path, doc), "--training.seed", "-1", "robot:t1-29dof-waist-wrist"]
-    expected = ["robot:t1-29dof-waist-wrist", "robot.asset.link_physics:none", "--training.seed", "-1"]
+    args = ["--config", _write(tmp_path, doc), "--run.seed", "-1", "robot:t1-29dof-waist-wrist"]
+    expected = ["robot:t1-29dof-waist-wrist", "robot.asset.link_physics:none", "--run.seed", "-1"]
     assert parse_config(RunSimConfig, args=args) == parse_config(RunSimConfig, args=expected)
 
 
@@ -78,21 +78,21 @@ def test_scalars_follow_yaml_1_2(tmp_path: Path) -> None:
         "version: 1\n"
         "arguments:\n"
         "  overrides:\n"
-        "    training.seed: 010\n"
-        "    training.name: off\n"
-        "    training.project: 2026-11-17\n"
+        "    run.seed: 010\n"
+        "    run.name: off\n"
+        "    run.project: 2026-11-17\n"
         "    robot.init_state.pos: [1e-05, 0.0, 0.8]\n"
     )
     config = parse_config(RunSimConfig, args=["--config", _write(tmp_path, text)])
-    assert (config.training.seed, config.training.name, config.training.project) == (10, "off", "2026-11-17")
+    assert (config.run.seed, config.run.name, config.run.project) == (10, "off", "2026-11-17")
     assert config.robot.init_state.pos == [1e-05, 0.0, 0.8]
 
 
 def test_root_subcommand_comes_first(tmp_path: Path) -> None:
-    doc = {"version": 1, "arguments": {"simulator": "mujoco", "exp": "g1-29dof", "overrides": {"training.num_envs": 8}}}
+    doc = {"version": 1, "arguments": {"simulator": "mujoco", "exp": "g1-29dof", "overrides": {"run.num_envs": 8}}}
     parsed = parse_config(get_annotated_experiment_config, args=["--config", _write(tmp_path, doc)])
     expected = parse_config(
-        get_annotated_experiment_config, args=["exp:g1-29dof", "simulator:mujoco", "--training.num_envs", "8"]
+        get_annotated_experiment_config, args=["exp:g1-29dof", "simulator:mujoco", "--run.num_envs", "8"]
     )
     assert parsed == expected
 
@@ -140,7 +140,7 @@ def test_packaged_examples_parse(name: str, config_type: Any) -> None:
         ([], None, None),
         ([], "train", "train"),
         (["task:eval"], "train", "eval"),
-        (["--training.name", "task:x", "task:replay"], None, "replay"),
+        (["--run.name", "task:x", "task:replay"], None, "replay"),
     ],
     ids=["none", "document", "cli-wins", "flag-value-is-not-a-task"],
 )
@@ -168,9 +168,9 @@ def test_cli_runs_the_selected_task(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(ReplayTask, "from_args", classmethod(from_args))
     config = _write(tmp_path, {**DOCUMENT, "task": "replay"})
-    monkeypatch.setattr(sys, "argv", ["holosoma", "--config", config, "--training.seed", "3"])
+    monkeypatch.setattr(sys, "argv", ["holosoma", "--config", config, "--run.seed", "3"])
     cli.main()
-    assert seen == [["--config", config, "--training.seed", "3"], "run"]
+    assert seen == [["--config", config, "--run.seed", "3"], "run"]
 
     monkeypatch.setattr(sys, "argv", ["holosoma", "task:fly"])
     with pytest.raises(SystemExit, match="Unknown task 'fly'"):
@@ -185,10 +185,10 @@ def test_task_aliases_run_the_holosoma_command_with_their_task(monkeypatch: pyte
 
     seen: list[list[str]] = []
     monkeypatch.setattr(cli, "main", lambda: seen.append(list(sys.argv[1:])))
-    monkeypatch.setattr(sys, "argv", [alias, "--training.seed", "3"])
+    monkeypatch.setattr(sys, "argv", [alias, "--run.seed", "3"])
     importlib.import_module(f"holosoma.{alias}").main()
     task = {"train_agent": "train", "eval_agent": "eval", "replay": "replay"}[alias]
-    assert seen == [[f"task:{task}", "--training.seed", "3"]]
+    assert seen == [[f"task:{task}", "--run.seed", "3"]]
 
 
 def test_run_sim_is_the_holosoma_command() -> None:
@@ -227,3 +227,23 @@ def test_print_args_prints_the_equivalent_command_line(tmp_path: Path, capsys: p
     import shlex
 
     assert parse_config(RunSimConfig, args=shlex.split(printed)[1:]) == parse_config(RunSimConfig, args=EQUIVALENT_CLI)
+
+
+def test_moved_flags_keep_working(tmp_path: Path) -> None:
+    old = [
+        "exp:g1-29dof",
+        "--training.num_envs=8",
+        "--training.checkpoint=/runs/a.pt",
+        "--eval_overrides.num_envs",
+        "3",
+    ]
+    doc = {"version": 1, "arguments": {"overrides": {"training.project": "p", "time_scale": 0.5}}}
+    new = [
+        "exp:g1-29dof",
+        "--run.num_envs=8",
+        "--train.resume_from=/runs/a.pt",
+        "--run.project=p",
+        "--run.time_scale=0.5",
+    ]
+    parsed_old = parse_config(get_annotated_experiment_config, args=[*old, "--config", _write(tmp_path, doc)])
+    assert parsed_old == parse_config(get_annotated_experiment_config, args=new)

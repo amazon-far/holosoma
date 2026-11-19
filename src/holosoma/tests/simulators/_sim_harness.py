@@ -99,12 +99,12 @@ def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[A
         robot=config.robot,
         scene=config.scene,
         sensors=dict(config.sensor),
-        training=config.training,
+        run=config.run,
         logger=config.logger,
         plugin=config.plugin,
     )
     # Without a task, TerrainManager construction needs only num_envs and device from its env.
-    terrain_env = SimpleNamespace(num_envs=config.training.num_envs, device=device)
+    terrain_env = SimpleNamespace(num_envs=config.run.num_envs, device=device)
     terrain_manager = TerrainManager(config.terrain, env=terrain_env, device=device)
     simulator = get_class(config.simulator._target_)(full_config, terrain_manager, device)
     return simulator, device, simulation_app

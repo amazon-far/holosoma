@@ -10,7 +10,7 @@ Document shape (YAML or JSON)::
       sensor:                    # <family>.<key>:<preset>
         scan: g1-pelvis-lidar
       overrides:                 # --<dotted.path>=<value>
-        training.headless: true
+        run.headless: true
         robot.init_state.pos: [0.0, 0.0, 0.8]
 
 A file whose root has no ``version`` but has a ``holosoma_sim`` mapping reads that mapping;
@@ -115,15 +115,68 @@ def expand_config_args(
     return [*root, *nested, *(t for t, _ in doc_flags), *cli_rest]
 
 
+# Flags whose field moved: old dotted path (underscored) -> new dotted path.
+MOVED_FLAGS = {
+    **{f"training.{name}": f"run.{name}" for name in ("num_envs", "headless", "seed", "torch_deterministic")},
+    **{f"training.{name}": f"run.{name}" for name in ("project", "name")},
+    **{name: f"run.{name}" for name in ("device", "time_scale", "viewer_update_decimation", "viewer_dt")},
+    "training.checkpoint": "train.resume_from",
+    "training.teacher_checkpoint": "train.teacher_checkpoint",
+    "training.multigpu": "train.multigpu",
+    "training.max_eval_steps": "eval.max_eval_steps",
+    "training.export_onnx": "eval.export_onnx",
+}
+# Flags that load but no longer do anything, with the reason.
+REMOVED_FLAGS = {
+    "eval_overrides": "eval applies its defaults to the checkpoint's config before the CLI, so these never "
+    "took effect; set the field itself (e.g. --run.num_envs)",
+}
+
+
+def alias_legacy_flags(argv: list[str]) -> list[str]:
+    """Rewrite flags whose field moved (see ``MOVED_FLAGS``) and drop removed ones, warning once each."""
+    aliased: list[str] = []
+    tokens = iter(argv)
+    for token in tokens:
+        head, eq, value = token.partition("=")
+        path = head[2:].replace("-", "_") if head.startswith("--") else None
+        removed = next((key for key in REMOVED_FLAGS if path and (path == key or path.startswith(f"{key}."))), None)
+        if removed is not None:
+            _warn_once(head, f"{head} has no effect and is ignored: {REMOVED_FLAGS[removed]}.")
+            if not eq:
+                next(tokens, None)
+            continue
+        if path in MOVED_FLAGS:
+            new = f"--{MOVED_FLAGS[path]}"
+            _warn_once(head, f"{head} moved to {new}; the old spelling still works.")
+            aliased.append(f"{new}{eq}{value}")
+            continue
+        aliased.append(token)
+    return aliased
+
+
+_warned: set[str] = set()
+
+
+def _warn_once(key: str, message: str) -> None:
+    from loguru import logger
+
+    if key not in _warned:
+        _warned.add(key)
+        logger.warning(message)
+
+
 def alias_task_flags(argv: list[str], task: str | None = None) -> list[str]:
     """Rewrite ``--<task>.<field>`` flags for the selected task to ``--task.<field>``.
 
-    ``task`` defaults to the ``task:<name>`` selection in ``argv``, then ``sim``. A flag naming a
-    different task is an error.
+    The ``task:<name>`` selection in ``argv`` wins over ``task`` (the config's default task); with
+    neither, flags are left alone. A flag naming a different task is an error.
     """
+    selection = next((t.split(":", 1)[1] for t in argv if t.startswith("task:") and _SUBCOMMAND_TOKEN.match(t)), None)
+    task = selection or task
     if task is None:
-        task = next((t.split(":", 1)[1] for t in argv if t.startswith("task:") and _SUBCOMMAND_TOKEN.match(t)), None)
-    selected = (task or "sim").replace("_", "-")
+        return argv
+    selected = task.replace("_", "-")
     aliased = []
     for token in argv:
         head = token.partition("=")[0]

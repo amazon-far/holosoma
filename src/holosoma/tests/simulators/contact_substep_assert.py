@@ -59,11 +59,15 @@ def _build(simulator: str, num_envs: int, device: str | None = None):
     config = build_run_sim_config(simulator, "empty", ROBOT, TERRAIN)
     config = dataclasses.replace(
         config,
-        device=device or ("cpu" if simulator == "mujoco" else "cuda:0"),
-        training=dataclasses.replace(config.training, num_envs=num_envs, headless=True),
+        run=dataclasses.replace(
+            config.run,
+            device=device or ("cpu" if simulator == "mujoco" else "cuda:0"),
+            num_envs=num_envs,
+            headless=True,
+        ),
     )
 
-    sim, device, _ = launch_simulator(config, device=config.device)
+    sim, device, _ = launch_simulator(config, device=config.run.device)
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()

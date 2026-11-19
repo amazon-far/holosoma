@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import dataclasses
 import os
 from typing import Any, cast
 
 from loguru import logger
 
+import holosoma.config_values.logger
 from holosoma.agents.base_algo.base_algo import BaseAlgo
 from holosoma.config_types.eval_callback import EvalCallbacksConfig
 from holosoma.config_types.experiment import ExperimentConfig
@@ -51,7 +53,7 @@ def _run_eval_session(
     saved_wandb_path: str | None,
     eval_cbs_cfg: EvalCallbacksConfig | None,
 ) -> None:
-    eval_log_dir = get_experiment_dir(tyro_config.logger, tyro_config.training, get_timestamp(), task_name="eval")
+    eval_log_dir = get_experiment_dir(tyro_config.logger, tyro_config.run, get_timestamp(), task_name="eval")
     eval_log_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Saving eval logs to {eval_log_dir}")
@@ -95,7 +97,8 @@ def _run_eval_session(
     exported_policy_name = checkpoint_path.split("/")[-1]  # example: model_5000.pt
     exported_onnx_name = exported_policy_name.replace(".pt", ".onnx")  # example: model_5000.onnx
 
-    if tyro_config.training.export_onnx:
+    task = cast("EvalTaskConfig", tyro_config.task)
+    if task.export_onnx:
         exported_onnx_path = os.path.join(exported_policy_dir_path, exported_onnx_name)
         if not hasattr(algo, "export"):
             raise AttributeError(
@@ -106,7 +109,30 @@ def _run_eval_session(
         logger.info(f"Exported policy as onnx to: {exported_onnx_path}")
 
     algo.evaluate_policy(
-        max_eval_steps=tyro_config.training.max_eval_steps,
+        max_eval_steps=task.max_eval_steps,
+    )
+
+
+def _eval_config(saved: ExperimentConfig) -> ExperimentConfig:
+    """``saved`` with evaluation's defaults: one viewed env, logger off, deterministic spawn, no time limit.
+
+    The command line is parsed on top, so any of these can still be overridden.
+    """
+    spawn = dataclasses.replace(saved.terrain.terrain_term.spawn, randomize_tiles=False, xy_offset_range=0.0)
+    return dataclasses.replace(
+        saved,
+        run=dataclasses.replace(saved.run, device=None, headless=False, num_envs=1),
+        terrain=dataclasses.replace(
+            saved.terrain, terrain_term=dataclasses.replace(saved.terrain.terrain_term, spawn=spawn)
+        ),
+        simulator=dataclasses.replace(
+            saved.simulator,
+            config=dataclasses.replace(
+                saved.simulator.config,
+                sim=dataclasses.replace(saved.simulator.config.sim, max_episode_length_s=100000.0),
+            ),
+        ),
+        logger=holosoma.config_values.logger.disabled,
     )
 
 
@@ -163,7 +189,7 @@ class EvalTask(Task):
         if checkpoint is None:
             raise SystemExit("task:eval needs --eval.checkpoint=<path or wandb:// URI> (or --checkpoint=...).")
         saved_config, saved_wandb_path = load_saved_experiment_config(CheckpointConfig(checkpoint=checkpoint))
-        eval_config = replace_retired_simulator(saved_config.get_eval_config(), tokens)
+        eval_config = replace_retired_simulator(_eval_config(saved_config), tokens)
         config = parse_config(
             ExperimentConfig,
             default=eval_config,

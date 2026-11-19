@@ -87,7 +87,7 @@ class LidarConsumerPlugin:
             for name, config in self.simulator.sensor_config.items()
             if isinstance(config, LidarSensorConfig)
         }
-        num_envs = self.simulator.training_config.num_envs
+        num_envs = self.simulator.run_config.num_envs
         for name, env_id in sorted(self._wanted):
             if name not in lidars:
                 raise ValueError(

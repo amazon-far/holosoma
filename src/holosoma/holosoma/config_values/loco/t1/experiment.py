@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from holosoma.config_types.experiment import ExperimentConfig, NightlyConfig, TrainingConfig
+from holosoma.config_types.experiment import ExperimentConfig, NightlyConfig, RunConfig
 from holosoma.config_values import (
     action,
     algo,
@@ -17,7 +17,7 @@ from holosoma.config_values import (
 
 t1_29dof = ExperimentConfig(
     env_class="holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager",
-    training=TrainingConfig(project="hv-t1-manager", name="t1_29dof_manager"),
+    run=RunConfig(project="hv-t1-manager", name="t1_29dof_manager"),
     algo=replace(algo.ppo, config=replace(algo.ppo.config, num_learning_iterations=25000, use_symmetry=True)),
     simulator=simulator.isaacsim,
     robot=robot.t1_29dof_waist_wrist,
@@ -37,7 +37,7 @@ t1_29dof = ExperimentConfig(
 
 t1_29dof_fast_sac = ExperimentConfig(
     env_class="holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager",
-    training=TrainingConfig(project="hv-t1-manager", name="t1_29dof_fast_sac_manager"),
+    run=RunConfig(project="hv-t1-manager", name="t1_29dof_fast_sac_manager"),
     algo=replace(
         algo.fast_sac, config=replace(algo.fast_sac.config, num_learning_iterations=100000, use_symmetry=True)
     ),

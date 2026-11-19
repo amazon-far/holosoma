@@ -414,7 +414,7 @@ class DistillationBase(BaseAlgo):
         if teacher_loaded is None:
             logger.warning(
                 "Checkpoint predates teacher-readiness metadata. Teacher weights remain "
-                "unverified; provide training.teacher_checkpoint before continuing training."
+                "unverified; provide train.teacher_checkpoint before continuing training."
             )
             teacher_loaded = [False] * self.policy.num_teachers
         self.policy.set_loaded_teachers(teacher_loaded)

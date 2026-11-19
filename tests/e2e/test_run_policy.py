@@ -40,7 +40,7 @@ def run_mini_training(workflow_name: str) -> str:
             # mujoco) keeps this on the GPU, which ClassicBackend cannot do -- it is single-env only.
             "simulator:mjwarp",
             "--algo.config.num-learning-iterations=2",
-            "--training.num-envs=4",
+            "--run.num-envs=4",
             "--logger.video.enabled=False",
         ],
         env=env,

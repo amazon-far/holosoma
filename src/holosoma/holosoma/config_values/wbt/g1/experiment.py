@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from holosoma.config_types.experiment import ExperimentConfig, NightlyConfig, TrainingConfig
+from holosoma.config_types.experiment import ExperimentConfig, NightlyConfig, RunConfig
 from holosoma.config_values import (
     action,
     algo,
@@ -17,7 +17,7 @@ from holosoma.config_values import (
 )
 
 g1_29dof_wbt = ExperimentConfig(
-    training=TrainingConfig(
+    run=RunConfig(
         project="WholeBodyTracking",
         name="g1_29dof_wbt_manager",
         num_envs=4096,
@@ -83,7 +83,7 @@ g1_29dof_wbt = ExperimentConfig(
 )
 
 g1_29dof_wbt_fast_sac = ExperimentConfig(
-    training=TrainingConfig(
+    run=RunConfig(
         project="WholeBodyTracking",
         name="g1_29dof_wbt_fast_sac_manager",
         num_envs=4096,

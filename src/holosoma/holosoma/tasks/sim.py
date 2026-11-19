@@ -22,7 +22,7 @@ def limit_cpu_math_threads(config: ExperimentConfig, device: str | None = None) 
     Classic MuJoCo runs one env on the host, where every tensor is small enough that a machine-sized
     pool costs more per elementwise op in fork/join than the op itself. A no-op for Warp and
     IsaacSim, which keep this work on the GPU, and for the other tasks, which do not route through
-    here. ``device`` is the resolved simulation device; it defaults to ``config.device``.
+    here. ``device`` is the resolved simulation device; it defaults to ``config.run.device``.
     """
     from holosoma.config_types.simulator import MujocoBackend
     from holosoma.utils.safe_torch_import import torch
@@ -33,7 +33,7 @@ def limit_cpu_math_threads(config: ExperimentConfig, device: str | None = None) 
     sim_config = config.simulator.config
     is_classic = sim_config.name == "mujoco" and getattr(sim_config, "mujoco_backend", None) == MujocoBackend.CLASSIC
     if device is None:
-        device = config.device
+        device = config.run.device
     if not is_classic or device is None or not device.startswith("cpu"):
         return
     # Truthiness, not presence: OpenMP and MKL ignore an empty value, so an empty one is not an

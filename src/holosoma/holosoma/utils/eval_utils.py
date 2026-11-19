@@ -126,9 +126,22 @@ def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConf
         if "gravity" in extra and extra["gravity"] != gravity:
             raise ValueError("Saved config has conflicting sim.mujoco.gravity and sim.mujoco.extra.gravity")
         extra["gravity"] = gravity
-    # The workflow that saved the config is not part of what is loaded; the loader picks its own.
+    # The workflow that saved the config is not part of what is loaded; the loader picks its own,
+    # so the task-owned fields saved under `training` (checkpoints, eval settings) go with it.
     data.pop("task", None)
+    data.pop("eval_overrides", None)
+    run = dict(data.get("run", {}))
+    for key, value in data.pop("training", {}).items():
+        if key in _RUN_FIELDS:
+            run.setdefault(key, value)
+    for key in ("device", "time_scale", "viewer_update_decimation", "viewer_dt"):
+        if key in data:
+            run.setdefault(key, data.pop(key))
+    data["run"] = run
     return ExperimentConfig(**data)
+
+
+_RUN_FIELDS = ("num_envs", "headless", "seed", "torch_deterministic", "project", "name")
 
 
 def replace_retired_simulator(eval_cfg: ExperimentConfig, args: list[str]) -> ExperimentConfig:

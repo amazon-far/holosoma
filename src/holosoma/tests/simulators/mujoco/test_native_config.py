@@ -58,7 +58,7 @@ def warp_backend_config(native):
     return FullSimConfig(
         simulator=replace(mjwarp.config, sim=replace(mjwarp.config.sim, fps=100, mujoco=native)),
         robot=run.robot,
-        training=replace(run.training, num_envs=2),
+        run=replace(run.run, num_envs=2),
         logger=run.logger,
         plugin={},
     )

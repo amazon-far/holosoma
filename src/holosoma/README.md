@@ -26,7 +26,7 @@ python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
     simulator:isaacsim \
     logger:wandb \
-    --training.seed 1
+    --run.seed 1
 
 # T1 with PPO on IsaacSim
 source scripts/source_isaacsim_setup.sh
@@ -34,7 +34,7 @@ python src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof \
     simulator:isaacsim \
     logger:wandb \
-    --training.seed 1
+    --run.seed 1
 ```
 
 Once checkpoints are saved, you can evaluate policies using [In-Training Evaluation](#in-training-evaluation) (same simulator as training) or cross-simulator evaluation in MuJoCo (see [holosoma_inference](../holosoma_inference/README.md)).
@@ -78,7 +78,7 @@ python src/holosoma/holosoma/train_agent.py \
 
 > **Note:**
 > - MJWarp allocates an average of 96 contacts per environment in a shared pool by default. Adjust it with `--simulator.config.sim.mujoco.warp.nconmax-per-env=128`; the constraint capacity has a separate per-environment limit.
-> - These examples use `--training.num-envs=4096`, but you may need to adjust this value based on your hardware.
+> - These examples use `--run.num-envs=4096`, but you may need to adjust this value based on your hardware.
 > - When training with PPO on mixed terrain, use `--terrain.terrain-term.scale-factor=0.5` to avoid training instabilities. This applies to G1 as well as T1: at full scale the policy's action distribution goes non-finite within the first few rollouts and training aborts on a device-side assert.
 > - T1 on MJWarp does not currently train, with or without the halved terrain scale. PPO aborts as above, and FastSAC runs roughly 25x slower than the same configuration on G1, which makes a full training run impractical. Only the G1 configurations are covered by the nightly.
 
@@ -114,8 +114,8 @@ python src/holosoma/holosoma/train_agent.py \
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/replay.py \
     exp:g1-29dof-wbt \
-    --training.headless=False \
-    --training.num_envs=1
+    --run.headless=False \
+    --run.num_envs=1
 ```
 
 Once checkpoints are saved, you can evaluate policies using [In-Training Evaluation](#in-training-evaluation) (same simulator as training) or cross-simulator evaluation in MuJoCo (see [holosoma_inference](../holosoma_inference/README.md)).
@@ -143,7 +143,7 @@ python src/holosoma/holosoma/eval_agent.py \
 This evaluation mode:
 - Automatically loads the training configuration from the checkpoint
 - Runs evaluation in the same simulator and environment as training
-- Can export policies to ONNX format (via `--training.export_onnx=True`)
+- Can export policies to ONNX format (via `--eval.export_onnx=True`)
 - For locomotion evaluation, supports interactive velocity commands via keyboard (when simulator window is active):
   - `w`/`a`/`s`/`d`: linear velocity commands
   - `q`/`e`: angular velocity commands
@@ -170,7 +170,7 @@ source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof \
     simulator:isaacsim \
-    --training.seed 1 \
+    --run.seed 1 \
     --algo.config.use-symmetry=False \
     logger:wandb \
     --logger.project locomotion-g1-29dof-ppo \
@@ -218,7 +218,7 @@ source scripts/source_isaacsim_setup.sh
 torchrun --nproc_per_node=4 src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof-fast-sac \
     simulator:isaacsim \
-    --training.num-envs 16384  # global/total number of environments
+    --run.num-envs 16384  # global/total number of environments
 ```
 
 ### Custom Reward Weights

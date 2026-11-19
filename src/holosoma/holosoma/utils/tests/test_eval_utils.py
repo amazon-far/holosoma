@@ -15,6 +15,7 @@ from omegaconf import OmegaConf
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
+from holosoma.tasks.eval import _eval_config
 from holosoma.utils.config_registry import parse_config
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.eval_utils import (
@@ -279,7 +280,7 @@ def test_historical_saved_configs_transition_warp_capacities(
     assert loaded.simulator.config.mujoco_backend == cfg.simulator.config.mujoco_backend
     assert loaded.simulator.config.sim.mujoco.warp == MujocoWarpConfig(nconmax_per_env=128, njmax_per_env=900)
     assert loaded.robot == cfg.robot
-    assert loaded.training == cfg.training
+    assert loaded.run == cfg.run
     assert loaded.plugin == {}
     assert "mujoco_warp" not in loaded.to_serializable_dict()["simulator"]["config"]
 
@@ -618,7 +619,7 @@ def test_scene_object_physics_drops_only_the_isaacgym_block() -> None:
 def test_saved_isaacgym_simulator_reports_unsupported_without_override(tmp_path: Path) -> None:
     saved_cfg = _load_through("checkpoint", _previous_schema("g1_29dof_isaacgym"), tmp_path)
 
-    eval_cfg = replace_retired_simulator(saved_cfg.get_eval_config(), [])
+    eval_cfg = replace_retired_simulator(_eval_config(saved_cfg), [])
 
     with pytest.raises(ValueError, match="Isaac Gym simulator is no longer supported"):
         set_simulator_type(eval_cfg.simulator)
@@ -632,7 +633,30 @@ def test_saved_isaacgym_simulator_can_be_overridden_on_the_cli(backend: str, tmp
     args = [f"simulator:{backend}"]
 
     eval_cfg = parse_config(
-        ExperimentConfig, default=replace_retired_simulator(saved_cfg.get_eval_config(), args), args=args
+        ExperimentConfig, default=replace_retired_simulator(_eval_config(saved_cfg), args), args=args
     )
 
     assert eval_cfg.simulator == SIMULATOR_REGISTRY[backend]
+
+
+def test_saved_config_with_the_old_training_block_loads(tmp_path: Path) -> None:
+    from holosoma.config_values import experiment
+
+    current = replace(
+        experiment.g1_29dof, run=replace(experiment.g1_29dof.run, num_envs=7, project="p", time_scale=0.5)
+    )
+    data = current.to_serializable_dict()
+    run = data.pop("run")
+    data.pop("task")
+    data["training"] = {
+        **{key: run[key] for key in ("num_envs", "headless", "seed", "torch_deterministic", "project", "name")},
+        "checkpoint": "/runs/old.pt",
+        "max_eval_steps": 10,
+    }
+    data.update(device=run["device"], time_scale=run["time_scale"], viewer_update_decimation="<60Hz")
+    data["eval_overrides"] = {"num_envs": 1}
+    checkpoint = tmp_path / "model.pt"
+    torch.save({"experiment_config": data}, checkpoint)
+
+    loaded, _ = load_saved_experiment_config(CheckpointConfig(checkpoint=str(checkpoint)))
+    assert loaded == current

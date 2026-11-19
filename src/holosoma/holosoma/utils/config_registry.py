@@ -227,7 +227,12 @@ def parse_config(
     Returns:
         The parsed config instance.
     """
-    from holosoma.utils.config_document import ConfigDocumentError, alias_task_flags, expand_config_args
+    from holosoma.utils.config_document import (
+        ConfigDocumentError,
+        alias_legacy_flags,
+        alias_task_flags,
+        expand_config_args,
+    )
     from holosoma.utils.tyro_utils import (
         TYRO_CONIFG,
         dynamic_dict_decl_pattern,
@@ -248,7 +253,14 @@ def parse_config(
     config_type = _resolve_config(config)
     provenance: dict[str, str] = {}
     try:
-        argv = alias_task_flags(expand_config_args(argv, frozenset(_root_subcommands(config_type)), provenance))
+        expanded = expand_config_args(argv, frozenset(_root_subcommands(config_type)), provenance)
+        task = next((t.split(":", 1)[1] for t in expanded if t.startswith("task:")), None) or _default_task(config_type)
+        argv = alias_task_flags(alias_legacy_flags(expanded), task)
+        provenance = {
+            alias_task_flags(renamed, task)[0]: source
+            for token, source in provenance.items()
+            if (renamed := alias_legacy_flags([token]))
+        }
     except ConfigDocumentError as exc:
         raise SystemExit(str(exc)) from exc
     if print_args:
@@ -309,6 +321,20 @@ def _cli_with_provenance(config_type: Any, kwargs: dict[str, Any], provenance: d
 def _normalize_cli_text(text: str) -> str:
     """Fold tyro's hyphen/underscore spellings and its box-drawing line wraps for matching."""
     return "".join(text.replace("_", "-").split()).replace("│", "")
+
+
+def _default_task(config_type: Any) -> str | None:
+    """Registry name of ``config_type``'s default ``task``, or ``None`` if it has no task field."""
+    from holosoma.config_values.task import TASK_REGISTRY
+    from holosoma.utils.tyro_utils import _strip_annotated
+
+    base = _strip_annotated(config_type)
+    if not dataclasses.is_dataclass(base):
+        return None
+    field = next((f for f in dataclasses.fields(base) if f.name == "task"), None)
+    if field is None:
+        return None
+    return next((name for name, preset in TASK_REGISTRY.items() if preset == field.default), None)
 
 
 def _reject_legacy_mujoco_cli(argv: list[str]) -> None:

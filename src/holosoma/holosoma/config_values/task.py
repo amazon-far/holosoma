@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from holosoma.config_types.task import EvalTaskConfig, TaskConfig
+from holosoma.config_types.task import EvalTaskConfig, TaskConfig, TrainTaskConfig
 from holosoma.utils.config_registry import ConfigRegistry
 
 TASK_REGISTRY = ConfigRegistry(TaskConfig, group="holosoma.config.task")
@@ -13,7 +13,7 @@ sim = TASK_REGISTRY.add(
 )
 train = TASK_REGISTRY.add(
     "train",
-    TaskConfig(_target_="holosoma.tasks.train.TrainTask", env_base="holosoma.envs.policy_task.PolicyTask"),
+    TrainTaskConfig(_target_="holosoma.tasks.train.TrainTask", env_base="holosoma.envs.policy_task.PolicyTask"),
 )
 evaluate = TASK_REGISTRY.add(
     "eval",

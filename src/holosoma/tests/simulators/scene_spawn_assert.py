@@ -213,14 +213,13 @@ def main() -> int:
             scene=dataclasses.replace(config.scene, lights=rig),
         )
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
-    # num_envs must be set on the training config too: backends size their per-env state
-    # tensors (Warp qpos/qvel, IsaacSim buffers) from training_config.num_envs at
+    # num_envs must be set on the run config too: backends size their per-env state
+    # tensors (Warp qpos/qvel, IsaacSim buffers) from run_config.num_envs at
     # setup()/load_assets(), before create_envs(n,...) runs. Passing n only to create_envs
     # leaves the tensors sized for 1 env and indexing env 1..n-1 is out of bounds.
     config = dataclasses.replace(
         config,
-        device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs),
     )
 
     sim, device, _app = launch_simulator(config, device=device)

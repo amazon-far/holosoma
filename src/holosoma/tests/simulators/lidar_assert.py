@@ -696,8 +696,7 @@ def main() -> int:
     device = "cpu" if args.simulator == "mujoco" else "cuda:0"
     config = dataclasses.replace(
         config,
-        device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs),
     )
 
     if args.simulator == "isaacsim":

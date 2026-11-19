@@ -22,6 +22,7 @@ _CHILD = textwrap.dedent(
 
     import holosoma.tasks.sim as runner
     from holosoma.config_types import env as env_types
+    from holosoma.config_types.experiment import RunConfig
     from holosoma.config_values.simulator import SIMULATOR_REGISTRY
     from holosoma.envs.simulation_task import SimulationTask
     from holosoma.simulator import session
@@ -47,7 +48,7 @@ _CHILD = textwrap.dedent(
     session.resolve_simulation_device = lambda *_args: "cpu"
     session.get_simulator_type = lambda: SimulatorType.MUJOCO
     session.get_class = lambda _target: Task
-    env_config = EnvConfigStub(env_class="test.Task", training=SimpleNamespace(headless=True))
+    env_config = EnvConfigStub(env_class="test.Task", run=RunConfig(headless=True))
     env_types.get_tyro_env_config = lambda _config: env_config
     config = SimpleNamespace(
         device="cpu",

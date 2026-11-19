@@ -84,7 +84,7 @@ class _FakeSimulator:
         self.sensor_config = sensors_config
         sim = _FakeSimEngineCfg
         self.sensor_manager = _FakeSensorManager(sensors_config, sim.fps / sim.control_decimation_steps)
-        self.training_config = _FakeTrainingConfig(num_envs)
+        self.run_config = _FakeTrainingConfig(num_envs)
         self.headless = True
         self.simulator_config = _FakeSimulatorConfig()
         self._frames = frames

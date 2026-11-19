@@ -5,8 +5,7 @@ from pydantic.dataclasses import dataclass
 from holosoma.config_types.action import ActionManagerCfg
 from holosoma.config_types.command import CommandManagerCfg
 from holosoma.config_types.curriculum import CurriculumManagerCfg
-from holosoma.config_types.experiment import ExperimentConfig, TrainingConfig
-from holosoma.config_types.frequency import DecimationLike
+from holosoma.config_types.experiment import ExperimentConfig, RunConfig
 from holosoma.config_types.logger import LoggerConfig
 from holosoma.config_types.observation import ObservationManagerCfg
 from holosoma.config_types.plugin import PluginConfig
@@ -38,21 +37,11 @@ class EnvConfig:
     command: CommandManagerCfg | None
     curriculum: CurriculumManagerCfg | None
     robot: RobotConfig
-    training: TrainingConfig
+    run: RunConfig
     logger: LoggerConfig
     plugin: dict[str, PluginConfig]
     """Plugins to install on the simulator (key -> resolved PluginConfig), including the
     ROS2/viz/video egress sinks. Installed after the concrete simulator backend is ready."""
-
-    device: str | None = None
-    """Requested device. ``None`` resolves from the simulator backend and process rank."""
-
-    time_scale: float = 0.0
-    """Sim-time to real-time ratio for physics-step pacing. ``0`` disables pacing."""
-
-    viewer_update_decimation: DecimationLike = "<60Hz"
-    """Viewer render rate: a physics-step decimation, or a frequency string resolved against the
-    physics rate."""
 
 
 def _validate_cameras(sensors: dict[str, SensorConfig]) -> None:
@@ -75,7 +64,7 @@ def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
     _validate_cameras(tyro_config.sensor)
     return EnvConfig(
         env_class=tyro_config.env_class,
-        training=tyro_config.training,
+        run=tyro_config.run,
         simulator=tyro_config.simulator,
         scene=tyro_config.scene,
         # The CLI declares sensors per-key in the dynamic ``sensor`` dict (key = sensor name).
@@ -91,7 +80,4 @@ def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
         curriculum=tyro_config.curriculum,
         robot=tyro_config.robot,
         logger=tyro_config.logger,
-        device=tyro_config.device,
-        time_scale=tyro_config.time_scale,
-        viewer_update_decimation=tyro_config.viewer_update_decimation,
     )

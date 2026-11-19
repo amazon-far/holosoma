@@ -95,7 +95,7 @@ def assert_training_and_eval_workflow(
         f"exp:{workflow_name}",
         "terrain:terrain-locomotion-plane",
         "--algo.config.num-learning-iterations=2",
-        "--training.num-envs=128",
+        "--run.num-envs=128",
         "--logger.video.enabled=False",
     ]
     train_cmd.extend(extra_config or [])
@@ -120,8 +120,8 @@ def assert_training_and_eval_workflow(
         sys.executable,
         f"{REPO_ROOT}/src/holosoma/holosoma/eval_agent.py",
         f"--checkpoint={checkpoint_path}",
-        "--training.headless=True",
-        "--training.max-eval-steps=4",
+        "--run.headless=True",
+        "--eval.max-eval-steps=4",
     ]
     print("Eval command: ", subprocess.list2cmdline(eval_cmd))
     subprocess.check_call(eval_cmd)

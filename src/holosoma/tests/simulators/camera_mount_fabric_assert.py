@@ -81,9 +81,7 @@ def main() -> int:
     args = parser.parse_args()
 
     config = build_run_sim_config("isaacsim", "empty", args.robot, args.terrain, sensors=_cameras())
-    config = dataclasses.replace(
-        config, device="cuda:0", training=dataclasses.replace(config.training, num_envs=args.num_envs)
-    )
+    config = dataclasses.replace(config, run=dataclasses.replace(config.run, device="cuda:0", num_envs=args.num_envs))
     sim, device, _app = launch_simulator(config, device="cuda:0")
     sim.set_headless(True)
     sim.setup()

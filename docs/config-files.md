@@ -32,7 +32,7 @@ arguments:
   sensor:                        # <family>.<key>:<preset>
     scan: g1-pelvis-lidar
   overrides:                     # --<dotted.path>=<value>
-    training.headless: true
+    run.headless: true
     robot.init_state.pos: [0.0, 0.0, 0.8]
     sensor.scan:                 # nested mappings expand to one flag per leaf
       update_decimation: 10Hz
@@ -47,16 +47,16 @@ passed as `@holosoma/examples/configs/<name>.yaml`; copy one as a starting point
 ```bash
 # Simulate
 holosoma --config @holosoma/examples/configs/g1_lidar.yaml
-holosoma --config @holosoma/examples/configs/g1_lidar.yaml terrain:terrain-locomotion-mix --training.seed 7
+holosoma --config @holosoma/examples/configs/g1_lidar.yaml terrain:terrain-locomotion-mix --run.seed 7
 
 # Train; the document sets `task: train` and selects the experiment with `exp:`
 holosoma --config @holosoma/examples/configs/g1_locomotion_train.yaml
 holosoma --config @holosoma/examples/configs/g1_locomotion_train.yaml \
-    simulator:mjwarp --training.num_envs 1024
+    simulator:mjwarp --run.num_envs 1024
 
 # Evaluate; the checkpoint supplies the experiment and the document overrides it
 holosoma --config eval.yaml
-holosoma task:eval --eval.checkpoint=<CHECKPOINT_PATH> --training.num_envs 1
+holosoma task:eval --eval.checkpoint=<CHECKPOINT_PATH> --run.num_envs 1
 
 # Print the equivalent command line instead of running it
 holosoma --config eval.yaml --print-args
@@ -72,9 +72,9 @@ task: eval
 arguments:
   overrides:
     eval.checkpoint: <CHECKPOINT_PATH>   # the eval task's own field: --eval.checkpoint
-    training.num_envs: 1
-    training.max_eval_steps: 1000
-    training.export_onnx: true
+    run.num_envs: 1
+    eval.max_eval_steps: 1000
+    eval.export_onnx: true
 ```
 
 ```yaml
@@ -85,9 +85,28 @@ arguments:
   exp: g1-29dof-wbt
   simulator: isaacsim
   overrides:
-    training.num_envs: 1
-    training.headless: false
+    run.num_envs: 1
+    run.headless: false
 ```
+
+## Run and task settings
+
+`run` holds what every task reads the same way; each task owns the rest:
+
+| Block | Fields |
+|---|---|
+| `run` | `num_envs`, `headless`, `seed`, `torch_deterministic`, `device`, `time_scale`, `viewer_update_decimation`, `project`, `name` |
+| `train` | `resume_from`, `teacher_checkpoint`, `multigpu` |
+| `eval` | `checkpoint`, `max_eval_steps`, `export_onnx`, `callbacks` |
+
+Settings that used to live under `training` still work under their old spelling, with a warning
+naming the new one: `training.{num_envs, headless, seed, torch_deterministic, project, name}` and
+top-level `device`, `time_scale` and `viewer_*` → `run.*`; `training.checkpoint` →
+`train.resume_from`; `training.{teacher_checkpoint, multigpu}` → `train.*`;
+`training.{max_eval_steps, export_onnx}` → `eval.*`. Checkpoints saved with the old layout load
+unchanged. `eval_overrides.*` is ignored with a warning: eval applies its defaults (one viewed
+env, logger off, deterministic spawn) to the checkpoint's config before the command line, so set
+the field itself instead.
 
 ## Rules
 

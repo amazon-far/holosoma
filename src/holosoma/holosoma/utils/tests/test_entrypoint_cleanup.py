@@ -13,6 +13,7 @@ import pytest
 import holosoma.tasks.eval as eval_agent
 import holosoma.tasks.replay as replay_module
 import holosoma.tasks.train as train_agent
+from holosoma.config_types.experiment import RunConfig
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.simulator import session
 from holosoma.utils import experiment_paths
@@ -67,7 +68,7 @@ def _patch_session(monkeypatch: pytest.MonkeyPatch, env: _Environment, app: obje
     monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.ISAACSIM)
     monkeypatch.setattr(session, "setup_isaaclab_launcher", launch)
     monkeypatch.setattr(session, "get_class", lambda _target: _Task)
-    env_config = EnvConfigStub(env_class="test.Task", training=SimpleNamespace(headless=True))
+    env_config = EnvConfigStub(env_class="test.Task", run=RunConfig(headless=True))
     return SimpleNamespace(create_task=lambda: session.task_session(env_config, BaseTask))  # type: ignore[arg-type]
 
 
@@ -99,7 +100,8 @@ def test_eval_interrupt_closes_environment_before_app(
 
     config = _patch_session(monkeypatch, env, app)
     config.logger = object()
-    config.training = SimpleNamespace(export_onnx=False, max_eval_steps=5)
+    config.run = SimpleNamespace()
+    config.task = SimpleNamespace(export_onnx=False, max_eval_steps=5)
     config.algo = SimpleNamespace(_target_="test.Algo", config=object())
     config.save_config = MagicMock()
     checkpoint_cfg = SimpleNamespace(checkpoint="model.pt")
@@ -160,13 +162,8 @@ def test_training_interrupt_closes_environment_before_app(
 
     config = _patch_session(monkeypatch, env, app)
     config.logger = SimpleNamespace(type="local")
-    config.training = SimpleNamespace(
-        project=None,
-        name=None,
-        checkpoint=None,
-        teacher_checkpoint=None,
-        num_envs=1,
-    )
+    config.run = SimpleNamespace(project=None, name=None, num_envs=1)
+    config.task = SimpleNamespace(resume_from=None, teacher_checkpoint=None)
     config.robot = SimpleNamespace(asset=SimpleNamespace(robot_type="test"))
     config.algo = SimpleNamespace(_target_="test.Algo", config=object())
     config.save_config = MagicMock()

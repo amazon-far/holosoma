@@ -62,7 +62,7 @@ python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
     simulator:isaacsim \
     logger:wandb \
-    --training.seed 1
+    --run.seed 1
 ```
 
 > **Note:** For headless servers, see the [training guide](src/holosoma/README.md#video-recording) for video recording configuration.

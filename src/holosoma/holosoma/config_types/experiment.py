@@ -8,6 +8,7 @@ from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import yaml
+from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
 import holosoma.config_values.action
@@ -40,7 +41,7 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import SensorConfig
 from holosoma.config_types.simulator import SimulatorConfig
-from holosoma.config_types.task import TaskConfig
+from holosoma.config_types.task import TaskConfigType
 from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.config_types.terrain import TerrainManagerCfg
 from holosoma.utils.config_registry import UseRegistry
@@ -62,80 +63,30 @@ class NightlyConfig:
 
 
 @dataclass(frozen=True)
-class TrainingConfig:
-    """Configuration for training execution and evaluation."""
+class RunConfig:
+    """Settings every task reads the same way: the environments it builds and how they run."""
 
-    # Simulation settings
-    headless: bool = True
-    """Run simulation without rendering."""
-
-    torch_deterministic: bool = False
-    """Enable PyTorch deterministic mode."""
-
-    multigpu: bool = False
-    """Enable multi-GPU training."""
-
-    # Environment settings
     num_envs: int = 4096
     """Number of parallel environments."""
+
+    headless: bool = True
+    """Run simulation without rendering."""
 
     seed: int = 42
     """Random seed for reproducibility."""
 
-    # Checkpoint settings
-    checkpoint: str | None = None
-    """Path to checkpoint for resuming training."""
-
-    teacher_checkpoint: str | None = None
-    """Optional path to a teacher-only checkpoint, loaded into the student-teacher
-    policy's teacher branch after env+algo setup. Orthogonal to ``checkpoint``:
-    ``checkpoint`` resumes full algo state (for distillation this includes student,
-    critic, optimizer, storage); ``teacher_checkpoint`` only populates the frozen
-    teacher MLP from a trained PPO-actor checkpoint."""
-
-    # Logging settings
-    project: str = "default_project"
-    """Project name for logging. `logger.project` takes precedence if set."""
-
-    name: str = "run"
-    """Run name for logging. `logger.name` takes precedence if set."""
-
-    # Evaluation settings
-    max_eval_steps: int | None = None
-    """Maximum number of evaluation steps (None for unlimited)."""
-
-    export_onnx: bool = True
-    """Export policy as ONNX model."""
-
-
-@dataclass(frozen=True)
-class EvalOverridesConfig:
-    headless: bool = False
-    num_envs: int = 1
-    disable_logger: bool = True
-    max_episode_length_s: float = 100000.0
-    randomize_tiles: bool = False
-    """Use deterministic spawn at tile (0,0) for reproducible evaluation."""
-    xy_offset_range: float = 0.0
-    """Disable XY offset for deterministic spawn position."""
-
-
-@dataclass(frozen=True)
-class ExperimentConfig:
-    """Top-level configuration for every workflow; ``task`` selects the workflow."""
-
-    task: Annotated[TaskConfig, UseRegistry(holosoma.config_values.task.TASK_REGISTRY)] = (
-        holosoma.config_values.task.train
-    )
-    """Workflow to run (``task:<name>``); ``env_class`` is the environment it builds."""
-
-    env_class: str = "holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager"
+    torch_deterministic: bool = False
+    """Enable PyTorch deterministic mode."""
 
     device: str | None = None
     """Device for the task. None (the default) resolves from the simulator backend: cuda:0 for
     MuJoCo Warp, cuda:0 for IsaacSim when CUDA is available (else cpu), cpu for classic MuJoCo,
     and the process rank's GPU when distributed. Pass e.g. "cuda:0" to override. Not carried into
     eval."""
+
+    time_scale: float = 0.0
+    """Sim-time to real-time ratio for the control loop: 1 paces sim time to match real time, 2 runs
+    twice as fast, 0 disables pacing entirely (run as fast as possible)."""
 
     viewer_update_decimation: DecimationLike = "<60Hz"
     """Viewer render rate: a physics-step decimation, or a frequency string resolved against the
@@ -145,11 +96,44 @@ class ExperimentConfig:
     """Deprecated, removed after 2027-03-01: use ``viewer_update_decimation``. Converted to
     ``">{1 / viewer_dt}Hz"``, the same decimation it gave before."""
 
-    time_scale: float = 0.0
-    """Sim-time to real-time ratio for the control loop: 1 paces sim time to match real time, 2 runs
-    twice as fast, 0 disables pacing entirely (run as fast as possible)."""
+    project: str = "default_project"
+    """Project the run's logs and checkpoints are filed under. `logger.project` takes precedence if set."""
 
-    training: TrainingConfig = TrainingConfig()
+    name: str = "run"
+    """Name the run's logs and checkpoints are filed under. `logger.name` takes precedence if set."""
+
+    def __post_init__(self) -> None:
+        if self.time_scale < 0:
+            raise ValueError(f"run.time_scale must be >= 0, got {self.time_scale}.")
+        if self.viewer_dt is not None:
+            if self.viewer_dt <= 0:
+                raise ValueError(f"run.viewer_dt must be > 0, got {self.viewer_dt}.")
+            warnings.warn(
+                "run.viewer_dt is deprecated; use run.viewer_update_decimation. It will be removed "
+                f"after {_VIEWER_DT_REMOVAL_DATE}.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            object.__setattr__(self, "viewer_update_decimation", f">{1 / self.viewer_dt!r}Hz")
+            object.__setattr__(self, "viewer_dt", None)
+        validate_decimation_like(self.viewer_update_decimation, field="run.viewer_update_decimation")
+
+
+# Unknown fields are rejected, so code still passing a moved or removed field fails loudly.
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class ExperimentConfig:
+    """Top-level configuration for every workflow; ``task`` selects the workflow."""
+
+    task: Annotated[TaskConfigType, UseRegistry(holosoma.config_values.task.TASK_REGISTRY)] = (
+        holosoma.config_values.task.train
+    )
+    """Workflow to run (``task:<name>``); ``env_class`` is the environment it builds."""
+
+    env_class: str = "holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager"
+
+    run: RunConfig = RunConfig()
+    """Settings every task reads the same way."""
+
     algo: Annotated[AlgoConfig, UseRegistry(holosoma.config_values.algo.ALGO_REGISTRY)] = (
         holosoma.config_values.algo.ppo
     )
@@ -202,25 +186,6 @@ class ExperimentConfig:
     )
     nightly: NightlyConfig | None = None
 
-    eval_overrides: EvalOverridesConfig = EvalOverridesConfig()
-
-    def __post_init__(self) -> None:
-        name = type(self).__name__
-        if self.time_scale < 0:
-            raise ValueError(f"{name}.time_scale must be >= 0, got {self.time_scale}.")
-        if self.viewer_dt is not None:
-            if self.viewer_dt <= 0:
-                raise ValueError(f"{name}.viewer_dt must be > 0, got {self.viewer_dt}.")
-            warnings.warn(
-                f"{name}.viewer_dt is deprecated; use viewer_update_decimation. It will be removed "
-                f"after {_VIEWER_DT_REMOVAL_DATE}.",
-                FutureWarning,
-                stacklevel=3,
-            )
-            object.__setattr__(self, "viewer_update_decimation", f">{1 / self.viewer_dt!r}Hz")
-            object.__setattr__(self, "viewer_dt", None)
-        validate_decimation_like(self.viewer_update_decimation, field=f"{name}.viewer_update_decimation")
-
     def get_nightly_config(self) -> ExperimentConfig:
         if self.nightly is None:
             raise ValueError("nightly config is missing.")
@@ -234,42 +199,6 @@ class ExperimentConfig:
                     num_learning_iterations=self.nightly.iterations,
                 ),
             ),
-        )
-
-    def get_eval_config(self) -> ExperimentConfig:
-        # Create eval spawn config with overrides
-        eval_spawn_cfg = dataclasses.replace(
-            self.terrain.terrain_term.spawn,
-            randomize_tiles=self.eval_overrides.randomize_tiles,
-            xy_offset_range=self.eval_overrides.xy_offset_range,
-        )
-
-        return dataclasses.replace(
-            self,
-            device=None,
-            terrain=dataclasses.replace(
-                self.terrain,
-                terrain_term=dataclasses.replace(
-                    self.terrain.terrain_term,
-                    spawn=eval_spawn_cfg,
-                ),
-            ),
-            simulator=dataclasses.replace(
-                self.simulator,
-                config=dataclasses.replace(
-                    self.simulator.config,
-                    sim=dataclasses.replace(
-                        self.simulator.config.sim,
-                        max_episode_length_s=self.eval_overrides.max_episode_length_s,
-                    ),
-                ),
-            ),
-            training=dataclasses.replace(
-                self.training,
-                headless=self.eval_overrides.headless,
-                num_envs=self.eval_overrides.num_envs,
-            ),
-            logger=holosoma.config_values.logger.disabled if self.eval_overrides.disable_logger else self.logger,
         )
 
     def create_task(self) -> AbstractContextManager[BaseTask]:

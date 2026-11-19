@@ -59,9 +59,9 @@ class FrameWriterPlugin(CameraConsumerPlugin):
             name: sensor for name, sensor in simulator.sensor_config.items() if isinstance(sensor, CameraSensorConfig)
         }
         cam_names = config.cameras if config.cameras is not None else list(cams_by_name)
-        # training_config.num_envs, not simulator.num_envs: the latter is not yet populated when
+        # run_config.num_envs, not simulator.num_envs: the latter is not yet populated when
         # IsaacSim constructs plugins during scene setup (same reason as the base validation).
-        env_ids = config.env_ids if config.env_ids is not None else list(range(simulator.training_config.num_envs))
+        env_ids = config.env_ids if config.env_ids is not None else list(range(simulator.run_config.num_envs))
         self._streams: set[StreamKey] = set()
         for name in cam_names:
             cam_mods = list(cams_by_name[name].data_types)

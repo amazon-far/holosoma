@@ -65,9 +65,8 @@ def _build(simulator: str, num_envs: int, plugin=None, kinematic: bool = False):
     config = dataclasses.replace(
         config,
         simulator=sim_cfg,
-        device=device,
         plugin=plugin or {},
-        training=dataclasses.replace(config.training, num_envs=num_envs),
+        run=dataclasses.replace(config.run, device=device, num_envs=num_envs),
     )
     sim, device, _ = launch_simulator(config, device=device)
     sim.set_headless(True)

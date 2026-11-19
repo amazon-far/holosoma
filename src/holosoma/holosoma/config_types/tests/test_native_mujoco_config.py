@@ -161,7 +161,7 @@ def test_cli_timestep_override_fails_during_config_parsing(path: str, capsys: py
         ({"warp": {"naconmax": -1}}, "naconmax"),
         ({"warp": {"graph_conditional": 0}}, "graph_conditional"),
         ({"warp": {"extras": {"nconmax": 10}}}, "nconmax_per_env"),
-        ({"warp": {"extras": {"nworld": 4}}}, "training.num_envs"),
+        ({"warp": {"extras": {"nworld": 4}}}, "run.num_envs"),
         ({"warp": {"extras": {"graph_conditional": False}}}, "explicit"),
         ({"warp": {"extras": {"option.graph_conditional": False}}}, "without prefixes"),
         ({"warp": {"extras": {"data.naconmax": 300}}}, "without prefixes"),

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from holosoma.config_types.experiment import TrainingConfig
+    from holosoma.config_types.experiment import RunConfig
     from holosoma.config_types.logger import LoggerConfig
 
 
@@ -18,7 +18,7 @@ def get_timestamp() -> str:
 
 def get_experiment_dir(
     logger_config: LoggerConfig,
-    training_config: TrainingConfig,
+    run_config: RunConfig,
     timestamp: str | None = None,
     task_name: str = "locomotion",
 ) -> Path:
@@ -28,7 +28,7 @@ def get_experiment_dir(
     ----------
     logger_config : LoggerConfig
         Logger configuration (WandbLoggerConfig or DisabledLoggerConfig)
-    training_config : TrainingConfig
+    run_config : RunConfig
         Training configuration with project/name
     timestamp : str | None
         Timestamp string. If None, generates a new one.
@@ -51,8 +51,8 @@ def get_experiment_dir(
     base_dir = Path(logger_config.base_dir)
 
     # Fallback chain: training config → logger config → default
-    project = training_config.project or getattr(logger_config, "project", None) or "default_project"
-    name = training_config.name or getattr(logger_config, "name", None) or "run"
+    project = run_config.project or getattr(logger_config, "project", None) or "default_project"
+    name = run_config.name or getattr(logger_config, "name", None) or "run"
 
     # Build structured path if we have any project/name info
     if project or name:
@@ -96,16 +96,14 @@ def get_video_dir(experiment_dir: Path) -> Path:
     return experiment_dir / "renderings_training"
 
 
-def get_eval_log_dir(
-    logger_config: LoggerConfig, training_config: TrainingConfig, eval_timestamp: str | None = None
-) -> Path:
+def get_eval_log_dir(logger_config: LoggerConfig, run_config: RunConfig, eval_timestamp: str | None = None) -> Path:
     """Compute evaluation log directory from logger and training config.
 
     Parameters
     ----------
     logger_config : LoggerConfig
         Logger configuration
-    training_config : TrainingConfig
+    run_config : RunConfig
         Training configuration with project name
     eval_timestamp : str | None
         Evaluation timestamp. If None, generates a new one.
@@ -121,7 +119,7 @@ def get_eval_log_dir(
     base_dir = Path(logger_config.base_dir).parent / "logs_eval"
 
     # Use training config for project, with fallback to logger config
-    project: str | None = training_config.project
+    project: str | None = run_config.project
     if not project and hasattr(logger_config, "project"):
         project = logger_config.project
 

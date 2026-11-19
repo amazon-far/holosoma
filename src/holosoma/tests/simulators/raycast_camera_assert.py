@@ -312,9 +312,7 @@ def main() -> int:
         objects = dict(config.scene.rigid_objects)
         objects["target"] = dataclasses.replace(objects["target"], fixed=False)
         config = dataclasses.replace(config, scene=dataclasses.replace(config.scene, rigid_objects=objects))
-    config = dataclasses.replace(
-        config, device="cuda:0", training=dataclasses.replace(config.training, num_envs=_NUM_ENVS)
-    )
+    config = dataclasses.replace(config, run=dataclasses.replace(config.run, device="cuda:0", num_envs=_NUM_ENVS))
     sim, device, _app = launch_simulator(config, device="cuda:0")
     sim.set_headless(True)
     sim.setup()

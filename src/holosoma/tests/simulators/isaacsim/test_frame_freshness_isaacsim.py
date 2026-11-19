@@ -49,9 +49,7 @@ def _config(device: str):
     )
     return dataclasses.replace(
         config,
-        device=device,
-        time_scale=0.0,
-        training=dataclasses.replace(config.training, num_envs=1, headless=True),
+        run=dataclasses.replace(config.run, device=device, time_scale=0.0, num_envs=1, headless=True),
     )
 
 

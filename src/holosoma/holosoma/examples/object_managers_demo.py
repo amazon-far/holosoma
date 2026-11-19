@@ -182,10 +182,14 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> Experimen
         scene=scene_values.object_managers_demo,
         observation=observation,
         randomization=randomization,
-        training=dataclasses.replace(
-            base.training, num_envs=num_envs, headless=headless, seed=0, torch_deterministic=False
+        run=dataclasses.replace(
+            base.run,
+            num_envs=num_envs,
+            headless=headless,
+            seed=0,
+            torch_deterministic=False,
+            device=_BACKENDS[backend][1],
         ),
-        device=_BACKENDS[backend][1],
     )
 
 

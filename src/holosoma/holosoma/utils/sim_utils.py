@@ -108,7 +108,7 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     Parameters
     ----------
     config : EnvConfig
-        Configuration of the task the app will host. ``training.num_envs`` is per process.
+        Configuration of the task the app will host. ``run.num_envs`` is per process.
     device : str
         Resolved device string (e.g., 'cuda:0', 'cpu').
 
@@ -129,11 +129,11 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     # Parse known arguments to get argparse params
     args_cli, unknown_args = parser.parse_known_args()
 
-    args_cli.num_envs = config.training.num_envs
-    args_cli.seed = config.training.seed
+    args_cli.num_envs = config.run.num_envs
+    args_cli.seed = config.run.seed
     args_cli.env_spacing = config.scene.env_spacing
     args_cli.output_dir = config.logger.base_dir
-    args_cli.headless = config.training.headless
+    args_cli.headless = config.run.headless
     args_cli.device = device
     # Distribute the simulator across GPUs when using multi-GPU training.
     if int(os.environ.get("WORLD_SIZE", "1")) > 1:

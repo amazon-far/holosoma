@@ -112,8 +112,7 @@ class EnvConfigStub:
     """The EnvConfig fields task_session reads."""
 
     env_class: str
-    training: object
-    device: str | None = None
+    run: object
 
 
 class Environment:
@@ -140,6 +139,7 @@ def run_task_session(
 
     ``on_enter`` runs once the task exists, before the scenario fails.
     """
+    from holosoma.config_types.experiment import RunConfig
     from holosoma.envs.simulation_task import SimulationTask
     from holosoma.simulator import session
     from holosoma.simulator.base_simulator.hooks import HookRegistry
@@ -183,7 +183,7 @@ def run_task_session(
     monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.ISAACSIM)
     monkeypatch.setattr(session, "setup_isaaclab_launcher", lambda _config, _device: app)
     monkeypatch.setattr(session, "get_class", lambda _target: Task)
-    config = cast("Any", EnvConfigStub(env_class="test.Task", training=SimpleNamespace(headless=True)))
+    config = cast("Any", EnvConfigStub(env_class="test.Task", run=RunConfig(headless=True)))
     with session.task_session(config, SimulationTask) as task:
         if on_enter is not None:
             on_enter()
