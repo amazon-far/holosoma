@@ -42,7 +42,7 @@ gantry_control = PLUGIN_REGISTRY.add("gantry_control", GantryControlPluginConfig
 # compatibility; body_name + position/orientation can select an offset frame on any robot body.
 odometry = PLUGIN_REGISTRY.add("odometry", ROS2OdometryPluginConfig())
 
-# Co-simulation source: share state with a renderer process and take remote cameras' images from it, e.g.
+# Co-simulation head: share state with a renderer process and take remote cameras' images from it, e.g.
 #   plugin.cosim:cosim-render --plugin.cosim.endpoint ipc:///tmp/$USER/cosim.sock --sensor.cam.remote cosim
 cosim_render = PLUGIN_REGISTRY.add("cosim-render", CosimRenderPluginConfig())
 

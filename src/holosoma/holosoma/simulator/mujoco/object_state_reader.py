@@ -46,7 +46,7 @@ class ObjectReadPlan:
         xquat: torch.Tensor,
     ) -> ObjectReadPlan:
         if len(set(names)) != len(names) or "robot" in names:
-            raise ValueError("Object cache requires unique non-robot actor names")
+            raise ValueError("ObjectReadPlan requires unique non-robot actor names")
         envs = qpos.shape[0]
         if (
             qpos.ndim != 2

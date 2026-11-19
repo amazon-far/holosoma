@@ -224,7 +224,8 @@ def render_cameras(sim: IsaacSim, due: list[CameraRecord]) -> None:
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
             with camera_record.writing("rgb") as rgb:  # [N,H,W,3], drop alpha
-                rgb.copy_(out["rgb"][..., :3].clamp(0, 255) if out["rgb"].dtype != torch.uint8 else out["rgb"][..., :3])
+                native = out["rgb"][..., :3]
+                rgb.copy_(native if native.dtype == torch.uint8 else native.clamp(0, 255))
         if "depth" in camera_record.config.data_types:
             # distance_to_image_plane is float32 meters, image-plane; CameraRecord applies the configured
             # cross-backend no-return convention in place.

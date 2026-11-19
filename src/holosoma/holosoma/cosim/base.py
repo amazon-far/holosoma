@@ -35,10 +35,8 @@ class HeadPlugin:
             raise ValueError("Set the co-simulation endpoint with --plugin.<key>.endpoint")
         if torch.device(simulator.sim_device).type != "cuda":
             raise ValueError("Co-simulation shares state through CUDA IPC; run the head on a CUDA device")
-        slot = simulator.hooks.installing_slot
-        if slot is None:
+        if simulator.hooks.installing_slot is None:
             raise RuntimeError("Co-simulation plugins are constructed by install_plugins, which names their slot")
-        self.slot = slot
         self.simulator = simulator
         self.bridge = HeadBridge(
             simulator,

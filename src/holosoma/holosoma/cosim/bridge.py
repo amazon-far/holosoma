@@ -67,7 +67,8 @@ class Snapshot:
     sequence: int
     sim_time: float
     phase: str | None = None
-    """The head's hook phase the snapshot was published from, or ``None`` unless exactly one phase is emitting."""
+    """The head's hook phase the snapshot was published from: the one ``publish`` names, else the only one emitting,
+    else ``None``."""
     env_ids: tuple[int, ...] | None = None
     """The ``env_ids`` payload of an episode phase."""
 
@@ -75,7 +76,7 @@ class Snapshot:
         if self.sequence < 1 or not math.isfinite(self.sim_time) or self.sim_time < 0:
             raise ValueError("Snapshot sequence and simulation time must be valid")
         if self.env_ids is not None:
-            object.__setattr__(self, "env_ids", tuple(int(env_id) for env_id in self.env_ids))
+            object.__setattr__(self, "env_ids", tuple(self.env_ids))
 
 
 class ControlChannel:
@@ -151,13 +152,10 @@ def as_received(value: Any) -> Any:
 class HeadBridge:
     """Share a head's state caches with a peer and exchange snapshots with it in lockstep.
 
-    The handshake runs at construction: the head's SimState fields (shared ones with their memory), the
-    names of those the peer is to ``write`` and ``handshake``, which the peer interprets, go to the peer. It
-    answers with the shared fields it reads and one export per written field, mapped as :attr:`imports`;
-    the written fields are linked onto them (``SimState.link``). Callers decide when to :meth:`publish`; each
-    exchange refreshes the fields the peer reads and orders later work after the peer's. After an exchange
-    fails, other than by interruption, the bridge refuses further exchanges and closes without contacting
-    the peer.
+    The handshake runs at construction; the peer's exports are mapped as :attr:`imports` and the written fields
+    linked onto them. Callers decide when to :meth:`publish`; each exchange refreshes the fields the peer reads
+    and orders later work after the peer's. After an exchange fails, other than by interruption, the bridge
+    refuses further exchanges and closes without contacting the peer.
     """
 
     def __init__(

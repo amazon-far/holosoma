@@ -1036,11 +1036,7 @@ class MuJoCo(BaseSimulator):
         return torch.cat(all_states, dim=0)
 
     def _read_object_root_states(self) -> torch.Tensor:
-        """Full object roots in ``object_state_names`` order, ``[num_envs, num_objects, 13]``.
-
-        Warp uses setup-time native gather indices and batched conversions.
-        Classic reads each object through the per-actor CPU getter.
-        """
+        """Full object roots in ``object_state_names`` order, ``[num_envs, num_objects, 13]``."""
         if isinstance(self.backend, WarpBackend):
             return self._object_read_plan.read()
         if not self._object_state_pairs:

@@ -98,7 +98,7 @@ class ClockPublishPluginConfig(PluginConfig):
 
 
 @dataclass(frozen=True)
-class CosimPluginConfig(PluginConfig, abc.ABC):
+class CosimPluginConfig(PluginConfig):
     """Base config for a plugin that shares this simulator's state with a co-simulation peer."""
 
     endpoint: str = ""

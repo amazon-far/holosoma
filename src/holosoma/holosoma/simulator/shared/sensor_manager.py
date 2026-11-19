@@ -78,7 +78,7 @@ class SensorRecord:
         """Post-process a frame just written into ``output``'s buffer."""
 
     def mark_written(self, output: str) -> None:
-        """Record a new frame in ``output``'s buffer written by someone else, e.g. a co-simulation peer."""
+        """Record a new frame in ``output``'s buffer, e.g. a co-simulation peer's; drops its device snapshots."""
         self.written.add(output)
         self.rendered.add(output)
         for key in [key for key in self._device_cache if key[0] == output]:

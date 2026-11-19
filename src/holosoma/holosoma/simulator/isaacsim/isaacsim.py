@@ -325,7 +325,7 @@ class IsaacSim(BaseSimulator):
         sensor_setup.render_sensors(self)
 
     def native_env_origins(self) -> torch.Tensor:
-        """The clone grid ``InteractiveScene`` builds; :meth:`create_envs` cannot move it."""
+        """The clone grid ``InteractiveScene`` builds the environments at."""
         return self.scene.env_origins
 
     def _render_only(self) -> RenderCapture:
@@ -336,7 +336,10 @@ class IsaacSim(BaseSimulator):
         return self._render_capture
 
     def match_env_origins(self, origins: torch.Tensor) -> None:
-        """Move the cloned environment prims to ``origins``, so world-frame state renders in place."""
+        """Move the cloned environment prims to ``origins``, so world-frame state renders in place.
+
+        Switches the simulator to render-only first: physics playback stops for good.
+        """
         if origins.shape != self.scene.env_origins.shape or torch.equal(origins, self.scene.env_origins):
             return
         self._render_only()
@@ -724,7 +727,7 @@ class IsaacSim(BaseSimulator):
         """
         data = self._robot.data
         self.state.device = self.sim_device
-        # Writers call the Isaac Lab handles, which write to PhysX immediately.
+        # The robot and joint writers call the Isaac Lab handles, which write to PhysX immediately.
         joint_ids = torch.tensor(self.dof_ids, dtype=torch.long, device=self.sim_device)
 
         def env_ids_for(rows: torch.Tensor) -> torch.Tensor | None:

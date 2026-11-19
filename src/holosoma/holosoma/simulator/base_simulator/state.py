@@ -119,7 +119,8 @@ class _Registration:
         return tuple(buffer._version for buffer in self.buffers)
 
     def written(self) -> bool:
-        """Whether a buffer was written in place since the last read or flush; moving one (``set_``) is not."""
+        """Whether a buffer was written in place since the last read or flush; moving one (``set_``) is not, and
+        re-baselines."""
         if tuple(buffer.data_ptr() for buffer in self.buffers) != self.memory:
             self.mark_clean()
             return False

@@ -90,14 +90,14 @@ class CosimRenderPlugin(HeadPlugin):
         yield hooks.add(
             Phase.FRAME_END,
             self._frame,
-            name="cosim.frame",
+            name=f"{self.name}.frame",
             after=self.simulator.sensor_capture_hook,
             before=self.simulator.sensor_render_hook,
         )
         yield hooks.add(
             Phase.EPISODE_START,
             lambda env_ids: self.bridge.publish(Phase.EPISODE_START, env_ids),
-            name="cosim.episode_start",
+            name=f"{self.name}.episode_start",
         )
 
     def _frame(self) -> None:

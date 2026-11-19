@@ -199,7 +199,7 @@ class RayCastDepthCamera:
         self._update_poses(record)
         wp_ids = self._wp_all_envs if env_ids is None else wp.from_torch(ids, dtype=wp.int32)
         # On torch's current stream, so the launch is ordered after the pose updates above and
-        # before the reads below without a host sync, whichever stream torch is using.
+        # before the depth clip that follows without a host sync, whichever stream torch is using.
         stream = wp.stream_from_torch(self.device) if self._wp_device.is_cuda else None
         long_ids = None if env_ids is None else ids.long()
         with record.writing("depth", long_ids) as depth:

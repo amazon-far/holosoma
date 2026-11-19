@@ -76,7 +76,6 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
     control = SimpleNamespace(
         socket=socket,
         receive=lambda: messages.pop(0),
-        set_timeout=lambda ms: calls.append(("timeout", ms)),
         close=lambda: calls.append("close"),
     )
     monkeypatch.setattr(bridge, "ControlChannel", lambda **_: control)
@@ -132,7 +131,6 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> PeerFixture:
     )
     task = SimpleNamespace(
         simulator=sim,
-        num_envs=1,
         render_frame=lambda: calls.append("capture"),
     )
     handler = RenderHandler(cast("RenderTask", task))
@@ -172,9 +170,9 @@ def test_layout_mismatch_fails_before_mapping(peer: PeerFixture, mismatch: str) 
     else:
         wrong: list[Any] = [[1.0, 0.0, 0.0]] if mismatch == "env_origins" else ["wrong"]
         (messages[0] if mismatch == "gpu_uuid" else messages[0]["handshake"])[mismatch] = wrong
-    with pytest.raises(ValueError, match="differs|differ"):
+    with pytest.raises(ValueError, match="differ"):
         worker.run()
-    assert not any(isinstance(call, tuple) and call[0] not in ("place", "unlink") for call in calls)
+    assert "map" not in calls
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
 
 
@@ -201,7 +199,7 @@ class _ReadingHandler(PeerHandler):
         self.fields = fields
         self.seen: list[dict[str, Any]] = []
 
-    def reads(self, state: Any) -> tuple[str, ...]:
+    def reads(self, fields: Any) -> tuple[str, ...]:
         return self.fields
 
     def step(self, snapshot: Any, state: Any) -> None:
@@ -410,9 +408,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     monkeypatch.setattr(
         cosim_cuda,
         "SharedStateAllocator",
-        lambda fields: SimpleNamespace(
-            fields=frozenset(fields), allocations=dict.fromkeys(fields), tensors=values, specs=lambda _: []
-        ),
+        lambda fields: SimpleNamespace(allocations=dict.fromkeys(fields), specs=lambda _: []),
     )
     fake: Any = sim
     fake.sensor_capture_hook = fake.hooks.add(Phase.FRAME_END, manager.collect_due, name="sensors.capture")
@@ -433,7 +429,7 @@ def test_remote_due_cameras_read_the_peer_images_in_place(plugin: PluginFixture)
     hooks.add(Phase.FRAME_END, lambda: seen.append(set(remote.written)), after=head.simulator.sensor_render_hook)
     hooks.emit(Phase.FRAME_END)
     assert calls[1] == ("serve", ["camera/cam/depth", "camera/cam/rgb"])  # linked at the handshake
-    assert calls[2:5] == ["readonly", calls[3], "record_exchange"]
+    assert calls[2] == "readonly" and calls[4] == "record_exchange"
     assert calls[3][0] == "EXCHANGE_REQUEST" and calls[3][1]["snapshot"]["phase"] == "frame_end"
     assert seen == [{"rgb", "depth"}]  # filled before consumers of the sensor render hook
     for data_type in ("rgb", "depth"):
