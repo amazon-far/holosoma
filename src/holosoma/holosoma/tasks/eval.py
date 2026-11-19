@@ -10,7 +10,7 @@ from holosoma.config_types.eval_callback import EvalCallbacksConfig
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.task import EvalTaskConfig
 from holosoma.tasks.base import Task
-from holosoma.utils.config_document import ConfigDocumentError, expand_config_args
+from holosoma.utils.config_document import ConfigDocumentError, alias_task_flags, expand_config_args
 from holosoma.utils.config_registry import parse_config
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.eval_utils import (
@@ -151,19 +151,23 @@ class EvalTask(Task):
     @classmethod
     def from_args(cls, args: list[str]) -> EvalTask:
         init_eval_logging()
+        args = cls.with_selection(_alias_legacy_flags(args))
+        if "--print-args" in args:
+            parse_config(ExperimentConfig, args=args)  # prints the command line and exits
+        # The checkpoint supplies the base config, so find it (and any simulator selection) first.
         try:
-            tokens = expand_config_args(_alias_legacy_flags(args))
+            tokens = alias_task_flags(expand_config_args(args))
         except ConfigDocumentError as exc:
             raise SystemExit(str(exc)) from exc
         checkpoint = _flag_value(tokens, "--task.checkpoint")
         if checkpoint is None:
-            raise SystemExit("task:eval needs --task.checkpoint=<path or wandb:// URI> (or --checkpoint=...).")
+            raise SystemExit("task:eval needs --eval.checkpoint=<path or wandb:// URI> (or --checkpoint=...).")
         saved_config, saved_wandb_path = load_saved_experiment_config(CheckpointConfig(checkpoint=checkpoint))
         eval_config = replace_retired_simulator(saved_config.get_eval_config(), tokens)
         config = parse_config(
             ExperimentConfig,
             default=eval_config,
-            args=cls.with_selection(tokens),
+            args=args,
             description="Overriding config on top of what's loaded.",
         )
         return cls(config, saved_config, saved_wandb_path)

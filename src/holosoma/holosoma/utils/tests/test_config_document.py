@@ -105,8 +105,16 @@ def test_root_subcommand_comes_first(tmp_path: Path) -> None:
         ("version: 1\narguments: {}\narguments: {}\n", []),
         (DOCUMENT, ["--config", "other.yaml"]),
         ({**DOCUMENT, "task": 5}, []),
+        ({**DOCUMENT, "arguments": {"overrides": {"eval.checkpoint": "x"}}}, []),
     ],
-    ids=["unsupported-version", "unknown-field", "duplicate-key", "repeated-config", "task-not-a-name"],
+    ids=[
+        "unsupported-version",
+        "unknown-field",
+        "duplicate-key",
+        "repeated-config",
+        "task-not-a-name",
+        "other-task-argument",
+    ],
 )
 def test_rejects_invalid_documents(tmp_path: Path, content: dict[str, Any] | str, extra_args: list[str]) -> None:
     with pytest.raises(SystemExit):
@@ -187,3 +195,35 @@ def test_run_sim_is_the_holosoma_command() -> None:
     from holosoma import cli, run_sim
 
     assert run_sim.main is cli.main
+
+
+def test_task_arguments_are_task_named_overrides(tmp_path: Path) -> None:
+    from holosoma.config_types.experiment import ExperimentConfig
+
+    overrides = {"eval.checkpoint": "/runs/a.pt", "eval.callbacks.push.config.enabled": True}
+    doc = {"version": 1, "task": "eval", "arguments": {"overrides": overrides}}
+    from_document = parse_config(ExperimentConfig, args=["task:eval", "--config", _write(tmp_path, doc)])
+    from_flags = parse_config(
+        ExperimentConfig,
+        args=["task:eval", "--eval.checkpoint=/runs/a.pt", "--eval.callbacks.push.config.enabled=True"],
+    )
+    assert from_document == from_flags
+    assert from_document.task.checkpoint == "/runs/a.pt"
+
+
+def test_rejected_document_tokens_name_their_key(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = _write(tmp_path, {"version": 1, "arguments": {"overrides": {"robot.init_state.posx": [1.0, 2.0]}}})
+    with pytest.raises(SystemExit):
+        parse_config(RunSimConfig, args=["--config", path])
+    assert f"<- {path}: arguments.overrides.robot.init_state.posx" in capsys.readouterr().err
+
+
+def test_print_args_prints_the_equivalent_command_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        parse_config(RunSimConfig, args=["--config", _write(tmp_path, DOCUMENT), "--print-args"])
+    assert exit_info.value.code == 0
+    printed = capsys.readouterr().out.strip()
+    assert printed.startswith("holosoma ")
+    import shlex
+
+    assert parse_config(RunSimConfig, args=shlex.split(printed)[1:]) == parse_config(RunSimConfig, args=EQUIVALENT_CLI)

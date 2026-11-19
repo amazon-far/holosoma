@@ -82,12 +82,17 @@ _Loader.add_implicit_resolver(
 _Loader.add_constructor("tag:yaml.org,2002:int", _Loader.construct_core_int)
 
 
-def expand_config_args(argv: list[str], root_selections: frozenset[str] = frozenset()) -> list[str]:
+def expand_config_args(
+    argv: list[str],
+    root_selections: frozenset[str] = frozenset(),
+    provenance: dict[str, str] | None = None,
+) -> list[str]:
     """Replace ``--config PATH [--config-path a.b]`` in ``argv`` with the document's tokens.
 
     Args:
         argv: CLI tokens, without the program name.
         root_selections: Root subcommand tokens (e.g. ``exp:<name>``), hyphenated; emitted first.
+        provenance: Filled with each document token mapped to the file and key it came from.
 
     Returns:
         Root selection, then group selections parents-first, then document flags, then the
@@ -96,16 +101,40 @@ def expand_config_args(argv: list[str], root_selections: frozenset[str] = frozen
     spec, path, remaining = _pop_config_options(argv)
     if spec is None:
         return argv
+    cli_selections, cli_rest = _split_selections(remaining)
     try:
         doc_selections, doc_flags = _document_args(_select_document(_load(spec), path))
     except ConfigDocumentError as exc:
         raise ConfigDocumentError(f"--config {spec!r}: {exc}") from exc
-    cli_selections, cli_rest = _split_selections(remaining)
+    if provenance is not None:
+        provenance.update({token: f"{spec}: {key}" for token, key in [*doc_selections, *doc_flags]})
     shadowed = {_group(t) for t in cli_selections}
-    selections = [t for t in doc_selections if _group(t) not in shadowed] + cli_selections
+    selections = [t for t, _ in doc_selections if _group(t) not in shadowed] + cli_selections
     root = [t for t in selections if t.replace("_", "-") in root_selections]
     nested = sorted((t for t in selections if t not in root), key=lambda t: _group(t).count("."))
-    return [*root, *nested, *doc_flags, *cli_rest]
+    return [*root, *nested, *(t for t, _ in doc_flags), *cli_rest]
+
+
+def alias_task_flags(argv: list[str], task: str | None = None) -> list[str]:
+    """Rewrite ``--<task>.<field>`` flags for the selected task to ``--task.<field>``.
+
+    ``task`` defaults to the ``task:<name>`` selection in ``argv``, then ``sim``. A flag naming a
+    different task is an error.
+    """
+    if task is None:
+        task = next((t.split(":", 1)[1] for t in argv if t.startswith("task:") and _SUBCOMMAND_TOKEN.match(t)), None)
+    selected = (task or "sim").replace("_", "-")
+    aliased = []
+    for token in argv:
+        head = token.partition("=")[0]
+        prefix = head[2:].split(".", 1)[0].replace("_", "-") if head.startswith("--") and "." in head else None
+        if prefix is not None and prefix == selected:
+            aliased.append(f"--task.{token.split('.', 1)[1]}")
+            continue
+        if prefix is not None and _is_task_name(prefix):
+            raise ConfigDocumentError(f"{head} sets an argument of task {prefix}, but task {selected} is selected")
+        aliased.append(token)
+    return aliased
 
 
 def select_task(argv: list[str]) -> tuple[str | None, list[str]]:
@@ -200,8 +229,8 @@ def _select_document(raw: Any, path: str | None) -> dict[str, Any]:
     return selected
 
 
-def _document_args(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
-    """Return a document's group-selection tokens and flag tokens."""
+def _document_args(doc: dict[str, Any]) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Return a document's group-selection and flag tokens, each with the key it came from."""
     if doc.get("version") != SUPPORTED_VERSION:
         raise ConfigDocumentError(f"unsupported document version {doc.get('version')!r} (expected {SUPPORTED_VERSION})")
     unknown = set(doc) - DOCUMENT_FIELDS
@@ -216,27 +245,34 @@ def _document_args(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
     if not isinstance(arguments, dict):
         raise ConfigDocumentError("arguments must be a mapping")
 
-    selections: list[str] = []
-    flags: list[str] = []
+    selections: list[tuple[str, str]] = []
+    flags: list[tuple[str, str]] = []
     for name, value in arguments.items():
         if name == "overrides":
             if not isinstance(value, dict):
                 raise ConfigDocumentError("arguments.overrides must map dotted paths to values")
             for path, leaf in value.items():
-                flags.extend(_override_args(str(path), leaf))
+                flags.extend(_override_args(str(path), leaf, f"arguments.overrides.{path}"))
         elif isinstance(value, str) and value:
-            selections.append(f"{name}:{value}")
+            selections.append((f"{name}:{value}", f"arguments.{name}"))
         elif isinstance(value, dict) and all(isinstance(v, str) and v for v in value.values()):
-            selections.extend(f"{name}.{key}:{variant}" for key, variant in value.items())
+            selections.extend((f"{name}.{key}:{variant}", f"arguments.{name}.{key}") for key, variant in value.items())
         elif value is not None:
             raise ConfigDocumentError(f"arguments.{name}: expected a preset name or a mapping of keys to presets")
     return selections, flags
 
 
-def _override_args(path: str, value: Any) -> list[str]:
+def _is_task_name(key: Any) -> bool:
+    from holosoma.config_values.task import TASK_REGISTRY
+
+    names = {name.replace("_", "-") for name in TASK_REGISTRY}
+    return str(key).replace("_", "-") in names
+
+
+def _override_args(path: str, value: Any, source: str) -> list[tuple[str, str]]:
     if isinstance(value, dict) and value:
-        return [arg for key, sub in value.items() for arg in _override_args(f"{path}.{key}", sub)]
-    return [f"--{path}={_encode(value, path)}"]
+        return [pair for key, sub in value.items() for pair in _override_args(f"{path}.{key}", sub, f"{source}.{key}")]
+    return [(f"--{path}={_encode(value, path)}", source)]
 
 
 def _encode(value: Any, path: str) -> str:

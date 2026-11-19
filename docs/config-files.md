@@ -55,7 +55,11 @@ holosoma --config @holosoma/examples/configs/g1_locomotion_train.yaml \
     simulator:mjwarp --training.num_envs 1024
 
 # Evaluate; the checkpoint supplies the experiment and the document overrides it
-holosoma task:eval --task.checkpoint=<CHECKPOINT_PATH> --config eval.yaml
+holosoma --config eval.yaml
+holosoma task:eval --eval.checkpoint=<CHECKPOINT_PATH> --training.num_envs 1
+
+# Print the equivalent command line instead of running it
+holosoma --config eval.yaml --print-args
 
 # Replay a whole-body-tracking motion in the Isaac Sim viewer
 holosoma --config replay.yaml
@@ -64,8 +68,10 @@ holosoma --config replay.yaml
 ```yaml
 # eval.yaml
 version: 1
+task: eval
 arguments:
   overrides:
+    eval.checkpoint: <CHECKPOINT_PATH>   # the eval task's own field: --eval.checkpoint
     training.num_envs: 1
     training.max_eval_steps: 1000
     training.export_onnx: true
@@ -85,10 +91,15 @@ arguments:
 
 ## Rules
 
+- **Task arguments.** The selected task's own fields are overrides named after it
+  (`eval.checkpoint`), just as on the command line (`--eval.checkpoint`; `--task.<field>` also
+  works). Setting another task's argument is an error, so a document describes one run.
 - **Experiment.** For `train` and `replay`, `exp: <preset>` is passed first wherever it
-  appears. `eval` takes its experiment from the checkpoint (`--task.checkpoint`, also accepted
-  as `--checkpoint`), so its documents hold overrides and other selections only; the
-  checkpoint can also be set as the override `task.checkpoint`.
+  appears. `eval` takes its experiment from the checkpoint (`eval.checkpoint`, also accepted
+  as `--checkpoint`), so its documents hold overrides and other selections only.
+- **Errors.** When the command line parser rejects a value that came from a document, the
+  message ends with the file and key it came from. `--print-args` prints the command line a
+  document expands to, without running it.
 - **Precedence.** Command-line tokens win. A group the command line selects (`simulator:…`,
   `sensor.scan:…`) replaces the document's selection, and a repeated flag takes the last value.
   The document's overrides under a replaced group still apply to the new selection.
@@ -98,6 +109,6 @@ arguments:
   a dict field.
 - **Embedding.** A document can sit inside a larger file. When the root has no `version` but
   has a `holosoma_sim` mapping, that mapping is read; `--config-path a.b` selects any other
-  nested mapping. Only `version` and `arguments` are allowed in the document, so settings for
-  other tools belong next to it, not inside it.
+  nested mapping. Only `version`, `task` and `arguments` are allowed in the document, so
+  settings for other tools belong next to it, not inside it.
 - **Paths.** `--config` accepts the same path forms as `--import-file`. Pass it once per run.

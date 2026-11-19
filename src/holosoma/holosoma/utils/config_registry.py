@@ -214,7 +214,8 @@ def parse_config(
     """Parse a config with plugin, preset-file, and dynamic-dict support.
 
     Recognizes repeatable ``--import-file PATH`` options, one ``--config PATH [--config-path a.b]``
-    run document (see :mod:`holosoma.utils.config_document`), and top-level
+    run document (see :mod:`holosoma.utils.config_document`), ``--<task>.<field>`` flags for the
+    selected task, ``--print-args`` (print the equivalent command line and exit), and top-level
     ``<field>.<key>:<variant>`` dict declarations.
 
     Args:
@@ -226,7 +227,7 @@ def parse_config(
     Returns:
         The parsed config instance.
     """
-    from holosoma.utils.config_document import ConfigDocumentError, expand_config_args
+    from holosoma.utils.config_document import ConfigDocumentError, alias_task_flags, expand_config_args
     from holosoma.utils.tyro_utils import (
         TYRO_CONIFG,
         dynamic_dict_decl_pattern,
@@ -237,16 +238,24 @@ def parse_config(
 
     use_sys_argv = args is None
     argv = sys.argv[1:] if args is None else list(args)
+    print_args = "--print-args" in argv
+    argv = [t for t in argv if t != "--print-args"]
 
     import_paths, argv = split_import_file_args(argv)
     load_plugins(import_paths)
 
     # Factories build tyro subcommand aliases from registries after external presets are loaded.
     config_type = _resolve_config(config)
+    provenance: dict[str, str] = {}
     try:
-        argv = expand_config_args(argv, frozenset(_root_subcommands(config_type)))
+        argv = alias_task_flags(expand_config_args(argv, frozenset(_root_subcommands(config_type)), provenance))
     except ConfigDocumentError as exc:
         raise SystemExit(str(exc)) from exc
+    if print_args:
+        import shlex
+
+        print(shlex.join(["holosoma", *argv]))
+        raise SystemExit(0)
     _reject_legacy_mujoco_cli(argv)
 
     dynamic_defaults: dict[str, dict[str, Any]] = {}
@@ -266,7 +275,40 @@ def parse_config(
         kwargs["default"] = merged_default
     if use_sys_argv:
         sys.argv = [sys.argv[0]] + argv
-    return tyro.cli(config_type, **kwargs)
+    if not provenance:
+        return tyro.cli(config_type, **kwargs)
+    return _cli_with_provenance(config_type, kwargs, provenance)
+
+
+def _cli_with_provenance(config_type: Any, kwargs: dict[str, Any], provenance: dict[str, str]) -> Any:
+    """Run ``tyro.cli``; on a usage error, name the document keys behind the tokens it rejected."""
+    import contextlib
+    import io
+
+    captured = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(captured):
+            result = tyro.cli(config_type, **kwargs)
+    except SystemExit as exc:
+        message = captured.getvalue()
+        sys.stderr.write(message)
+        if exc.code not in (0, None):
+            flat = _normalize_cli_text(message)
+            sources = [
+                f"  {token.partition('=')[0]}  <- {source}"
+                for token, source in provenance.items()
+                if _normalize_cli_text(token.partition("=")[0]) in flat
+            ]
+            if sources:
+                sys.stderr.write("From --config:\n" + "\n".join(sources) + "\n")
+        raise
+    sys.stderr.write(captured.getvalue())
+    return result
+
+
+def _normalize_cli_text(text: str) -> str:
+    """Fold tyro's hyphen/underscore spellings and its box-drawing line wraps for matching."""
+    return "".join(text.replace("_", "-").split()).replace("│", "")
 
 
 def _reject_legacy_mujoco_cli(argv: list[str]) -> None:
