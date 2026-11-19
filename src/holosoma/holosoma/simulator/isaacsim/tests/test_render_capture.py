@@ -40,7 +40,6 @@ def replica(monkeypatch: pytest.MonkeyPatch) -> tuple[SimpleNamespace, list[obje
         sim_dt=0.005,
         tiled_cameras={
             "camera": SimpleNamespace(
-                cfg=SimpleNamespace(update_latest_camera_pose=False),
                 update=lambda _dt, force_recompute: None,
                 data=SimpleNamespace(output={}),
             )

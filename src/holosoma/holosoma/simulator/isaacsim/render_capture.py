@@ -28,8 +28,6 @@ class RenderCapture:
             raise ValueError("Isaac renders applied state for cameras only")
         self.simulator = simulator
         self.settings = carb.settings.get_settings()
-        for camera in simulator.tiled_cameras.values():
-            camera.cfg.update_latest_camera_pose = True
         self.settings.set_bool(_PLAY_SIMULATIONS, False)
 
     def initialize_cameras(self) -> None:
