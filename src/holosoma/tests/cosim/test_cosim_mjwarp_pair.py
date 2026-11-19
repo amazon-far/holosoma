@@ -15,15 +15,6 @@ if not torch.cuda.is_available():
 from tests.cosim.cosim_pair_roles import run_pair  # noqa: E402
 
 
-def test_mjwarp_peer_renders_the_published_state() -> None:
-    sent, rendered = run_pair(1)
-
-    assert sent["frames"] == rendered["frames"] > 1 and rendered["linked"]
-    torch.testing.assert_close(rendered["robot_root_states"], sent["robot_root_states"])
-    torch.testing.assert_close(rendered["dof_pos"], sent["dof_pos"])
-    assert torch.equal(rendered["overview/rgb"], sent["overview/rgb"])
-
-
 def test_peer_images_become_the_head_remote_camera_data() -> None:
     sent, rendered = run_pair(2, "--loopback")
     outputs = ("loopback/rgb", "loopback/depth")
@@ -32,6 +23,7 @@ def test_peer_images_become_the_head_remote_camera_data() -> None:
     assert rendered["exports_in_place"] and sent["imports_in_place"]
     torch.testing.assert_close(rendered["robot_root_states"], sent["robot_root_states"])
     torch.testing.assert_close(rendered["dof_pos"], sent["dof_pos"])
+    assert torch.equal(rendered["overview/rgb"], sent["overview/rgb"])  # the same camera rendered on both sides
     for output in outputs:
         assert torch.equal(sent[output], rendered[output])
         assert torch.equal(sent[output], sent[output.replace("loopback", "overview")])
