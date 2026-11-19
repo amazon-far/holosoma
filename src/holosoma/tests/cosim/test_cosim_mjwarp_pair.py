@@ -21,6 +21,15 @@ def test_peer_images_become_the_head_remote_camera_data() -> None:
 
     assert sent["frames"] == rendered["frames"] > 1 and rendered["linked"]
     assert rendered["exports_in_place"] and sent["imports_in_place"]
+    assert (
+        rendered["episodes"]
+        == sent["episodes"]
+        == [
+            ("episode_start", [0, 1]),
+            ("episode_end", [1]),
+            ("episode_start", [1]),
+        ]
+    )
     torch.testing.assert_close(rendered["robot_root_states"], sent["robot_root_states"])
     torch.testing.assert_close(rendered["dof_pos"], sent["dof_pos"])
     assert torch.equal(rendered["overview/rgb"], sent["overview/rgb"])  # the same camera rendered on both sides

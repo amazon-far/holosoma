@@ -5,8 +5,9 @@ usage: cosim_pair_roles.py {head,peer} --endpoint ipc://... --output DIR [--fram
 The peer writes ``DIR/ready`` once it accepts connections and exits after the head closes. ``--simulator``
 selects the peer's backend; the head is always MJWarp.
 
-With ``--loopback`` both sides add rgb + depth cameras ``loopback`` and ``still`` at ``overview``'s pose; the
-head's ``loopback`` is remote, and halfway through the head moves ``overview`` and ``loopback`` the same way.
+The head resets every environment, then the last one a quarter of the way through. With ``--loopback`` both
+sides add rgb + depth cameras ``loopback`` and ``still`` at ``overview``'s pose; the head's ``loopback`` is
+remote, and halfway through the head moves ``overview`` and ``loopback`` the same way.
 :func:`run_pair` runs both roles for tests.
 """
 
@@ -69,6 +70,15 @@ def capture(sim: Any, saved: dict[str, Any]) -> None:
     saved.setdefault("first", latest)
 
 
+def record_episodes(sim: Any, saved: dict[str, Any]) -> None:
+    """Append each episode emission on ``sim`` to ``saved["episodes"]`` as ``(phase, env_ids)``."""
+    from holosoma.simulator.base_simulator.hooks import Phase
+
+    episodes = saved.setdefault("episodes", [])
+    for phase in (Phase.EPISODE_END, Phase.EPISODE_START):
+        sim.hooks.add(phase, lambda env_ids, phase=phase: episodes.append((phase.value, env_ids.tolist())))
+
+
 def peer(endpoint: str, output: Path, num_envs: int, loopback: bool, backend: str) -> None:
     import torch
 
@@ -81,6 +91,7 @@ def peer(endpoint: str, output: Path, num_envs: int, loopback: bool, backend: st
     with create_render_task(config(num_envs, loopback, backend=backend)) as task:
         sim = task.simulator
         sim.hooks.add(Phase.FRAME_END, lambda: capture(sim, saved), after=sim.sensor_render_hook)
+        record_episodes(sim, saved)
 
         class LinkCheckingHandler(RenderHandler):
             def step(self, snapshot: Any, state: Any) -> None:
@@ -109,8 +120,11 @@ def head(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bool
         sim = task.simulator
         cosim = sim.installed_plugins["cosim"]
         sim.hooks.add(Phase.FRAME_END, lambda: capture(sim, saved), after=sim.sensor_render_hook)
+        record_episodes(sim, saved)
         task.reset_envs_idx()
         for frame in range(frames):
+            if frame == frames // 4:
+                task.reset_envs_idx(torch.tensor([num_envs - 1], device=task.device))
             if loopback and frame == frames // 2:
                 # Move both cameras the same way; the remote one moves through the renderer.
                 manager = sim.sensor_manager
@@ -120,6 +134,7 @@ def head(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bool
                     manager.set_mount_pose(name, moved)
             task.step()
         saved["frames"] = cosim.bridge.sequence
+        saved["episodes"] = list(saved["episodes"])  # without the episode ends that close emits
         # Remote camera outputs are the renderer's exports, not copies.
         saved["imports_in_place"] = all(
             sim.state.get(name).data_ptr() == tensor.data_ptr() for name, tensor in cosim.bridge.imports.items()

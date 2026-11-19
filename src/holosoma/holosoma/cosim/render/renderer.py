@@ -16,7 +16,7 @@ here as ordinary cameras. Start the renderer before the head; it exits when the 
 from __future__ import annotations
 
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import replace
 from typing import Any
@@ -44,6 +44,7 @@ class RenderTask(BaseTask):
     backend's native placement where it has one, otherwise where a :class:`SimulationTask` would place them.
     Drive each frame by writing writable simulator state in place, then :meth:`render_frame`; every sensor
     renders each frame. ``simulator.time()`` reports ``simulator.kinematic_time``, which the caller sets.
+    Episodes open and end only through :meth:`emit_episodes`; close ends those still open.
     """
 
     def __init__(self, tyro_config: EnvConfig) -> None:
@@ -72,6 +73,15 @@ class RenderTask(BaseTask):
         origins = self.simulator.native_env_origins()
         return simulation_env_origins(self) if origins is None else origins
 
+    def emit_episodes(self, episodes: Sequence[tuple[str, Sequence[int]]]) -> None:
+        """Emit ``episode_end``/``episode_start`` for each ``(phase, env_ids)`` in order, e.g. a head's boundaries."""
+        for phase, ids in episodes:
+            env_ids = torch.tensor(ids, dtype=torch.long, device=self.device)
+            if phase == Phase.EPISODE_END:
+                self._end_episodes(env_ids)
+            else:
+                self._start_episodes(env_ids)
+
     def render_frame(self) -> None:
         """Render the applied state and publish sensors, without physics.
 
@@ -98,7 +108,8 @@ class RenderHandler(PeerHandler):
     """Mirror the head's state into ``task``, render it, and export the camera outputs the head names to write.
 
     Adopts the head's environment origins, rejects any other scene difference, and links the head fields
-    writable on ``task``'s simulator to its state, so the head's changes reach it at each render.
+    writable on ``task``'s simulator to its state, so the head's changes reach it at each render. Each
+    snapshot's episode boundaries are emitted on ``task`` before it renders.
     """
 
     def __init__(self, task: RenderTask) -> None:
@@ -146,6 +157,7 @@ class RenderHandler(PeerHandler):
 
     def step(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:
         self.simulator.kinematic_time = snapshot.sim_time
+        self.task.emit_episodes(snapshot.episodes)
         self.task.render_frame()
 
 
