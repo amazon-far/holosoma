@@ -107,13 +107,30 @@ that publish. `PeerHandler` is the peer. A written output (a camera image) serve
 written writable field flushes into the head's simulation at its next mutation.
 
 ```python
+import torch
+
 from holosoma.cosim.base import PeerHandler, HeadPlugin
 from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.simulator.base_simulator.state import DERIVED, STATE
 
 
 class ForcePlugin(HeadPlugin):  # head: before every physics substep, the peer writes the forces
+    def __init__(self, cfg, simulator):
+        forces = torch.zeros(simulator.num_envs, simulator.num_bodies, 3, device=simulator.sim_device)
+
+        def apply(rows, values):  # flushed into the simulation before the next substep
+            forces[rows] = values[rows]
+            simulator.apply_external_force("robot", forces=values[rows], env_ids=rows)
+
+        # Registered before the bridge offers the head's fields; forces last one substep, and the peer
+        # writes them every exchange.
+        simulator.state.register(
+            "external_forces", lambda: forces, write=apply, stale_with=(STATE,), stales=(DERIVED,)
+        )
+        super().__init__(cfg, simulator)
+
     def writes(self):
-        return ["external_forces"]  # a writable SimState field the head registers; flushed into physics
+        return ["external_forces"]
 
     def install(self, hooks):
         yield hooks.add(Phase.PRE_STEP, self.bridge.publish, name="forces.exchange")
