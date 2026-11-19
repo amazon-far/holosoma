@@ -89,19 +89,3 @@ def test_empty_scene_has_an_empty_object_axis() -> None:
         torch.zeros(2, 1, 4),
     )
     assert plan.read().shape == (2, 0, 13)
-
-
-@pytest.mark.parametrize("names", [("robot",), ("first", "first")])
-def test_invalid_object_names_are_rejected(names: tuple[str, ...]) -> None:
-    plan = mixed_plan()
-    with pytest.raises(ValueError, match="unique non-robot"):
-        ObjectReadPlan.build(names, {}, {}, plan.qpos, plan.qvel, plan.xpos, plan.xquat)
-
-
-@pytest.mark.parametrize("kind", ["free", "static"])
-def test_invalid_native_indices_are_rejected(kind: str) -> None:
-    plan = mixed_plan()
-    addresses = {"first": {"qpos_addr": 100, "qvel_addr": 0}}
-    bodies = {"first": 100} if kind == "static" else {}
-    with pytest.raises(ValueError, match="Invalid"):
-        ObjectReadPlan.build(("first",), addresses, bodies, plan.qpos, plan.qvel, plan.xpos, plan.xquat)

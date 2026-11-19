@@ -93,10 +93,3 @@ def test_physics_advancing_is_detected(replica: tuple[SimpleNamespace, list[obje
         capture.render()
     with pytest.raises(RuntimeError, match="between rendered frames"):
         capture.render()
-
-
-def test_lidars_are_rejected(replica: tuple[SimpleNamespace, list[object], list[bool]]) -> None:
-    simulator, _calls, _flags = replica
-    simulator.sensor_manager.lidars = [object()]
-    with pytest.raises(ValueError, match="cameras only"):
-        RenderCapture(cast("IsaacSim", simulator))

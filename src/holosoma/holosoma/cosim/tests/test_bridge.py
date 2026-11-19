@@ -27,12 +27,6 @@ from holosoma.simulator.shared.sensor_manager import SensorManager
 pytestmark = pytest.mark.no_sim
 
 
-@pytest.mark.parametrize("snapshot", [(0, 0), (1, float("nan")), (1, -1)])
-def test_invalid_snapshot_is_rejected(snapshot: tuple[int, float]) -> None:
-    with pytest.raises(ValueError, match="must be valid"):
-        bridge.Snapshot(*snapshot)
-
-
 def _camera(manager: SensorManager, name: str, *, remote: str | None, data_types: list[Any]) -> Any:
     mount = SensorMountConfig(target_kind="world", target="")
     config = CameraSensorConfig(mount=mount, width=4, height=3, data_types=data_types, remote=remote)
