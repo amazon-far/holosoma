@@ -6,8 +6,8 @@
 #   ... --config @holosoma/examples/configs/g1_locomotion_train.yaml simulator:mjwarp --run.num_envs 1024
 # See docs/config-files.md for the format.
 version: 1
-task: train
 arguments:
+  task: train
   # The experiment preset; passed first whatever its position here.
   exp: g1-29dof
   simulator: isaacsim

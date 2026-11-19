@@ -138,7 +138,12 @@ def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConf
         if key in data:
             run.setdefault(key, data.pop(key))
     data["run"] = run
-    return ExperimentConfig(**data)
+    # ExperimentConfig rejects unknown fields; a saved file may carry fields this version dropped.
+    known = {field.name for field in dataclasses.fields(ExperimentConfig)}
+    unknown = sorted(set(data) - known)
+    if unknown:
+        logger.warning(f"Ignoring saved config fields this version does not have: {', '.join(unknown)}")
+    return ExperimentConfig(**{key: value for key, value in data.items() if key in known})
 
 
 _RUN_FIELDS = ("num_envs", "headless", "seed", "torch_deterministic", "project", "name")

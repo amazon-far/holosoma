@@ -104,17 +104,9 @@ def test_root_subcommand_comes_first(tmp_path: Path) -> None:
         ({**DOCUMENT, "backend": "mujoco"}, []),
         ("version: 1\narguments: {}\narguments: {}\n", []),
         (DOCUMENT, ["--config", "other.yaml"]),
-        ({**DOCUMENT, "task": 5}, []),
-        ({**DOCUMENT, "arguments": {"overrides": {"eval.checkpoint": "x"}}}, []),
+        ({**DOCUMENT, "task": "sim"}, []),
     ],
-    ids=[
-        "unsupported-version",
-        "unknown-field",
-        "duplicate-key",
-        "repeated-config",
-        "task-not-a-name",
-        "other-task-argument",
-    ],
+    ids=["unsupported-version", "unknown-field", "duplicate-key", "repeated-config", "top-level-task"],
 )
 def test_rejects_invalid_documents(tmp_path: Path, content: dict[str, Any] | str, extra_args: list[str]) -> None:
     with pytest.raises(SystemExit):
@@ -145,7 +137,7 @@ def test_packaged_examples_parse(name: str, config_type: Any) -> None:
     ids=["none", "document", "cli-wins", "flag-value-is-not-a-task"],
 )
 def test_select_task(tmp_path: Path, cli: list[str], doc_task: str | None, expected: str | None) -> None:
-    doc = {**DOCUMENT, "task": doc_task} if doc_task else DOCUMENT
+    doc = {**DOCUMENT, "arguments": {**DOCUMENT["arguments"], "task": doc_task}} if doc_task else DOCUMENT
     args = ["--config", _write(tmp_path, doc), *cli]
     task, remaining = select_task(args)
     assert task == expected
@@ -167,7 +159,7 @@ def test_cli_runs_the_selected_task(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         return _Parsed()
 
     monkeypatch.setattr(ReplayTask, "from_args", classmethod(from_args))
-    config = _write(tmp_path, {**DOCUMENT, "task": "replay"})
+    config = _write(tmp_path, {**DOCUMENT, "arguments": {**DOCUMENT["arguments"], "task": "replay"}})
     monkeypatch.setattr(sys, "argv", ["holosoma", "--config", config, "--run.seed", "3"])
     cli.main()
     assert seen == [["--config", config, "--run.seed", "3"], "run"]
@@ -197,15 +189,15 @@ def test_run_sim_is_the_holosoma_command() -> None:
     assert run_sim.main is cli.main
 
 
-def test_task_arguments_are_task_named_overrides(tmp_path: Path) -> None:
+def test_document_selects_the_task_and_sets_its_fields(tmp_path: Path) -> None:
     from holosoma.config_types.experiment import ExperimentConfig
 
-    overrides = {"eval.checkpoint": "/runs/a.pt", "eval.callbacks.push.config.enabled": True}
-    doc = {"version": 1, "task": "eval", "arguments": {"overrides": overrides}}
-    from_document = parse_config(ExperimentConfig, args=["task:eval", "--config", _write(tmp_path, doc)])
+    overrides = {"task.checkpoint": "/runs/a.pt", "task.callbacks.push.config.enabled": True}
+    doc = {"version": 1, "arguments": {"task": "eval", "overrides": overrides}}
+    from_document = parse_config(ExperimentConfig, args=["--config", _write(tmp_path, doc)])
     from_flags = parse_config(
         ExperimentConfig,
-        args=["task:eval", "--eval.checkpoint=/runs/a.pt", "--eval.callbacks.push.config.enabled=True"],
+        args=["task:eval", "--task.checkpoint=/runs/a.pt", "--task.callbacks.push.config.enabled=True"],
     )
     assert from_document == from_flags
     assert from_document.task.checkpoint == "/runs/a.pt"
@@ -241,7 +233,7 @@ def test_moved_flags_keep_working(tmp_path: Path) -> None:
     new = [
         "exp:g1-29dof",
         "--run.num_envs=8",
-        "--train.resume_from=/runs/a.pt",
+        "--task.resume_from=/runs/a.pt",
         "--run.project=p",
         "--run.time_scale=0.5",
     ]
@@ -268,7 +260,7 @@ def test_moved_flags_keep_working(tmp_path: Path) -> None:
         ),
         (
             get_annotated_experiment_config,
-            ["exp:g1-29dof", "task:train", "simulator:mjwarp", "--run.num_envs=8", "--train.resume_from=/runs/a.pt"],
+            ["exp:g1-29dof", "task:train", "simulator:mjwarp", "--run.num_envs=8", "--task.resume_from=/runs/a.pt"],
         ),
     ],
     ids=["sim", "train"],

@@ -3,8 +3,8 @@
 Document shape (YAML or JSON)::
 
     version: 1
-    task: sim                    # workflow the holosoma command runs
     arguments:
+      task: sim                  # task:<name>, the workflow the holosoma command runs
       simulator: sim-mujoco      # <group>:<preset>
       robot: g1-29dof
       sensor:                    # <family>.<key>:<preset>
@@ -32,7 +32,7 @@ import yaml
 
 SUPPORTED_VERSION = 1
 EMBEDDED_KEY = "holosoma_sim"
-DOCUMENT_FIELDS = {"version", "task", "arguments"}
+DOCUMENT_FIELDS = {"version", "arguments"}
 
 _SUBCOMMAND_TOKEN = re.compile(r"^[A-Za-z_][\w.-]*:[^\s:]+$")
 _VALUELESS_FLAGS = {"--help"}
@@ -122,11 +122,11 @@ MOVED_FLAGS = {
     **{f"training.{name}": f"run.{name}" for name in ("num_envs", "headless", "seed", "torch_deterministic")},
     **{f"training.{name}": f"run.{name}" for name in ("project", "name")},
     **{name: f"run.{name}" for name in ("device", "time_scale", "viewer_update_decimation", "viewer_dt")},
-    "training.checkpoint": "train.resume_from",
-    "training.teacher_checkpoint": "train.teacher_checkpoint",
-    "training.multigpu": "train.multigpu",
-    "training.max_eval_steps": "eval.max_eval_steps",
-    "training.export_onnx": "eval.export_onnx",
+    "training.checkpoint": "task.resume_from",
+    **{
+        f"training.{name}": f"task.{name}"
+        for name in ("teacher_checkpoint", "multigpu", "max_eval_steps", "export_onnx")
+    },
 }
 # Flags that load but no longer do anything, with the reason.
 REMOVED_FLAGS = {
@@ -168,35 +168,11 @@ def _warn_once(key: str, message: str) -> None:
         logger.warning(message)
 
 
-def alias_task_flags(argv: list[str], task: str | None = None) -> list[str]:
-    """Rewrite ``--<task>.<field>`` flags for the selected task to ``--task.<field>``.
-
-    The ``task:<name>`` selection in ``argv`` wins over ``task`` (the config's default task); with
-    neither, flags are left alone. A flag naming a different task is an error.
-    """
-    selection = next((t.split(":", 1)[1] for t in argv if t.startswith("task:") and _SUBCOMMAND_TOKEN.match(t)), None)
-    task = selection or task
-    if task is None:
-        return argv
-    selected = task.replace("_", "-")
-    aliased = []
-    for token in argv:
-        head = token.partition("=")[0]
-        prefix = head[2:].split(".", 1)[0].replace("_", "-") if head.startswith("--") and "." in head else None
-        if prefix is not None and prefix == selected:
-            aliased.append(f"--task.{token.split('.', 1)[1]}")
-            continue
-        if prefix is not None and _is_task_name(prefix):
-            raise ConfigDocumentError(f"{head} sets an argument of task {prefix}, but task {selected} is selected")
-        aliased.append(token)
-    return aliased
-
-
 def select_task(argv: list[str]) -> tuple[str | None, list[str]]:
     """Return the selected task and ``argv`` without its ``task:<name>`` token.
 
     A ``task:<name>`` token on the command line takes precedence over the ``--config``
-    document's ``task`` field. Returns ``None`` when neither selects a task.
+    document's ``arguments.task``. Returns ``None`` when neither selects a task.
     """
     task: str | None = None
     remaining: list[str] = []
@@ -218,10 +194,10 @@ def select_task(argv: list[str]) -> tuple[str | None, list[str]]:
         return None, remaining
     try:
         doc = _select_document(_load(spec), path)
-        _document_args(doc)
+        selections, _ = _document_args(doc)
     except ConfigDocumentError as exc:
         raise ConfigDocumentError(f"--config {spec!r}: {exc}") from exc
-    return doc.get("task"), remaining
+    return next((t.split(":", 1)[1] for t, _ in selections if t.startswith("task:")), None), remaining
 
 
 def _pop_config_options(argv: list[str]) -> tuple[str | None, str | None, list[str]]:
@@ -288,12 +264,11 @@ def _document_args(doc: dict[str, Any]) -> tuple[list[tuple[str, str]], list[tup
     """Return a document's group-selection and flag tokens, each with the key it came from."""
     if doc.get("version") != SUPPORTED_VERSION:
         raise ConfigDocumentError(f"unsupported document version {doc.get('version')!r} (expected {SUPPORTED_VERSION})")
+    if "task" in doc:
+        raise ConfigDocumentError("task is a selection like any other: write it as `arguments: {task: <name>}`")
     unknown = set(doc) - DOCUMENT_FIELDS
     if unknown:
         raise ConfigDocumentError(f"unknown document fields: {sorted(map(str, unknown))}")
-    task = doc.get("task")
-    if task is not None and not (isinstance(task, str) and task):
-        raise ConfigDocumentError("task must be a task name")
     arguments = doc.get("arguments")
     if arguments is None:
         arguments = {}
@@ -315,13 +290,6 @@ def _document_args(doc: dict[str, Any]) -> tuple[list[tuple[str, str]], list[tup
         elif value is not None:
             raise ConfigDocumentError(f"arguments.{name}: expected a preset name or a mapping of keys to presets")
     return selections, flags
-
-
-def _is_task_name(key: Any) -> bool:
-    from holosoma.config_values.task import TASK_REGISTRY
-
-    names = {name.replace("_", "-") for name in TASK_REGISTRY}
-    return str(key).replace("_", "-") in names
 
 
 def _override_args(path: str, value: Any, source: str) -> list[tuple[str, str]]:
@@ -370,11 +338,9 @@ def _group(token: str) -> str:
 def args_to_document(argv: list[str]) -> dict[str, Any]:
     """Return the run document that expands to ``argv`` (CLI tokens, already expanded).
 
-    Selections become ``arguments`` entries and flags become ``overrides``; ``--task.<field>``
-    flags are written as ``<task>.<field>``. Values are written as YAML scalars or lists when that
-    round-trips to the same token, and as strings otherwise.
+    Selections become ``arguments`` entries and flags become ``overrides``. Values are written as
+    YAML scalars or lists when that round-trips to the same token, and as strings otherwise.
     """
-    task = next((t.split(":", 1)[1] for t in argv if t.startswith("task:") and _SUBCOMMAND_TOKEN.match(t)), None)
     arguments: dict[str, Any] = {}
     overrides: dict[str, Any] = {}
     tokens = iter(argv)
@@ -383,20 +349,13 @@ def args_to_document(argv: list[str]) -> dict[str, Any]:
             head, eq, value = token.partition("=")
             if not eq:
                 value = next(tokens, "")
-            path = head[2:]
-            if task is not None and path.startswith("task."):
-                path = f"{task}.{path[len('task.') :]}"
-            overrides[path] = _document_value(value)
-        elif _SUBCOMMAND_TOKEN.match(token) and not token.startswith("task:"):
+            overrides[head[2:]] = _document_value(value)
+        elif _SUBCOMMAND_TOKEN.match(token):
             name, _, preset = token.partition(":")
             arguments[name] = preset
     if overrides:
         arguments["overrides"] = overrides
-    document: dict[str, Any] = {"version": SUPPORTED_VERSION}
-    if task is not None:
-        document["task"] = task
-    document["arguments"] = arguments
-    return document
+    return {"version": SUPPORTED_VERSION, "arguments": arguments}
 
 
 class _Dumper(yaml.SafeDumper):

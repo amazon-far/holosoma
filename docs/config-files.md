@@ -1,7 +1,7 @@
 # Running from a config file
 
-The `holosoma` command (also `python -m holosoma`) launches every workflow. The document's
-`task` (or a `task:<name>` token on the command line) selects a workflow task from `TASK_REGISTRY`; every task reads the same config type,
+The `holosoma` command (also `python -m holosoma`) launches every workflow. The `task:<name>`
+selection (on the command line, or `task: <name>` under a document's `arguments`) selects a workflow task from `TASK_REGISTRY`; every task reads the same config type,
 `ExperimentConfig`, where `env_class` names the environment the task builds and drives:
 
 | `task` | Runs | Environment class | Alias |
@@ -25,8 +25,8 @@ training presets.
 ```yaml
 # @holosoma/examples/configs/g1_lidar.yaml
 version: 1
-task: sim
 arguments:
+  task: sim
   simulator: sim-mujoco          # <group>:<preset>
   robot: g1-29dof
   sensor:                        # <family>.<key>:<preset>
@@ -49,14 +49,14 @@ passed as `@holosoma/examples/configs/<name>.yaml`; copy one as a starting point
 holosoma --config @holosoma/examples/configs/g1_lidar.yaml
 holosoma --config @holosoma/examples/configs/g1_lidar.yaml terrain:terrain-locomotion-mix --run.seed 7
 
-# Train; the document sets `task: train` and selects the experiment with `exp:`
+# Train; the document selects `task: train` and the experiment with `exp:`
 holosoma --config @holosoma/examples/configs/g1_locomotion_train.yaml
 holosoma --config @holosoma/examples/configs/g1_locomotion_train.yaml \
     simulator:mjwarp --run.num_envs 1024
 
 # Evaluate; the checkpoint supplies the experiment and the document overrides it
 holosoma --config eval.yaml
-holosoma task:eval --eval.checkpoint=<CHECKPOINT_PATH> --run.num_envs 1
+holosoma task:eval --task.checkpoint=<CHECKPOINT_PATH> --run.num_envs 1
 
 # Print the equivalent command line, or turn a command line into a document, instead of running it
 holosoma --config eval.yaml --print-args
@@ -69,20 +69,20 @@ holosoma --config replay.yaml
 ```yaml
 # eval.yaml
 version: 1
-task: eval
 arguments:
+  task: eval                             # task:eval
   overrides:
-    eval.checkpoint: <CHECKPOINT_PATH>   # the eval task's own field: --eval.checkpoint
+    task.checkpoint: <CHECKPOINT_PATH>   # the eval task's own field: --task.checkpoint
     run.num_envs: 1
-    eval.max_eval_steps: 1000
-    eval.export_onnx: true
+    task.max_eval_steps: 1000
+    task.export_onnx: true
 ```
 
 ```yaml
 # replay.yaml
 version: 1
-task: replay
 arguments:
+  task: replay
   exp: g1-29dof-wbt
   simulator: isaacsim
   overrides:
@@ -92,30 +92,30 @@ arguments:
 
 ## Run and task settings
 
-`run` holds what every task reads the same way; each task owns the rest:
+`run` holds what every task reads the same way; each task owns the rest under `task`:
 
 | Block | Fields |
 |---|---|
 | `run` | `num_envs`, `headless`, `seed`, `torch_deterministic`, `device`, `time_scale`, `viewer_update_decimation`, `project`, `name` |
-| `train` | `resume_from`, `teacher_checkpoint`, `multigpu` |
-| `eval` | `checkpoint`, `max_eval_steps`, `export_onnx`, `callbacks` |
+| `task` (train) | `resume_from`, `teacher_checkpoint`, `multigpu` |
+| `task` (eval) | `checkpoint`, `max_eval_steps`, `export_onnx`, `callbacks` |
 
 Settings that used to live under `training` still work under their old spelling, with a warning
 naming the new one: `training.{num_envs, headless, seed, torch_deterministic, project, name}` and
 top-level `device`, `time_scale` and `viewer_*` → `run.*`; `training.checkpoint` →
-`train.resume_from`; `training.{teacher_checkpoint, multigpu}` → `train.*`;
-`training.{max_eval_steps, export_onnx}` → `eval.*`. Checkpoints saved with the old layout load
+`task.resume_from`; `training.{teacher_checkpoint, multigpu, max_eval_steps, export_onnx}` →
+`task.*`; `--checkpoint` → `--task.checkpoint`. Checkpoints saved with the old layout load
 unchanged. `eval_overrides.*` is ignored with a warning: eval applies its defaults (one viewed
 env, logger off, deterministic spawn) to the checkpoint's config before the command line, so set
 the field itself instead.
 
 ## Rules
 
-- **Task arguments.** The selected task's own fields are overrides named after it
-  (`eval.checkpoint`), just as on the command line (`--eval.checkpoint`; `--task.<field>` also
-  works). Setting another task's argument is an error, so a document describes one run.
+- **Task arguments.** The selected task's own fields are `task.<field>`, in a document's
+  overrides and on the command line alike (`--task.checkpoint`). A field the selected task does
+  not have is rejected.
 - **Experiment.** For `train` and `replay`, `exp: <preset>` is passed first wherever it
-  appears. `eval` takes its experiment from the checkpoint (`eval.checkpoint`, also accepted
+  appears. `eval` takes its experiment from the checkpoint (`task.checkpoint`, also accepted
   as `--checkpoint`), so its documents hold overrides and other selections only.
 - **Errors.** When the command line parser rejects a value that came from a document, the
   message ends with the file and key it came from.
@@ -132,6 +132,6 @@ the field itself instead.
   a dict field.
 - **Embedding.** A document can sit inside a larger file. When the root has no `version` but
   has a `holosoma_sim` mapping, that mapping is read; `--config-path a.b` selects any other
-  nested mapping. Only `version`, `task` and `arguments` are allowed in the document, so
-  settings for other tools belong next to it, not inside it.
+  nested mapping. Only `version` and `arguments` are allowed in the document, so settings for
+  other tools belong next to it, not inside it.
 - **Paths.** `--config` accepts the same path forms as `--import-file`. Pass it once per run.

@@ -14,7 +14,7 @@ from holosoma.config_types.task import EvalTaskConfig
 from holosoma.tasks.base import Task
 from holosoma.utils.config_document import (
     ConfigDocumentError,
-    alias_task_flags,
+    alias_legacy_flags,
     expand_config_args,
     write_document,
 )
@@ -198,12 +198,12 @@ class EvalTask(Task):
             parse_config(ExperimentConfig, args=args)  # prints the command line or document and exits
         # The checkpoint supplies the base config, so find it (and any simulator selection) first.
         try:
-            tokens = alias_task_flags(expand_config_args(args))
+            tokens = alias_legacy_flags(expand_config_args(args))
         except ConfigDocumentError as exc:
             raise SystemExit(str(exc)) from exc
         checkpoint = _flag_value(tokens, "--task.checkpoint")
         if checkpoint is None:
-            raise SystemExit("task:eval needs --eval.checkpoint=<path or wandb:// URI> (or --checkpoint=...).")
+            raise SystemExit("task:eval needs --task.checkpoint=<path or wandb:// URI> (or --checkpoint=...).")
         saved_config, saved_wandb_path = load_saved_experiment_config(CheckpointConfig(checkpoint=checkpoint))
         eval_config = replace_retired_simulator(_eval_config(saved_config), tokens)
         record: list[str] = []

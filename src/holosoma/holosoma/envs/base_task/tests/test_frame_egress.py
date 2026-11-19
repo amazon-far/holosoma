@@ -127,8 +127,7 @@ class _LoopTask(SimulationTask):
         self.config = cast(
             "EnvConfig",
             SimpleNamespace(
-                viewer_update_decimation=viewer_update_decimation,
-                time_scale=0.0,
+                run=SimpleNamespace(viewer_update_decimation=viewer_update_decimation, time_scale=0.0),
                 robot=SimpleNamespace(asset=SimpleNamespace(robot_type="test")),
                 simulator=SimpleNamespace(
                     _target_="test.Simulator",

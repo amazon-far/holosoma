@@ -108,7 +108,7 @@ jobs:
               python tests/nightly/nightly.py exp:${{ matrix.experiment }} \
                 logger:wandb --logger.video.enabled=False \
                 simulator:${{ matrix.sim_preset || matrix.simulator }} \
-                --train.multigpu=${{ matrix.multigpu }} ${{ matrix.extra_args }}
+                --task.multigpu=${{ matrix.multigpu }} ${{ matrix.extra_args }}
             """
 
 

@@ -6,13 +6,11 @@ extension task come from ``TASK_REGISTRY``. ``python -m holosoma`` is the same c
 
 from __future__ import annotations
 
-import dataclasses
 import sys
 
 
 def main() -> None:
     """Parse the selected task's config from ``sys.argv`` and run it."""
-    from holosoma.config_types.experiment import ExperimentConfig
     from holosoma.config_values.task import TASK_REGISTRY
     from holosoma.utils.config_document import ConfigDocumentError, select_task
     from holosoma.utils.config_registry import load_plugins
@@ -26,11 +24,6 @@ def main() -> None:
 
     load_plugins()
     tasks = {key.replace("_", "-"): value for key, value in TASK_REGISTRY.items()}
-    # A task's arguments are spelled `<task>:` in documents and `--<task>.*` on the CLI.
-    fields = {field.name.replace("_", "-") for field in dataclasses.fields(ExperimentConfig)}
-    shadowing = sorted(set(tasks) & fields)
-    if shadowing:
-        raise SystemExit(f"Task names {shadowing} shadow ExperimentConfig fields; register them under other names.")
     name = (name or "sim").replace("_", "-")
     if name not in tasks:
         raise SystemExit(f"Unknown task {name!r}; choose from {sorted(tasks)}.")

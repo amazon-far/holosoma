@@ -244,7 +244,7 @@ def train_on_task(
     if task.teacher_checkpoint is not None:
         teacher_checkpoints = [s.strip() for s in task.teacher_checkpoint.split(",") if s.strip()]
         if not teacher_checkpoints:
-            raise ValueError("train.teacher_checkpoint must contain at least one checkpoint path.")
+            raise ValueError("task.teacher_checkpoint must contain at least one checkpoint path.")
 
     resume_checkpoint: Path | None = None
     resume_teacher_count: int | None = None
@@ -288,7 +288,7 @@ def train_on_task(
     if teacher_checkpoints:
         if not hasattr(algo, "load_teacher"):
             raise RuntimeError(
-                f"`train.teacher_checkpoint` was set but algorithm "
+                f"`task.teacher_checkpoint` was set but algorithm "
                 f"{type(algo).__name__} does not implement load_teacher()."
             )
         teacher_ckpt_paths = [str(load_checkpoint(tc, str(experiment_save_dir))) for tc in teacher_checkpoints]

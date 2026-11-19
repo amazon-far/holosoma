@@ -215,8 +215,8 @@ def parse_config(
     """Parse a config with plugin, preset-file, and dynamic-dict support.
 
     Recognizes repeatable ``--import-file PATH`` options, one ``--config PATH [--config-path a.b]``
-    run document (see :mod:`holosoma.utils.config_document`), ``--<task>.<field>`` flags for the
-    selected task, ``--print-args`` (print the equivalent command line and exit), ``--to-config``
+    run document (see :mod:`holosoma.utils.config_document`), the old spellings of moved flags,
+    ``--print-args`` (print the equivalent command line and exit), ``--to-config``
     (print the equivalent run document and exit), and top-level ``<field>.<key>:<variant>`` dict
     declarations.
 
@@ -233,7 +233,6 @@ def parse_config(
     from holosoma.utils.config_document import (
         ConfigDocumentError,
         alias_legacy_flags,
-        alias_task_flags,
         expand_config_args,
     )
     from holosoma.utils.tyro_utils import (
@@ -258,12 +257,9 @@ def parse_config(
     provenance: dict[str, str] = {}
     try:
         expanded = expand_config_args(argv, frozenset(_root_subcommands(config_type)), provenance)
-        task = next((t.split(":", 1)[1] for t in expanded if t.startswith("task:")), None) or _default_task(config_type)
-        argv = alias_task_flags(alias_legacy_flags(expanded), task)
+        argv = alias_legacy_flags(expanded)
         provenance = {
-            alias_task_flags(renamed, task)[0]: source
-            for token, source in provenance.items()
-            if (renamed := alias_legacy_flags([token]))
+            renamed[0]: source for token, source in provenance.items() if (renamed := alias_legacy_flags([token]))
         }
     except ConfigDocumentError as exc:
         raise SystemExit(str(exc)) from exc
@@ -332,20 +328,6 @@ def _cli_with_provenance(config_type: Any, kwargs: dict[str, Any], provenance: d
 def _normalize_cli_text(text: str) -> str:
     """Fold tyro's hyphen/underscore spellings and its box-drawing line wraps for matching."""
     return "".join(text.replace("_", "-").split()).replace("│", "")
-
-
-def _default_task(config_type: Any) -> str | None:
-    """Registry name of ``config_type``'s default ``task``, or ``None`` if it has no task field."""
-    from holosoma.config_values.task import TASK_REGISTRY
-    from holosoma.utils.tyro_utils import _strip_annotated
-
-    base = _strip_annotated(config_type)
-    if not dataclasses.is_dataclass(base):
-        return None
-    field = next((f for f in dataclasses.fields(base) if f.name == "task"), None)
-    if field is None:
-        return None
-    return next((name for name, preset in TASK_REGISTRY.items() if preset == field.default), None)
 
 
 def _reject_legacy_mujoco_cli(argv: list[str]) -> None:

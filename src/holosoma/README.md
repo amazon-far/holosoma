@@ -143,7 +143,7 @@ python src/holosoma/holosoma/eval_agent.py \
 This evaluation mode:
 - Automatically loads the training configuration from the checkpoint
 - Runs evaluation in the same simulator and environment as training
-- Can export policies to ONNX format (via `--eval.export_onnx=True`)
+- Can export policies to ONNX format (via `--task.export_onnx=True`)
 - For locomotion evaluation, supports interactive velocity commands via keyboard (when simulator window is active):
   - `w`/`a`/`s`/`d`: linear velocity commands
   - `q`/`e`: angular velocity commands

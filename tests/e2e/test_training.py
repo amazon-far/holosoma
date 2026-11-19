@@ -121,7 +121,7 @@ def assert_training_and_eval_workflow(
         f"{REPO_ROOT}/src/holosoma/holosoma/eval_agent.py",
         f"--checkpoint={checkpoint_path}",
         "--run.headless=True",
-        "--eval.max-eval-steps=4",
+        "--task.max-eval-steps=4",
     ]
     print("Eval command: ", subprocess.list2cmdline(eval_cmd))
     subprocess.check_call(eval_cmd)
