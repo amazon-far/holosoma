@@ -8,6 +8,7 @@ or evaluation environments.
 
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 import traceback
@@ -73,9 +74,29 @@ def run_simulation(config: RunSimConfig) -> None:
         sys.exit(1)
 
 
+TASK_ENTRYPOINTS = {
+    "train": "holosoma.train_agent",
+    "eval": "holosoma.eval_agent",
+    "replay": "holosoma.replay",
+}
+"""Modules whose ``main()`` runs each non-simulation task; ``sim`` (the default) runs here."""
+
+
 def main() -> None:
-    """Main function using tyro configuration with compositional subcommands."""
-    # Initialize logging
+    """Run the task selected by ``task:<name>`` or the ``--config`` document; ``sim`` by default."""
+    from holosoma.utils.config_document import ConfigDocumentError, select_task
+
+    try:
+        task, argv = select_task(sys.argv[1:])
+    except ConfigDocumentError as exc:
+        raise SystemExit(str(exc)) from exc
+    sys.argv = [sys.argv[0], *argv]
+    if task not in (None, "sim"):
+        if task not in TASK_ENTRYPOINTS:
+            raise SystemExit(f"Unknown task {task!r}; choose from {['sim', *TASK_ENTRYPOINTS]}.")
+        importlib.import_module(TASK_ENTRYPOINTS[task]).main()
+        return
+
     init_eval_logging()
 
     logger.info("Holosoma Direct Simulation Runner")
@@ -91,7 +112,8 @@ def main() -> None:
         "  python -m holosoma.run_sim # defaults \n"
         "  python -m holosoma.run_sim simulator:mujoco robot:t1_29dof_waist_wrist terrain:terrain_locomotion_plane\n"
         "  python -m holosoma.run_sim simulator:isaacsim robot:g1_29dof terrain:terrain_locomotion_mix\n"
-        "  python -m holosoma.run_sim --config run.yaml [--config-path a.b] [overrides...]",
+        "  python -m holosoma.run_sim --config run.yaml [--config-path a.b] [overrides...]\n"
+        "  python -m holosoma.run_sim task:train exp:g1_29dof simulator:isaacsim  # also task:eval, task:replay",
     )
 
     # Run simulation directly with parsed config

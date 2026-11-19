@@ -3,6 +3,7 @@
 Document shape (YAML or JSON)::
 
     version: 1
+    task: sim                    # workflow run_sim launches; see select_task
     arguments:
       simulator: mujoco          # <group>:<preset>
       robot: g1-29dof
@@ -29,7 +30,7 @@ import yaml
 
 SUPPORTED_VERSION = 1
 EMBEDDED_KEY = "holosoma_sim"
-DOCUMENT_FIELDS = {"version", "arguments"}
+DOCUMENT_FIELDS = {"version", "task", "arguments"}
 
 _SUBCOMMAND_TOKEN = re.compile(r"^[A-Za-z_][\w.-]*:[^\s:]+$")
 _VALUELESS_FLAGS = {"--help"}
@@ -107,6 +108,38 @@ def expand_config_args(argv: list[str], root_selections: frozenset[str] = frozen
     return [*root, *nested, *doc_flags, *cli_rest]
 
 
+def select_task(argv: list[str]) -> tuple[str | None, list[str]]:
+    """Return the selected task and ``argv`` without its ``task:<name>`` token.
+
+    A ``task:<name>`` token on the command line takes precedence over the ``--config``
+    document's ``task`` field. Returns ``None`` when neither selects a task.
+    """
+    task: str | None = None
+    remaining: list[str] = []
+    expects_value = False
+    for token in argv:
+        if not expects_value and token.startswith("task:") and _SUBCOMMAND_TOKEN.match(token):
+            if task is not None:
+                raise ConfigDocumentError("task: given more than once")
+            task = token.split(":", 1)[1]
+        else:
+            remaining.append(token)
+        expects_value = (
+            not expects_value and token.startswith("--") and "=" not in token and token not in _VALUELESS_FLAGS
+        )
+    if task is not None:
+        return task, remaining
+    spec, path, _ = _pop_config_options(argv)
+    if spec is None:
+        return None, remaining
+    try:
+        doc = _select_document(_load(spec), path)
+        _document_args(doc)
+    except ConfigDocumentError as exc:
+        raise ConfigDocumentError(f"--config {spec!r}: {exc}") from exc
+    return doc.get("task"), remaining
+
+
 def _pop_config_options(argv: list[str]) -> tuple[str | None, str | None, list[str]]:
     found: dict[str, str] = {}
     remaining: list[str] = []
@@ -174,6 +207,9 @@ def _document_args(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
     unknown = set(doc) - DOCUMENT_FIELDS
     if unknown:
         raise ConfigDocumentError(f"unknown document fields: {sorted(map(str, unknown))}")
+    task = doc.get("task")
+    if task is not None and not (isinstance(task, str) and task):
+        raise ConfigDocumentError("task must be a task name")
     arguments = doc.get("arguments")
     if arguments is None:
         arguments = {}

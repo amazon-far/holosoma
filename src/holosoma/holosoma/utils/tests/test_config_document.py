@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ import yaml
 
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_values.experiment import get_annotated_experiment_config
+from holosoma.utils.config_document import select_task
 from holosoma.utils.config_registry import parse_config
 
 pytestmark = pytest.mark.no_sim
@@ -102,8 +104,9 @@ def test_root_subcommand_comes_first(tmp_path: Path) -> None:
         ({**DOCUMENT, "backend": "mujoco"}, []),
         ("version: 1\narguments: {}\narguments: {}\n", []),
         (DOCUMENT, ["--config", "other.yaml"]),
+        ({**DOCUMENT, "task": 5}, []),
     ],
-    ids=["unsupported-version", "unknown-field", "duplicate-key", "repeated-config"],
+    ids=["unsupported-version", "unknown-field", "duplicate-key", "repeated-config", "task-not-a-name"],
 )
 def test_rejects_invalid_documents(tmp_path: Path, content: dict[str, Any] | str, extra_args: list[str]) -> None:
     with pytest.raises(SystemExit):
@@ -121,3 +124,37 @@ def test_json_document(tmp_path: Path) -> None:
 )
 def test_packaged_examples_parse(name: str, config_type: Any) -> None:
     parse_config(config_type, args=["--config", f"@holosoma/examples/configs/{name}.yaml"])
+
+
+@pytest.mark.parametrize(
+    ("cli", "doc_task", "expected"),
+    [
+        ([], None, None),
+        ([], "train", "train"),
+        (["task:eval"], "train", "eval"),
+        (["--training.name", "task:x", "task:replay"], None, "replay"),
+    ],
+    ids=["none", "document", "cli-wins", "flag-value-is-not-a-task"],
+)
+def test_select_task(tmp_path: Path, cli: list[str], doc_task: str | None, expected: str | None) -> None:
+    doc = {**DOCUMENT, "task": doc_task} if doc_task else DOCUMENT
+    args = ["--config", _write(tmp_path, doc), *cli]
+    task, remaining = select_task(args)
+    assert task == expected
+    assert remaining == [t for t in args if t != f"task:{expected}"]
+
+
+def test_run_sim_hands_task_to_its_entrypoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import holosoma.replay
+    from holosoma import run_sim
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(holosoma.replay, "main", lambda: seen.append(list(sys.argv[1:])))
+    config = _write(tmp_path, {**DOCUMENT, "task": "replay"})
+    monkeypatch.setattr(sys, "argv", ["run_sim", "--config", config, "--training.seed", "3"])
+    run_sim.main()
+    assert seen == [["--config", config, "--training.seed", "3"]]
+
+    monkeypatch.setattr(sys, "argv", ["run_sim", "task:fly"])
+    with pytest.raises(SystemExit, match="Unknown task 'fly'"):
+        run_sim.main()

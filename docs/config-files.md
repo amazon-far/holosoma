@@ -1,13 +1,24 @@
 # Running from a config file
 
-Every entrypoint that parses its arguments with `parse_config` — `run_sim`, `train_agent`,
-`eval_agent`, `replay` — reads them from a YAML or JSON document with `--config`. Each entry in
-the document maps to the token you would type on the command line, so any preset from an
-installed extension or an `--import-file` works the same way here.
+`run_sim` launches every workflow. The document's `task` (or a `task:<name>` token on the
+command line) selects it:
+
+| `task` | Runs | Same as |
+|---|---|---|
+| `sim` (default) | the simulation loop | — |
+| `train` | training | `train_agent` |
+| `eval` | checkpoint evaluation | `eval_agent` |
+| `replay` | motion replay | `replay` |
+
+The remaining arguments go to that task unchanged, so `train_agent`, `eval_agent` and `replay`
+also accept the same documents directly. Each entry in `arguments` maps to the token you would
+type on the command line, so any preset from an installed extension or an `--import-file` works
+the same way here.
 
 ```yaml
 # @holosoma/examples/configs/g1_lidar.yaml
 version: 1
+task: sim
 arguments:
   simulator: mujoco              # <group>:<preset>
   robot: g1-29dof
@@ -31,16 +42,16 @@ passed as `@holosoma/examples/configs/<name>.yaml`; copy one as a starting point
 python -m holosoma.run_sim --config @holosoma/examples/configs/g1_lidar.yaml
 python -m holosoma.run_sim --config @holosoma/examples/configs/g1_lidar.yaml terrain:terrain-locomotion-mix --training.seed 7
 
-# Train; the document selects the experiment with `exp:`
-python -m holosoma.train_agent --config @holosoma/examples/configs/g1_locomotion_train.yaml
-python -m holosoma.train_agent --config @holosoma/examples/configs/g1_locomotion_train.yaml \
+# Train; the document sets `task: train` and selects the experiment with `exp:`
+python -m holosoma.run_sim --config @holosoma/examples/configs/g1_locomotion_train.yaml
+python -m holosoma.run_sim --config @holosoma/examples/configs/g1_locomotion_train.yaml \
     simulator:mjwarp --training.num_envs 1024
 
 # Evaluate; the checkpoint supplies the experiment and the document overrides it
-python -m holosoma.eval_agent --checkpoint=<CHECKPOINT_PATH> --config eval.yaml
+python -m holosoma.run_sim task:eval --checkpoint=<CHECKPOINT_PATH> --config eval.yaml
 
 # Replay a whole-body-tracking motion in the Isaac Sim viewer
-python -m holosoma.replay --config replay.yaml
+python -m holosoma.run_sim --config replay.yaml
 ```
 
 ```yaml
@@ -56,6 +67,7 @@ arguments:
 ```yaml
 # replay.yaml
 version: 1
+task: replay
 arguments:
   exp: g1-29dof-wbt
   simulator: isaacsim
@@ -66,8 +78,8 @@ arguments:
 
 ## Rules
 
-- **Experiment.** For `train_agent` and `replay`, `exp: <preset>` is passed first wherever it
-  appears. `eval_agent` takes its experiment from the checkpoint, so its documents hold overrides
+- **Experiment.** For `train` and `replay`, `exp: <preset>` is passed first wherever it
+  appears. `eval` takes its experiment from the checkpoint, so its documents hold overrides
   and other selections only.
 - **Precedence.** Command-line tokens win. A group the command line selects (`simulator:…`,
   `sensor.scan:…`) replaces the document's selection, and a repeated flag takes the last value.
