@@ -20,7 +20,8 @@ def test_peer_images_become_the_head_remote_camera_data() -> None:
     outputs = ("loopback/rgb", "loopback/depth")
 
     assert rendered["frames"] > 1 and rendered["linked"]
-    assert sent["exchanges"] == rendered["frames"] + len(rendered["episodes"])  # each renders or emits
+    starts = sum(phase == "episode_start" for phase, _ in rendered["episodes"])
+    assert sent["exchanges"] == rendered["frames"] + starts  # each renders or starts episodes
     assert rendered["exports_in_place"] and sent["imports_in_place"]
     assert (
         rendered["episodes"]
@@ -29,7 +30,6 @@ def test_peer_images_become_the_head_remote_camera_data() -> None:
             ("episode_start", [0, 1]),
             ("episode_end", [1]),
             ("episode_start", [1]),
-            ("episode_end", [0, 1]),
         ]
     )
     torch.testing.assert_close(rendered["robot_root_states"], sent["robot_root_states"])

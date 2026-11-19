@@ -15,8 +15,9 @@ plugin by subclassing :class:`holosoma.cosim.base.PeerHandler`; :mod:`.renderer`
   plane with the camera's ``depth_clipping_behavior`` applied. Each camera's settings (field of view, near/far,
   clipping, mount target) are its config's on both sides; the renderer writes the frames the head's cameras
   would, from the state it receives.
-- Snapshots: one per frame a camera is due, and one per head ``episode_end``/``episode_start`` with its
-  ``phase`` and ``env_ids``. Episode snapshots carry the state at that boundary and must not write the exports.
+- Snapshots: one per frame a camera is due, and one per head ``episode_start`` with its ``phase`` and
+  ``env_ids``, after the reset: the renderer ends those environments' open episodes, then starts them, as a
+  reset does. Episode snapshots must not write the exports. Episodes still open end when the head closes.
 
 The remote cameras' outputs on the head are linked onto the exports, read in place until the next exchange;
 exports are final, since both sides' settings (clipping included) match. Head consumers that read them on
@@ -59,7 +60,7 @@ class CosimRenderPlugin(HeadPlugin):
 
     Remote cameras take the renderer's images: each frame they are filled after local sensors render
     and before consumers read them. Without remote cameras, state is published after local cameras render.
-    Episode boundaries are published too, so the renderer can emit them.
+    Episode starts are published too, so the renderer can end and start the same episodes.
     """
 
     def __init__(self, cfg: CosimRenderPluginConfig, simulator: BaseSimulator) -> None:
@@ -94,16 +95,10 @@ class CosimRenderPlugin(HeadPlugin):
             before=self.simulator.sensor_render_hook,
         )
         yield hooks.add(
-            Phase.EPISODE_END, lambda env_ids: self._episode(Phase.EPISODE_END, env_ids), name="cosim.episode_end"
+            Phase.EPISODE_START,
+            lambda env_ids: self.bridge.publish(Phase.EPISODE_START, env_ids),
+            name="cosim.episode_start",
         )
-        yield hooks.add(
-            Phase.EPISODE_START, lambda env_ids: self._episode(Phase.EPISODE_START, env_ids), name="cosim.episode_start"
-        )
-
-    def _episode(self, phase: Phase, env_ids: torch.Tensor) -> None:
-        """Publish an episode boundary, so the renderer emits it; skipped once the bridge has failed."""
-        if not self.bridge.failed:
-            self.bridge.publish(phase, env_ids)
 
     def _frame(self) -> None:
         """Publish when a camera is due, and fill the due remote cameras from the renderer's images."""

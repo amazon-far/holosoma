@@ -22,7 +22,8 @@ def test_isaacsim_renderer_fills_the_head_remote_camera() -> None:
     sent, rendered = run_pair(2, "--loopback", renderer="isaacsim")
 
     assert rendered["frames"] > 1 and rendered["linked"]
-    assert sent["exchanges"] == rendered["frames"] + len(rendered["episodes"])  # each renders or emits
+    starts = sum(phase == "episode_start" for phase, _ in rendered["episodes"])
+    assert sent["exchanges"] == rendered["frames"] + starts  # each renders or starts episodes
     assert rendered["exports_in_place"] and sent["imports_in_place"]
     torch.testing.assert_close(rendered["robot_root_states"], sent["robot_root_states"], atol=1e-4, rtol=0)
     torch.testing.assert_close(rendered["dof_pos"], sent["dof_pos"], atol=1e-4, rtol=0)

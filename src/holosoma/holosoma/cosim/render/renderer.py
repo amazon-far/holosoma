@@ -44,7 +44,7 @@ class RenderTask(BaseTask):
     backend's native placement where it has one, otherwise where a :class:`SimulationTask` would place them.
     Drive each frame by writing writable simulator state in place, then :meth:`render_frame`; every sensor
     renders each frame. ``simulator.time()`` reports ``simulator.kinematic_time``, which the caller sets.
-    Episodes open and end only through :meth:`emit_episode`; close ends those still open.
+    Episodes open and end only through :meth:`start_episodes`; close ends those still open.
     """
 
     def __init__(self, tyro_config: EnvConfig) -> None:
@@ -73,15 +73,11 @@ class RenderTask(BaseTask):
         origins = self.simulator.native_env_origins()
         return simulation_env_origins(self) if origins is None else origins
 
-    def emit_episode(self, phase: str, env_ids: Sequence[int]) -> None:
-        """Emit ``episode_end`` or ``episode_start`` for ``env_ids``, e.g. as a head did."""
+    def start_episodes(self, env_ids: Sequence[int]) -> None:
+        """End the open episodes of ``env_ids``, then start theirs, as a reset does."""
         ids = torch.tensor(env_ids, dtype=torch.long, device=self.device)
-        if phase == Phase.EPISODE_END:
-            self._end_episodes(ids)
-        elif phase == Phase.EPISODE_START:
-            self._start_episodes(ids)
-        else:
-            raise ValueError(f"{phase!r} is not an episode phase")
+        self._end_episodes(ids[self._episode_open[ids]])
+        self._start_episodes(ids)
 
     def render_frame(self) -> None:
         """Render the applied state and publish sensors, without physics.
@@ -110,7 +106,7 @@ class RenderHandler(PeerHandler):
 
     Adopts the head's environment origins, rejects any other scene difference, and links the head fields
     writable on ``task``'s simulator to its state, so the head's changes reach it at each render. A snapshot
-    published from an episode phase emits that phase on ``task`` instead of rendering.
+    published from ``episode_start`` starts those episodes on ``task`` instead of rendering.
     """
 
     def __init__(self, task: RenderTask) -> None:
@@ -158,8 +154,8 @@ class RenderHandler(PeerHandler):
 
     def step(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:
         self.simulator.kinematic_time = snapshot.sim_time
-        if snapshot.env_ids is not None and snapshot.phase is not None:
-            self.task.emit_episode(snapshot.phase, snapshot.env_ids)
+        if snapshot.phase == Phase.EPISODE_START and snapshot.env_ids is not None:
+            self.task.start_episodes(snapshot.env_ids)
         else:
             self.task.render_frame()
 

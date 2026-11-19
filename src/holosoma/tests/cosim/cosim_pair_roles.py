@@ -133,11 +133,12 @@ def head(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bool
                 for name in ("overview", "loopback"):
                     manager.set_mount_pose(name, moved)
             task.step()
+        saved["episodes"] = list(saved["episodes"])  # without the episode ends that close emits
         # Remote camera outputs are the renderer's exports, not copies.
         saved["imports_in_place"] = all(
             sim.state.get(name).data_ptr() == tensor.data_ptr() for name, tensor in cosim.bridge.imports.items()
         )
-    saved["exchanges"] = cosim.bridge.sequence  # after close, which ends the open episodes
+    saved["exchanges"] = cosim.bridge.sequence
     torch.save(saved, output / "head.pt")
 
 
