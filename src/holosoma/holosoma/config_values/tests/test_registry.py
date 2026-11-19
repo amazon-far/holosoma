@@ -16,7 +16,7 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_values.logger import LOGGER_REGISTRY
 from holosoma.config_values.robot import g1_29dof
-from holosoma.config_values.run_sim import RUN_SIM_REGISTRY
+from holosoma.config_values.simulator import SIMULATOR_REGISTRY
 from holosoma.utils import config_registry as registry
 from holosoma.utils import path as path_utils
 from holosoma.utils.config_registry import ConfigRegistry, UseRegistry
@@ -267,19 +267,6 @@ def test_registry_from_annotated_unmarked_is_none() -> None:
     assert registry_from_annotated(Annotated[RobotConfig, "some other metadata"]) is None
 
 
-def test_registry_from_annotated_disambiguates_shared_type() -> None:
-    # SimulatorConfig backs BOTH the simulator and run_sim registries; the marker picks one
-    # explicitly, so there is no ambiguity to resolve by type.
-    from typing import Annotated
-
-    from holosoma.config_values.run_sim import RUN_SIM_REGISTRY
-    from holosoma.config_values.simulator import SIMULATOR_REGISTRY
-    from holosoma.utils.config_registry import UseRegistry, registry_from_annotated
-
-    assert registry_from_annotated(Annotated[SimulatorConfig, UseRegistry(RUN_SIM_REGISTRY)]) is RUN_SIM_REGISTRY
-    assert registry_from_annotated(Annotated[SimulatorConfig, UseRegistry(SIMULATOR_REGISTRY)]) is SIMULATOR_REGISTRY
-
-
 # --- parse_config ------------------------------------------------------------------------------
 
 
@@ -287,7 +274,7 @@ def test_registry_from_annotated_disambiguates_shared_type() -> None:
 # scope (not inside a test) so the string annotations resolve when tyro re-evaluates them under
 # ``from __future__ import annotations``.
 _LoggerField: TypeAlias = Annotated[LoggerConfig, UseRegistry(LOGGER_REGISTRY)]
-_RunSimField: TypeAlias = Annotated[SimulatorConfig, UseRegistry(RUN_SIM_REGISTRY)]
+_SimulatorField: TypeAlias = Annotated[SimulatorConfig, UseRegistry(SIMULATOR_REGISTRY)]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -298,7 +285,7 @@ class _SynthConfig:
 
 @dataclasses.dataclass(frozen=True)
 class _SimsConfig:
-    sims: dict[str, _RunSimField] = dataclasses.field(default_factory=dict)
+    sims: dict[str, _SimulatorField] = dataclasses.field(default_factory=dict)
 
 
 def test_parse_no_declarations() -> None:
@@ -367,15 +354,13 @@ def test_parse_root_subcommand_preset_survives_dynamic_dict_tokens() -> None:
     assert isinstance(cfg.loggers["main"], DisabledLoggerConfig)
 
 
-def test_parse_dynamic_dict_shared_type_disambiguated_by_marker() -> None:
-    # SimulatorConfig backs both SIMULATOR_REGISTRY and RUN_SIM_REGISTRY. The _SimsConfig field
-    # is marked with RUN_SIM_REGISTRY, so it resolves to exactly that registry — the marker
-    # removes what used to be an unresolvable-by-type ambiguity. run_sim presets have the bridge
-    # enabled; base simulator presets do not, so the resolved variant is observable.
-    cfg = registry.parse_config(_SimsConfig, args=["sims.a:mujoco", "sims.b:mjwarp"])
+def test_parse_dynamic_dict_resolves_each_key_against_the_marked_registry() -> None:
+    # The interactive sim- presets enable the bridge and the training presets do not, so each
+    # key's resolved variant is observable.
+    cfg = registry.parse_config(_SimsConfig, args=["sims.a:sim-mujoco", "sims.b:mjwarp"])
     assert set(cfg.sims) == {"a", "b"}
-    # run_sim preset -> bridge enabled (distinguishes it from the base simulator registry).
     assert cfg.sims["a"].config.bridge.enabled is True
+    assert cfg.sims["b"].config.bridge.enabled is False
     assert cfg.sims["b"].config.mujoco_backend.value == "warp"
 
 

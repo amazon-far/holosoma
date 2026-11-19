@@ -11,13 +11,13 @@ from typing import Any, cast
 import pytest
 
 from holosoma.agents.distillation.base import DistillationBase
+from holosoma.agents.distillation.checkpoint import infer_num_teachers_from_checkpoint
 from holosoma.agents.distillation.distillation import Distillation
 from holosoma.agents.distillation_ppo.distillation_ppo import DistillationMinibatch, DistillationPPO
 from holosoma.agents.modules.module_utils import setup_depth_student_teacher_module, setup_student_teacher_module
 from holosoma.agents.modules.student_teacher_modules import StudentTeacher
 from holosoma.agents.modules.teacher_policies import MLPTeacher, PPOTeacher
 from holosoma.config_types.algo import DistillationConfig, DistillationPPOConfig, StudentTeacherModuleConfig
-from holosoma.train_agent import infer_num_teachers_from_checkpoint
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim

@@ -18,7 +18,7 @@ pytestmark = pytest.mark.no_sim
 DOCUMENT: dict[str, Any] = {
     "version": 1,
     "arguments": {
-        "simulator": "mjwarp",
+        "simulator": "sim-mjwarp",
         "robot": "t1-29dof-waist-wrist",
         "plugin": {"clock": "clock_publish"},
         "overrides": {
@@ -29,7 +29,7 @@ DOCUMENT: dict[str, Any] = {
     },
 }
 EQUIVALENT_CLI = [
-    "simulator:mjwarp",
+    "simulator:sim-mjwarp",
     "robot:t1-29dof-waist-wrist",
     "plugin.clock:clock_publish",
     "--training.headless",
@@ -144,16 +144,25 @@ def test_select_task(tmp_path: Path, cli: list[str], doc_task: str | None, expec
     assert remaining == [t for t in args if t != f"task:{expected}"]
 
 
-def test_run_sim_hands_task_to_its_entrypoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import holosoma.replay
+def test_run_sim_runs_the_selected_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from holosoma import run_sim
+    from holosoma.tasks.replay import ReplayTask
 
-    seen: list[list[str]] = []
-    monkeypatch.setattr(holosoma.replay, "main", lambda: seen.append(list(sys.argv[1:])))
+    seen: list[Any] = []
+
+    class _Parsed:
+        def run(self) -> None:
+            seen.append("run")
+
+    def from_args(_cls: type, args: list[str]) -> _Parsed:
+        seen.append(args)
+        return _Parsed()
+
+    monkeypatch.setattr(ReplayTask, "from_args", classmethod(from_args))
     config = _write(tmp_path, {**DOCUMENT, "task": "replay"})
     monkeypatch.setattr(sys, "argv", ["run_sim", "--config", config, "--training.seed", "3"])
     run_sim.main()
-    assert seen == [["--config", config, "--training.seed", "3"]]
+    assert seen == [["--config", config, "--training.seed", "3"], "run"]
 
     monkeypatch.setattr(sys, "argv", ["run_sim", "task:fly"])
     with pytest.raises(SystemExit, match="Unknown task 'fly'"):

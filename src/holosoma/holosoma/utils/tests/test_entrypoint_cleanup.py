@@ -10,8 +10,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import holosoma.replay as replay_module
-from holosoma import eval_agent, train_agent
+import holosoma.tasks.eval as eval_agent
+import holosoma.tasks.replay as replay_module
+import holosoma.tasks.train as train_agent
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.simulator import session
 from holosoma.utils import experiment_paths
@@ -210,13 +211,24 @@ def test_task_session_closes_task_before_app(
     assert events == expected_events
 
 
-def test_experiment_create_task_rejects_a_non_policy_task_before_building_it(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("task", "wrong_base", "required"),
+    [
+        ("train", "holosoma.envs.simulation_task.SimulationTask", "PolicyTask"),
+        ("sim", "holosoma.envs.policy_task.PolicyTask", "SimulationTask"),
+        ("replay", "holosoma.envs.policy_task.PolicyTask", "WholeBodyTrackingManager"),
+    ],
+)
+def test_create_task_rejects_an_env_class_the_task_cannot_drive_before_building_it(
+    monkeypatch: pytest.MonkeyPatch, task: str, wrong_base: str, required: str
 ) -> None:
-    from holosoma.config_values import experiment
-    from holosoma.envs.simulation_task import SimulationTask
+    import dataclasses
 
-    class _Rejected(SimulationTask):
+    from holosoma.config_values import experiment
+    from holosoma.config_values.task import TASK_REGISTRY
+    from holosoma.utils.helpers import get_class
+
+    class _Rejected(get_class(wrong_base)):  # type: ignore[misc]
         def __new__(cls, _config: object) -> Any:
             raise AssertionError("a rejected env_class must not be constructed")
 
@@ -225,5 +237,6 @@ def test_experiment_create_task_rejects_a_non_policy_task_before_building_it(
     monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.MUJOCO)
     monkeypatch.setattr(session, "get_class", lambda _target: _Rejected)
 
-    with pytest.raises(TypeError, match="not a PolicyTask subclass"), experiment.g1_29dof.create_task():
+    config = dataclasses.replace(experiment.g1_29dof, task=TASK_REGISTRY[task])
+    with pytest.raises(TypeError, match=f"not a {required} subclass"), config.create_task():
         pass

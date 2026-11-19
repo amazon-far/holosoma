@@ -5,7 +5,7 @@ Document shape (YAML or JSON)::
     version: 1
     task: sim                    # workflow run_sim launches; see select_task
     arguments:
-      simulator: mujoco          # <group>:<preset>
+      simulator: sim-mujoco      # <group>:<preset>
       robot: g1-29dof
       sensor:                    # <family>.<key>:<preset>
         scan: g1-pelvis-lidar

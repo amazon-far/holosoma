@@ -30,7 +30,7 @@ def test_cli_composes_camera_lidar_and_pointcloud_route() -> None:
     config = parse_config(
         RunSimConfig,
         args=[
-            "simulator:mujoco",
+            "simulator:sim-mujoco",
             "sensor.head:g1-head",
             "sensor.front_scan:g1-pelvis-lidar",
             "--sensor.front-scan.pattern.vertical-angles=[-15,0,15]",
@@ -63,7 +63,7 @@ def test_cli_round_trips_lidar_range_and_backend_query_options() -> None:
     config = parse_config(
         RunSimConfig,
         args=[
-            "simulator:mujoco",
+            "simulator:sim-mujoco",
             "sensor.depth:g1-head",
             "sensor.lidar:g1-pelvis-lidar",
             "sensor.lidar.mujoco:mujoco-lidar-config",
@@ -96,7 +96,7 @@ def test_cli_rejects_removed_isaacsim_camera_depth_clipping_field(capsys: pytest
         parse_config(
             RunSimConfig,
             args=[
-                "simulator:isaacsim",
+                "simulator:sim-isaacsim",
                 "sensor.depth:g1-head",
                 "sensor.depth.isaacsim:isaac-sim-camera-config",
                 "--sensor.depth.isaacsim.depth-clipping-behavior=max",
@@ -109,7 +109,7 @@ def test_cli_configures_isaacsim_fisheye_projection() -> None:
     config = parse_config(
         RunSimConfig,
         args=[
-            "simulator:isaacsim",
+            "simulator:sim-isaacsim",
             "sensor.head:g1-head",
             "--sensor.head.isaacsim.projection-type=fisheyeKannalaBrandtK3",
             "--sensor.head.isaacsim.fisheye.nominal-width=1920",
@@ -136,7 +136,7 @@ def test_cli_customizes_explicit_lidar_directions() -> None:
     config = parse_config(
         RunSimConfig,
         args=[
-            "simulator:mujoco",
+            "simulator:sim-mujoco",
             "sensor.scan:custom-lidar",
             "--sensor.scan.pattern.ray-directions=[[-1,0,-3],[4,5,-6]]",
             "--sensor.scan.pattern.organized-shape=[1,2]",
@@ -154,7 +154,7 @@ def test_cli_configures_lidar_viz_saved_scan_selection() -> None:
     config = parse_config(
         RunSimConfig,
         args=[
-            "simulator:mujoco",
+            "simulator:sim-mujoco",
             "sensor.front_scan:custom-lidar",
             "plugin.debug:lidar-viz-save",
             "--plugin.debug.lidars=['front_scan']",
@@ -176,7 +176,11 @@ def test_cli_configures_lidar_viz_saved_scan_selection() -> None:
 def test_cli_switches_the_raycast_preset_to_rtx_with_one_override() -> None:
     config = parse_config(
         RunSimConfig,
-        args=["simulator:isaacsim", "sensor.depth:g1-head-d435i-raycast-depth", "--sensor.depth.isaacsim.renderer=rtx"],
+        args=[
+            "simulator:sim-isaacsim",
+            "sensor.depth:g1-head-d435i-raycast-depth",
+            "--sensor.depth.isaacsim.renderer=rtx",
+        ],
     )
     camera = config.sensor["depth"]
     assert isinstance(camera, CameraSensorConfig)

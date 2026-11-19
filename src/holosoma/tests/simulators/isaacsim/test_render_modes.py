@@ -22,10 +22,10 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from holosoma.config_types.env import get_run_sim_env_config
+from holosoma.config_types.env import get_tyro_env_config
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.simulator import IsaacSimRenderConfig
-from holosoma.config_values import run_sim as run_sim_values
+from holosoma.config_values import simulator as sim_values
 from holosoma.utils.sim_utils import setup_isaaclab_launcher
 from tests.simulators._run_harness import run_harness
 
@@ -44,8 +44,8 @@ def _has_isaacsim() -> bool:
 
 def _run_config(render_config: IsaacSimRenderConfig) -> RunSimConfig:
     simulator = dataclasses.replace(
-        run_sim_values.isaacsim,
-        config=dataclasses.replace(run_sim_values.isaacsim.config, isaacsim=render_config),
+        sim_values.sim_isaacsim,
+        config=dataclasses.replace(sim_values.sim_isaacsim.config, isaacsim=render_config),
     )
     return RunSimConfig(simulator=simulator)
 
@@ -94,7 +94,7 @@ def test_launcher_config_reaches_app_launcher_namespace(
     monkeypatch.setattr(sys, "argv", ["test-render-modes"])
     monkeypatch.delenv("WORLD_SIZE", raising=False)
 
-    app = setup_isaaclab_launcher(get_run_sim_env_config(_run_config(render_config)), "cuda:0")
+    app = setup_isaaclab_launcher(get_tyro_env_config(_run_config(render_config)), "cuda:0")
 
     assert app is app_sentinel
     assert captured_args["rendering_mode"] == expected_rendering_mode

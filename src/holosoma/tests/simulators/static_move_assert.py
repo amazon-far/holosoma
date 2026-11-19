@@ -77,7 +77,7 @@ def _scene() -> SceneConfig:
 def _build(simulator: str, num_envs: int):
     from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 
-    argv = [f"simulator:{simulator}", "robot:g1-29dof", "terrain:terrain_locomotion_plane", "scene:empty"]
+    argv = [f"simulator:sim-{simulator}", "robot:g1-29dof", "terrain:terrain_locomotion_plane", "scene:empty"]
     config = tyro.cli(RunSimConfig, args=argv)
     sim_cfg = dataclasses.replace(
         config.simulator,

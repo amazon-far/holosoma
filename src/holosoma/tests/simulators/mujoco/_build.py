@@ -19,7 +19,7 @@ import pytest
 import torch
 
 import holosoma.config_values.robot as robot_values
-import holosoma.config_values.run_sim as run_sim_values
+import holosoma.config_values.simulator as sim_values
 from holosoma.config_types.experiment import TrainingConfig
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.scene import SceneConfig
@@ -67,7 +67,7 @@ def build_classic_sim(
     """
     from tests.simulators._sim_harness import launch_simulator
 
-    sim_cfg = _bridge_gantry_off(simulator or run_sim_values.mujoco)
+    sim_cfg = _bridge_gantry_off(simulator or sim_values.sim_mujoco)
     if native is not None:
         sim_cfg = dataclasses.replace(
             sim_cfg,
@@ -105,11 +105,11 @@ def build_warp_sim(
     """
     pytest.importorskip("warp")
     pytest.importorskip("mujoco_warp")
-    if getattr(run_sim_values.mjwarp.config, "mujoco_backend", None) != MujocoBackend.WARP:
+    if getattr(sim_values.sim_mjwarp.config, "mujoco_backend", None) != MujocoBackend.WARP:
         pytest.skip("mjwarp config is not the Warp backend")
     from tests.simulators._sim_harness import launch_simulator
 
-    sim_cfg = _bridge_gantry_off(run_sim_values.mjwarp)
+    sim_cfg = _bridge_gantry_off(sim_values.sim_mjwarp)
     if native is not None:
         sim_cfg = dataclasses.replace(
             sim_cfg,

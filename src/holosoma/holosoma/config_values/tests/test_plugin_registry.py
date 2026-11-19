@@ -38,12 +38,12 @@ def test_run_sim_plugin_field_is_scanned_and_bound() -> None:
 
 
 def test_run_sim_defaults_to_empty_plugin() -> None:
-    cfg = parse_config(RunSimConfig, args=["simulator:mujoco"])
+    cfg = parse_config(RunSimConfig, args=["simulator:sim-mujoco"])
     assert cfg.plugin == {}
 
 
 def test_declare_builtin_plugin() -> None:
-    cfg = parse_config(RunSimConfig, args=["simulator:mujoco", "plugin.clk:clock_publish"])
+    cfg = parse_config(RunSimConfig, args=["simulator:sim-mujoco", "plugin.clk:clock_publish"])
     assert set(cfg.plugin) == {"clk"}
     assert isinstance(cfg.plugin["clk"], ClockPublishPluginConfig)
 
@@ -51,7 +51,7 @@ def test_declare_builtin_plugin() -> None:
 def test_none_preset_resolves_to_noop_config() -> None:
     # `plugin.<key>:none` selects the no-op preset (mirrors every other family's `none`),
     # resolving to a real NoOpPluginConfig rather than a literal None.
-    cfg = parse_config(RunSimConfig, args=["simulator:mujoco", "plugin.disabled:none"])
+    cfg = parse_config(RunSimConfig, args=["simulator:sim-mujoco", "plugin.disabled:none"])
     assert isinstance(cfg.plugin["disabled"], NoOpPluginConfig)
 
 
@@ -61,7 +61,7 @@ def test_ros2_presets_resolve_with_independent_gantry_topics() -> None:
     cfg = parse_config(
         RunSimConfig,
         args=[
-            "simulator:mujoco",
+            "simulator:sim-mujoco",
             "plugin.clk:clock_publish",
             "--plugin.clk.topic=/sim_clock",
             "plugin.g:gantry_control",
@@ -89,7 +89,7 @@ def test_declare_plugin_with_leaf_override() -> None:
     cfg = parse_config(
         RunSimConfig,
         args=[
-            "simulator:mujoco",
+            "simulator:sim-mujoco",
             "plugin.clk:clock_publish",
             "--plugin.clk.publish-every=25",
             "--plugin.clk.node-name=my_clock",
@@ -105,7 +105,7 @@ def test_frequency_string_rate_parses_and_validates() -> None:
     # decimation at install time against the phase base rate).
     cfg = parse_config(
         RunSimConfig,
-        args=["simulator:mujoco", "plugin.clk:clock_publish", "--plugin.clk.publish-every=20Hz"],
+        args=["simulator:sim-mujoco", "plugin.clk:clock_publish", "--plugin.clk.publish-every=20Hz"],
     )
     assert cfg.plugin["clk"].publish_every == "20Hz"
 
@@ -117,7 +117,7 @@ def test_bad_frequency_string_fails_at_config_time() -> None:
 
 def test_unknown_plugin_variant_fails_loud() -> None:
     with pytest.raises(SystemExit, match="Unknown plugin variant 'bogus'"):
-        parse_config(RunSimConfig, args=["simulator:mujoco", "plugin.x:bogus"])
+        parse_config(RunSimConfig, args=["simulator:sim-mujoco", "plugin.x:bogus"])
 
 
 # A second PluginConfig subclass, resolved from the same registry alongside the built-in,

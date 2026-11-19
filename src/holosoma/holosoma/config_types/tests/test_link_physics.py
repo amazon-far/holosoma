@@ -214,7 +214,7 @@ def test_tyro_cli_round_trips_link_physics(robot_key: str) -> None:
 
     cfg = tyro.cli(
         RunSimConfig,
-        args=["simulator:mujoco", f"robot:{robot_key}", "terrain:terrain-locomotion-plane", "scene:empty"],
+        args=["simulator:sim-mujoco", f"robot:{robot_key}", "terrain:terrain-locomotion-plane", "scene:empty"],
     )
     # The nested PhysicsConfig survives the CLI surface.
     assert isinstance(cfg.robot.asset.link_physics, PhysicsConfig)

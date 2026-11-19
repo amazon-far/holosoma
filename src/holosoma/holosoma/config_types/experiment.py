@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
+import warnings
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
@@ -22,12 +23,14 @@ import holosoma.config_values.robot
 import holosoma.config_values.scene
 import holosoma.config_values.sensor
 import holosoma.config_values.simulator
+import holosoma.config_values.task
 import holosoma.config_values.termination
 import holosoma.config_values.terrain
 from holosoma.config_types.action import ActionManagerCfg
 from holosoma.config_types.algo import AlgoConfig
 from holosoma.config_types.command import CommandManagerCfg
 from holosoma.config_types.curriculum import CurriculumManagerCfg
+from holosoma.config_types.frequency import DecimationLike, validate_decimation_like
 from holosoma.config_types.logger import LoggerConfig
 from holosoma.config_types.observation import ObservationManagerCfg
 from holosoma.config_types.plugin import PluginConfig
@@ -37,12 +40,15 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import SensorConfig
 from holosoma.config_types.simulator import SimulatorConfig
+from holosoma.config_types.task import TaskConfig
 from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.config_types.terrain import TerrainManagerCfg
 from holosoma.utils.config_registry import UseRegistry
 
 if TYPE_CHECKING:
-    from holosoma.envs.policy_task import PolicyTask
+    from holosoma.envs.base_task.base_task import BaseTask
+
+_VIEWER_DT_REMOVAL_DATE = datetime.date(2027, 3, 1)
 
 
 def now_timestamp() -> str:
@@ -116,13 +122,32 @@ class EvalOverridesConfig:
 
 @dataclass(frozen=True)
 class ExperimentConfig:
-    """Top-level experiment configuration used by the Tyro CLI."""
+    """Top-level configuration for every workflow; ``task`` selects the workflow."""
+
+    task: Annotated[TaskConfig, UseRegistry(holosoma.config_values.task.TASK_REGISTRY)] = (
+        holosoma.config_values.task.train
+    )
+    """Workflow to run (``task:<name>``); ``env_class`` is the environment it builds."""
 
     env_class: str = "holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager"
 
     device: str | None = None
-    """Device for the task. None (the default) resolves from the simulator backend and process
-    rank, as ``RunSimConfig.device`` does; pass e.g. "cuda:0" to override. Not carried into eval."""
+    """Device for the task. None (the default) resolves from the simulator backend: cuda:0 for
+    MuJoCo Warp, cuda:0 for IsaacSim when CUDA is available (else cpu), cpu for classic MuJoCo,
+    and the process rank's GPU when distributed. Pass e.g. "cuda:0" to override. Not carried into
+    eval."""
+
+    viewer_update_decimation: DecimationLike = "<60Hz"
+    """Viewer render rate: a physics-step decimation, or a frequency string resolved against the
+    physics rate."""
+
+    viewer_dt: float | None = None
+    """Deprecated, removed after 2027-03-01: use ``viewer_update_decimation``. Converted to
+    ``">{1 / viewer_dt}Hz"``, the same decimation it gave before."""
+
+    time_scale: float = 0.0
+    """Sim-time to real-time ratio for the control loop: 1 paces sim time to match real time, 2 runs
+    twice as fast, 0 disables pacing entirely (run as fast as possible)."""
 
     training: TrainingConfig = TrainingConfig()
     algo: Annotated[AlgoConfig, UseRegistry(holosoma.config_values.algo.ALGO_REGISTRY)] = (
@@ -179,6 +204,23 @@ class ExperimentConfig:
 
     eval_overrides: EvalOverridesConfig = EvalOverridesConfig()
 
+    def __post_init__(self) -> None:
+        name = type(self).__name__
+        if self.time_scale < 0:
+            raise ValueError(f"{name}.time_scale must be >= 0, got {self.time_scale}.")
+        if self.viewer_dt is not None:
+            if self.viewer_dt <= 0:
+                raise ValueError(f"{name}.viewer_dt must be > 0, got {self.viewer_dt}.")
+            warnings.warn(
+                f"{name}.viewer_dt is deprecated; use viewer_update_decimation. It will be removed "
+                f"after {_VIEWER_DT_REMOVAL_DATE}.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            object.__setattr__(self, "viewer_update_decimation", f">{1 / self.viewer_dt!r}Hz")
+            object.__setattr__(self, "viewer_dt", None)
+        validate_decimation_like(self.viewer_update_decimation, field=f"{name}.viewer_update_decimation")
+
     def get_nightly_config(self) -> ExperimentConfig:
         if self.nightly is None:
             raise ValueError("nightly config is missing.")
@@ -230,13 +272,16 @@ class ExperimentConfig:
             logger=holosoma.config_values.logger.disabled if self.eval_overrides.disable_logger else self.logger,
         )
 
-    def create_task(self) -> AbstractContextManager[PolicyTask]:
-        """Return a context that builds the configured policy task and owns its resources."""
-        from holosoma.config_types.env import get_tyro_env_config
-        from holosoma.envs.policy_task import PolicyTask
-        from holosoma.simulator.session import task_session
+    def create_task(self) -> AbstractContextManager[BaseTask]:
+        """Return a context that builds the configured environment and owns its resources.
 
-        return task_session(get_tyro_env_config(self), PolicyTask)
+        ``env_class`` must be or subclass the selected task's ``env_base``.
+        """
+        from holosoma.config_types.env import get_tyro_env_config
+        from holosoma.simulator.session import task_session
+        from holosoma.utils.helpers import get_class
+
+        return task_session(get_tyro_env_config(self), get_class(self.task.env_base))
 
     def save_config(self, path: str) -> None:
         with open(path, "w") as file:

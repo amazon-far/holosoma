@@ -126,6 +126,8 @@ def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConf
         if "gravity" in extra and extra["gravity"] != gravity:
             raise ValueError("Saved config has conflicting sim.mujoco.gravity and sim.mujoco.extra.gravity")
         extra["gravity"] = gravity
+    # The workflow that saved the config is not part of what is loaded; the loader picks its own.
+    data.pop("task", None)
     return ExperimentConfig(**data)
 
 

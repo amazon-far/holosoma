@@ -26,11 +26,11 @@ from typing import cast
 import pytest
 
 import holosoma.config_values.simulator
-from holosoma import run_sim
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
-from holosoma.run_sim import limit_cpu_math_threads
+from holosoma.tasks import sim as sim_task
+from holosoma.tasks.sim import limit_cpu_math_threads
 from holosoma.utils.safe_torch_import import torch
 
 # Set explicitly rather than leaning on the root conftest's fallback: these cases are deselected by
@@ -67,7 +67,7 @@ def test_thread_limit_variables_match_production() -> None:
     # The parametrisation below deliberately spells the names out, which catches the tuple
     # SHRINKING (a case fails rather than vanishing). This catches it GROWING: a new variable with
     # no case would otherwise be unconstrained.
-    assert list(run_sim._THREAD_LIMIT_VARIABLES) == THREAD_LIMIT_VARIABLES
+    assert list(sim_task._THREAD_LIMIT_VARIABLES) == THREAD_LIMIT_VARIABLES
 
 
 def _in_tree_presets() -> set[str]:
@@ -90,7 +90,8 @@ def test_known_backends_are_the_ones_this_file_decides_for() -> None:
     # inheriting whatever the shared mujoco_backend default happens to give it. Deliberately not
     # asserted over the whole registry: that would also fail for a third-party preset, which is
     # none of this file's business and would make the result depend on test order.
-    assert _in_tree_presets() == {CLASSIC_PRESET, *OTHER_PRESETS}
+    # Each backend also has an interactive ``sim-`` preset on the same backend.
+    assert _in_tree_presets() == {name for base in (CLASSIC_PRESET, *OTHER_PRESETS) for name in (base, f"sim-{base}")}
 
 
 @pytest.mark.parametrize("device", ["cpu", "cpu:0"])
@@ -148,7 +149,7 @@ _CHILD = textwrap.dedent(
     import contextlib
     import dataclasses
 
-    import holosoma.run_sim as runner
+    import holosoma.tasks.sim as runner
     from holosoma.config_types.run_sim import RunSimConfig
     from holosoma.utils.config_registry import parse_config
     from holosoma.utils.safe_torch_import import torch
@@ -166,7 +167,7 @@ _CHILD = textwrap.dedent(
 
     RunSimConfig.create_task = create_task
 
-    config = parse_config(RunSimConfig, args=[f"simulator:{PRESET}"])
+    config = parse_config(RunSimConfig, args=[f"simulator:sim-{PRESET}"])
     if DEVICE is not None:
         config = dataclasses.replace(config, device=DEVICE)
     runner.run_simulation(config)

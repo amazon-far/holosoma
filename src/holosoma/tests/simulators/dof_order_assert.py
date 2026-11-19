@@ -52,7 +52,7 @@ TORQUE_STEPS = 5
 
 def _build(simulator: str, num_envs: int):
     _robot_presets.register()
-    argv = [f"simulator:{simulator}", f"robot:{ROBOT}", "terrain:terrain_locomotion_plane", "scene:empty"]
+    argv = [f"simulator:sim-{simulator}", f"robot:{ROBOT}", "terrain:terrain_locomotion_plane", "scene:empty"]
     config = tyro.cli(RunSimConfig, args=argv)
     sim_cfg = dataclasses.replace(
         config.simulator,

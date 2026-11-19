@@ -429,7 +429,7 @@ def test_saved_warp_preset_can_override_only_backend_then_initialize_classic():
     warp_config = parse_config(
         RunSimConfig,
         args=[
-            "simulator:mjwarp",
+            "simulator:sim-mjwarp",
             "--simulator.config.sim.mujoco.integrator",
             "rk4",
             "--simulator.config.sim.mujoco.cone",

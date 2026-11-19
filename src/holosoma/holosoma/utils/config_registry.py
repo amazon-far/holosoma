@@ -182,8 +182,8 @@ _REGISTRY_ATTR = "_holosoma_config_registry"
 def UseRegistry(registry: ConfigRegistry) -> Any:  # noqa: N802 - annotation marker, reads as a type constructor
     """Bind a config field to ``registry``. Use as ``Annotated`` metadata in either position::
 
-        simulator: Annotated[SimulatorConfig, UseRegistry(RUN_SIM_REGISTRY)]
-        simulators: dict[str, Annotated[SimulatorConfig, UseRegistry(RUN_SIM_REGISTRY)]]
+        simulator: Annotated[SimulatorConfig, UseRegistry(SIMULATOR_REGISTRY)]
+        simulators: dict[str, Annotated[SimulatorConfig, UseRegistry(SIMULATOR_REGISTRY)]]
 
     A scalar field gets a tyro subcommand menu built from the registry's current contents. A
     dynamic ``dict[str, X]`` field is populated by ``parse_config`` from ``<field>.<key>:<variant>``

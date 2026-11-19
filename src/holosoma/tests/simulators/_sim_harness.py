@@ -78,7 +78,7 @@ def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[A
     tuple
         ``(simulator, device, simulation_app)``; ``simulation_app`` is None outside IsaacSim.
     """
-    from holosoma.config_types.env import get_run_sim_env_config
+    from holosoma.config_types.env import get_tyro_env_config
     from holosoma.config_types.full_sim import FullSimConfig
     from holosoma.managers.terrain.manager import TerrainManager
     from holosoma.utils.helpers import get_class
@@ -88,7 +88,7 @@ def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[A
 
     if device is None:
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    env_config = get_run_sim_env_config(config)
+    env_config = get_tyro_env_config(config)
     setup_simulator_imports(env_config)
     simulation_app = None
     if get_simulator_type() == SimulatorType.ISAACSIM:
@@ -136,7 +136,7 @@ def build_run_sim_config(
     """
     from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 
-    argv = [f"simulator:{simulator}", f"robot:{robot}", f"terrain:{terrain}", f"scene:{scene}"]
+    argv = [f"simulator:sim-{simulator}", f"robot:{robot}", f"terrain:{terrain}", f"scene:{scene}"]
     config = tyro.cli(RunSimConfig, args=argv)
     if sensors is not None:
         config = dataclasses.replace(config, sensor=dict(sensors))

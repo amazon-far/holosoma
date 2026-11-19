@@ -10,7 +10,7 @@ version: 1
 task: sim
 arguments:
   # Group selections: <group>:<preset>
-  simulator: mujoco
+  simulator: sim-mujoco
   robot: g1-29dof
   # Keyed selections: <family>.<key>:<preset>
   sensor:

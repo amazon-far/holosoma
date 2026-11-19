@@ -17,7 +17,7 @@ from typing import Any
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.simulator import MujocoBackend
 from holosoma.config_values.experiment import get_annotated_experiment_config
-from holosoma.train_agent import split_envs_across_ranks, train_on_task
+from holosoma.tasks.train import split_envs_across_ranks, train_on_task
 from holosoma.utils.config_registry import parse_config
 
 REPO_ROOT = Path(__file__).parent.parent.parent.absolute()

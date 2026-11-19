@@ -13,7 +13,6 @@ from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.reward import RewardManagerCfg
 from holosoma.config_types.robot import RobotConfig
-from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import CameraSensorConfig, SensorConfig, validate_camera_dict
 from holosoma.config_types.simulator import SimulatorConfig
@@ -93,41 +92,6 @@ def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
         robot=tyro_config.robot,
         logger=tyro_config.logger,
         device=tyro_config.device,
-    )
-
-
-def get_run_sim_env_config(config: RunSimConfig) -> EnvConfig:
-    """Convert RunSimConfig to EnvConfig for a simulation task without policy managers.
-
-    Parameters
-    ----------
-    config : RunSimConfig
-        The simulation configuration.
-
-    Returns
-    -------
-    EnvConfig
-        Environment configuration with no policy managers.
-    """
-    _validate_cameras(config.sensor)
-    return EnvConfig(
-        env_class=config.env_class,
-        training=config.training,
-        simulator=config.simulator,
-        scene=config.scene,
-        sensors=dict(config.sensor),
-        plugin=dict(config.plugin),
-        terrain=config.terrain,
-        observation=None,
-        action=None,
-        reward=None,
-        termination=config.termination,
-        randomization=config.randomization,
-        command=None,
-        curriculum=None,
-        robot=config.robot,
-        logger=config.logger,
-        device=config.device,
-        time_scale=config.time_scale,
-        viewer_update_decimation=config.viewer_update_decimation,
+        time_scale=tyro_config.time_scale,
+        viewer_update_decimation=tyro_config.viewer_update_decimation,
     )
