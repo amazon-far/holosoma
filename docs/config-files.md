@@ -58,8 +58,9 @@ holosoma --config @holosoma/examples/configs/g1_locomotion_train.yaml \
 holosoma --config eval.yaml
 holosoma task:eval --eval.checkpoint=<CHECKPOINT_PATH> --run.num_envs 1
 
-# Print the equivalent command line instead of running it
+# Print the equivalent command line, or turn a command line into a document, instead of running it
 holosoma --config eval.yaml --print-args
+holosoma task:train exp:g1-29dof simulator:mjwarp --run.seed 1 --to-config > train.yaml
 
 # Replay a whole-body-tracking motion in the Isaac Sim viewer
 holosoma --config replay.yaml
@@ -117,8 +118,11 @@ the field itself instead.
   appears. `eval` takes its experiment from the checkpoint (`eval.checkpoint`, also accepted
   as `--checkpoint`), so its documents hold overrides and other selections only.
 - **Errors.** When the command line parser rejects a value that came from a document, the
-  message ends with the file and key it came from. `--print-args` prints the command line a
-  document expands to, without running it.
+  message ends with the file and key it came from.
+- **Tooling.** `--print-args` prints the command line a run expands to and `--to-config` prints
+  it as a document, without running it. Training and evaluation write that document as
+  `holosoma_run.yaml` next to `holosoma_config.yaml`, so `holosoma --config holosoma_run.yaml`
+  repeats the run.
 - **Precedence.** Command-line tokens win. A group the command line selects (`simulator:…`,
   `sensor.scan:…`) replaces the document's selection, and a repeated flag takes the last value.
   The document's overrides under a replaced group still apply to the new selection.

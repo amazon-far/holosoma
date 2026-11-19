@@ -209,19 +209,22 @@ def parse_config(
     *,
     args: list[str] | None = None,
     default: Any = None,
+    record: list[str] | None = None,
     **tyro_kwargs: Any,
 ) -> Any:
     """Parse a config with plugin, preset-file, and dynamic-dict support.
 
     Recognizes repeatable ``--import-file PATH`` options, one ``--config PATH [--config-path a.b]``
     run document (see :mod:`holosoma.utils.config_document`), ``--<task>.<field>`` flags for the
-    selected task, ``--print-args`` (print the equivalent command line and exit), and top-level
-    ``<field>.<key>:<variant>`` dict declarations.
+    selected task, ``--print-args`` (print the equivalent command line and exit), ``--to-config``
+    (print the equivalent run document and exit), and top-level ``<field>.<key>:<variant>`` dict
+    declarations.
 
     Args:
         config: Dataclass type, ``Annotated`` alias, or zero-argument factory.
         args: CLI tokens. ``None`` reads from ``sys.argv``.
         default: Optional base config instance.
+        record: Filled with the final CLI tokens (documents expanded, aliases applied).
         tyro_kwargs: Extra keyword arguments forwarded to ``tyro.cli``.
 
     Returns:
@@ -244,7 +247,8 @@ def parse_config(
     use_sys_argv = args is None
     argv = sys.argv[1:] if args is None else list(args)
     print_args = "--print-args" in argv
-    argv = [t for t in argv if t != "--print-args"]
+    to_config = "--to-config" in argv
+    argv = [t for t in argv if t not in ("--print-args", "--to-config")]
 
     import_paths, argv = split_import_file_args(argv)
     load_plugins(import_paths)
@@ -268,6 +272,13 @@ def parse_config(
 
         print(shlex.join(["holosoma", *argv]))
         raise SystemExit(0)
+    if to_config:
+        from holosoma.utils.config_document import args_to_document, dump_document
+
+        print(dump_document(args_to_document(argv)), end="")
+        raise SystemExit(0)
+    if record is not None:
+        record[:] = argv
     _reject_legacy_mujoco_cli(argv)
 
     dynamic_defaults: dict[str, dict[str, Any]] = {}

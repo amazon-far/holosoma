@@ -21,9 +21,11 @@ and dates stay strings. Write tuple-typed or non-empty dict-typed values as quot
 
 from __future__ import annotations
 
+import ast
 import json
 import math
 import re
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -363,3 +365,66 @@ def _split_selections(argv: list[str]) -> tuple[list[str], list[str]]:
 
 def _group(token: str) -> str:
     return token.split(":", 1)[0].replace("_", "-")
+
+
+def args_to_document(argv: list[str]) -> dict[str, Any]:
+    """Return the run document that expands to ``argv`` (CLI tokens, already expanded).
+
+    Selections become ``arguments`` entries and flags become ``overrides``; ``--task.<field>``
+    flags are written as ``<task>.<field>``. Values are written as YAML scalars or lists when that
+    round-trips to the same token, and as strings otherwise.
+    """
+    task = next((t.split(":", 1)[1] for t in argv if t.startswith("task:") and _SUBCOMMAND_TOKEN.match(t)), None)
+    arguments: dict[str, Any] = {}
+    overrides: dict[str, Any] = {}
+    tokens = iter(argv)
+    for token in tokens:
+        if token.startswith("--"):
+            head, eq, value = token.partition("=")
+            if not eq:
+                value = next(tokens, "")
+            path = head[2:]
+            if task is not None and path.startswith("task."):
+                path = f"{task}.{path[len('task.') :]}"
+            overrides[path] = _document_value(value)
+        elif _SUBCOMMAND_TOKEN.match(token) and not token.startswith("task:"):
+            name, _, preset = token.partition(":")
+            arguments[name] = preset
+    if overrides:
+        arguments["overrides"] = overrides
+    document: dict[str, Any] = {"version": SUPPORTED_VERSION}
+    if task is not None:
+        document["task"] = task
+    document["arguments"] = arguments
+    return document
+
+
+class _Dumper(yaml.SafeDumper):
+    """Block mappings with lists written inline, the way they read on the command line."""
+
+
+_Dumper.add_representer(
+    list, lambda dumper, data: dumper.represent_sequence("tag:yaml.org,2002:seq", data, flow_style=True)
+)
+
+
+def dump_document(document: dict[str, Any]) -> str:
+    """Serialize a run document as YAML."""
+    return str(yaml.dump(document, Dumper=_Dumper, sort_keys=False, default_flow_style=False))
+
+
+def _document_value(text: str) -> Any:
+    """``text`` as the YAML value that encodes back to the same token, else the string itself."""
+    try:
+        value = ast.literal_eval(text)
+    except (ValueError, SyntaxError, MemoryError, RecursionError):
+        return text
+    if isinstance(value, (bool, int, float, list)) or value is None or value == {}:
+        return value if _encode(value, "") == text else text
+    return text
+
+
+def write_document(path: str | Path, argv: list[str]) -> None:
+    """Write the run document for ``argv`` to ``path``; ``holosoma --config <path>`` re-runs it."""
+    text = dump_document(args_to_document(argv))
+    Path(path).write_text(f"# Re-run with: holosoma --config {Path(path).name}\n{text}")

@@ -247,3 +247,43 @@ def test_moved_flags_keep_working(tmp_path: Path) -> None:
     ]
     parsed_old = parse_config(get_annotated_experiment_config, args=[*old, "--config", _write(tmp_path, doc)])
     assert parsed_old == parse_config(get_annotated_experiment_config, args=new)
+
+
+@pytest.mark.parametrize(
+    ("config_type", "args"),
+    [
+        (
+            RunSimConfig,
+            [
+                "simulator:sim-mjwarp",
+                "robot:t1-29dof-waist-wrist",
+                "sensor.scan:g1-pelvis-lidar",
+                "plugin.clock:clock_publish",
+                "--run.headless=False",
+                "--run.time_scale",
+                "0.50",
+                "--robot.init_state.pos=[1.0, -2.0, 0.8]",
+                "--plugin.clock.publish_every=100Hz",
+            ],
+        ),
+        (
+            get_annotated_experiment_config,
+            ["exp:g1-29dof", "task:train", "simulator:mjwarp", "--run.num_envs=8", "--train.resume_from=/runs/a.pt"],
+        ),
+    ],
+    ids=["sim", "train"],
+)
+def test_written_document_reproduces_the_command_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], config_type: Any, args: list[str]
+) -> None:
+    from holosoma.utils.config_document import args_to_document, dump_document, write_document
+
+    record: list[str] = []
+    parsed = parse_config(config_type, args=args, record=record)
+    path = tmp_path / "holosoma_run.yaml"
+    write_document(path, record)
+    assert parse_config(config_type, args=["--config", str(path)]) == parsed
+
+    with pytest.raises(SystemExit):
+        parse_config(config_type, args=[*args, "--to-config"])
+    assert capsys.readouterr().out == dump_document(args_to_document(record))

@@ -17,8 +17,10 @@ class Task(ABC):
     name: str
     """Registry name selected by ``task:<name>``."""
 
-    def __init__(self, config: ExperimentConfig) -> None:
+    def __init__(self, config: ExperimentConfig, args: list[str] | None = None) -> None:
         self.config = config
+        self.args = list(args or [])
+        """The final CLI tokens the config was parsed from, for the run's record."""
 
     @classmethod
     @abstractmethod

@@ -13,7 +13,8 @@ from loguru import logger
 from holosoma.agents.distillation.checkpoint import infer_num_teachers_from_checkpoint
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.tasks.base import Task
-from holosoma.utils.config_utils import CONFIG_NAME
+from holosoma.utils.config_document import write_document
+from holosoma.utils.config_utils import CONFIG_NAME, RUN_DOCUMENT_NAME
 from holosoma.utils.eval_utils import load_checkpoint
 from holosoma.utils.helpers import get_class
 
@@ -131,21 +132,26 @@ def setup_training(tyro_config: ExperimentConfig) -> TrainingSetup:
     return TrainingSetup(distributed_conf, timestamp, experiment_dir)
 
 
-def train(tyro_config: ExperimentConfig) -> None:
+def train(tyro_config: ExperimentConfig, run_args: list[str] | None = None) -> None:
     """Train an agent on the task built from ``tyro_config``."""
     tyro_config = split_envs_across_ranks(tyro_config)
     try:
         # Before the task is built, so construction logs reach the run's log files.
         setup = setup_training(tyro_config)
         with tyro_config.create_task() as env:
-            train_on_task(tyro_config, cast("PolicyTask", env), setup)
+            train_on_task(tyro_config, cast("PolicyTask", env), setup, run_args)
     except Exception as e:
         tb_str = traceback.format_exc()
         logger.error(f"Exception occurred during training: {e}\n{tb_str}")
         sys.exit(1)  # manually set exit code, not possible via isaacsim app.close()
 
 
-def train_on_task(tyro_config: ExperimentConfig, env: PolicyTask, setup: TrainingSetup | None = None) -> None:
+def train_on_task(
+    tyro_config: ExperimentConfig,
+    env: PolicyTask,
+    setup: TrainingSetup | None = None,
+    run_args: list[str] | None = None,
+) -> None:
     """Train an agent on ``env``, a task built from ``tyro_config`` that the caller owns.
 
     ``setup`` comes from :func:`setup_training`; it is created here when the caller has none.
@@ -217,6 +223,8 @@ def train_on_task(tyro_config: ExperimentConfig, env: PolicyTask, setup: Trainin
         logger.info(f"Saving config file to {experiment_save_dir}")
         config_path = experiment_save_dir / CONFIG_NAME
         tyro_config.save_config(str(config_path))
+        if run_args:
+            write_document(experiment_save_dir / RUN_DOCUMENT_NAME, run_args)
         if wandb_enabled:
             wandb.save(str(config_path), base_path=experiment_save_dir)
 
@@ -312,7 +320,9 @@ class TrainTask(Task):
         from holosoma.utils.config_registry import parse_config
 
         # Pass the factory uncalled so parse_config builds it after plugins load.
-        return cls(parse_config(get_annotated_experiment_config, args=cls.with_selection(args)))
+        record: list[str] = []
+        config = parse_config(get_annotated_experiment_config, args=cls.with_selection(args), record=record)
+        return cls(config, record)
 
     def run(self) -> None:
-        train(self.config)
+        train(self.config, self.args)

@@ -12,9 +12,14 @@ from holosoma.config_types.eval_callback import EvalCallbacksConfig
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.task import EvalTaskConfig
 from holosoma.tasks.base import Task
-from holosoma.utils.config_document import ConfigDocumentError, alias_task_flags, expand_config_args
+from holosoma.utils.config_document import (
+    ConfigDocumentError,
+    alias_task_flags,
+    expand_config_args,
+    write_document,
+)
 from holosoma.utils.config_registry import parse_config
-from holosoma.utils.config_utils import CONFIG_NAME
+from holosoma.utils.config_utils import CONFIG_NAME, RUN_DOCUMENT_NAME
 from holosoma.utils.eval_utils import (
     CheckpointConfig,
     init_eval_logging,
@@ -32,6 +37,7 @@ def run_eval_with_tyro(
     saved_config: ExperimentConfig,
     saved_wandb_path: str | None,
     eval_cbs_cfg: EvalCallbacksConfig | None = None,
+    run_args: list[str] | None = None,
 ) -> None:
     with tyro_config.create_task() as env:
         _run_eval_session(
@@ -41,6 +47,7 @@ def run_eval_with_tyro(
             saved_config=saved_config,
             saved_wandb_path=saved_wandb_path,
             eval_cbs_cfg=eval_cbs_cfg,
+            run_args=run_args,
         )
 
 
@@ -52,12 +59,15 @@ def _run_eval_session(
     saved_config: ExperimentConfig,
     saved_wandb_path: str | None,
     eval_cbs_cfg: EvalCallbacksConfig | None,
+    run_args: list[str] | None = None,
 ) -> None:
     eval_log_dir = get_experiment_dir(tyro_config.logger, tyro_config.run, get_timestamp(), task_name="eval")
     eval_log_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Saving eval logs to {eval_log_dir}")
     tyro_config.save_config(str(eval_log_dir / CONFIG_NAME))
+    if run_args:
+        write_document(eval_log_dir / RUN_DOCUMENT_NAME, run_args)
 
     # Inject eval callbacks into algo config
     if eval_cbs_cfg is not None:
@@ -169,8 +179,14 @@ class EvalTask(Task):
 
     name = "eval"
 
-    def __init__(self, config: ExperimentConfig, saved_config: ExperimentConfig, saved_wandb_path: str | None) -> None:
-        super().__init__(config)
+    def __init__(
+        self,
+        config: ExperimentConfig,
+        saved_config: ExperimentConfig,
+        saved_wandb_path: str | None,
+        args: list[str] | None = None,
+    ) -> None:
+        super().__init__(config, args)
         self.saved_config = saved_config
         self.saved_wandb_path = saved_wandb_path
 
@@ -178,8 +194,8 @@ class EvalTask(Task):
     def from_args(cls, args: list[str]) -> EvalTask:
         init_eval_logging()
         args = cls.with_selection(_alias_legacy_flags(args))
-        if "--print-args" in args:
-            parse_config(ExperimentConfig, args=args)  # prints the command line and exits
+        if "--print-args" in args or "--to-config" in args:
+            parse_config(ExperimentConfig, args=args)  # prints the command line or document and exits
         # The checkpoint supplies the base config, so find it (and any simulator selection) first.
         try:
             tokens = alias_task_flags(expand_config_args(args))
@@ -190,13 +206,15 @@ class EvalTask(Task):
             raise SystemExit("task:eval needs --eval.checkpoint=<path or wandb:// URI> (or --checkpoint=...).")
         saved_config, saved_wandb_path = load_saved_experiment_config(CheckpointConfig(checkpoint=checkpoint))
         eval_config = replace_retired_simulator(_eval_config(saved_config), tokens)
+        record: list[str] = []
         config = parse_config(
             ExperimentConfig,
             default=eval_config,
             args=args,
+            record=record,
             description="Overriding config on top of what's loaded.",
         )
-        return cls(config, saved_config, saved_wandb_path)
+        return cls(config, saved_config, saved_wandb_path, record)
 
     def run(self) -> None:
         task = cast("EvalTaskConfig", self.config.task)
@@ -206,4 +224,5 @@ class EvalTask(Task):
             self.saved_config,
             self.saved_wandb_path,
             eval_cbs_cfg=task.callbacks,
+            run_args=self.args,
         )
