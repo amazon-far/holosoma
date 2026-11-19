@@ -172,8 +172,6 @@ class HeadBridge:
         self.simulator, self.allocator = simulator, allocator
         self.exchange_timeout_ms = exchange_timeout_ms
         state = simulator.state
-        for name in sorted(allocator.fields):
-            state.get(name)
         fields = {
             name: FieldSpec(name, tuple(value.shape), str(value.dtype).removeprefix("torch."))
             for name in state.names()
