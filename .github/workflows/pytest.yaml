@@ -19,7 +19,7 @@ jobs:
       images: ${{ steps.changes.outputs.images }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
       - name: Detect image-relevant changes
@@ -185,7 +185,7 @@ jobs:
           [[ "$failed" == false ]]
       - name: Set up Docker Buildx
         if: needs.changes.outputs.images == 'true'
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@v4.2.0
       - name: Tag tested image set
         if: needs.changes.outputs.images == 'true'
         shell: bash

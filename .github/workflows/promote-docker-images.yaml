@@ -67,7 +67,7 @@ jobs:
             }
           fi
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@v4.2.0
       - name: Verify image labels
         id: verify
         shell: bash
@@ -138,7 +138,7 @@ jobs:
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@v4.2.0
       - name: Tag as latest
         shell: bash
         run: |
