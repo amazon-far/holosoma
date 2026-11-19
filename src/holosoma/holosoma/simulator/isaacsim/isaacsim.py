@@ -26,7 +26,9 @@ from isaaclab.sensors import ContactSensor, RayCaster, TiledCamera
 from isaaclab.sim import PhysxCfg, SimulationCfg, SimulationContext
 from isaaclab.sim.utils import bind_physics_material
 from isaaclab.terrains import TerrainGeneratorCfg
+from isaaclab.utils.buffers import TimestampedBuffer
 from isaaclab.utils.timer import Timer
+from isaacsim.core.simulation_manager import SimulationManager
 from loguru import logger
 from omegaconf import DictConfig
 
@@ -770,11 +772,37 @@ class IsaacSim(BaseSimulator):
                 return torch.empty(self.num_envs, 0, 13, device=self.sim_device)
             return torch.stack([fullstate_wxyz_to_xyzw(handle.data.root_state_w) for handle in object_handles], 1)
 
+        batched: list[Any] = []  # [view, cached buffers], built on the first write
+
+        def batched_object_view() -> list[Any]:
+            """One PhysX view over every object, object-major, and every cached buffer of their Isaac Lab data."""
+            if batched:
+                return batched
+            paths = [path for handle in object_handles for path in handle.root_physx_view.prim_paths]
+            view = SimulationManager.get_physics_sim_view().create_rigid_body_view(paths)
+            one_body_each = all(handle.root_physx_view.count == self.num_envs for handle in object_handles)
+            if not one_body_each or list(view.prim_paths) != paths:
+                raise RuntimeError("Batched object writes need one body per object per environment, in view order")
+            buffers = []
+            for handle in object_handles:
+                cached = [value for value in vars(handle.data).values() if isinstance(value, TimestampedBuffer)]
+                if not cached:
+                    raise RuntimeError(f"Isaac Lab data of {type(handle).__name__} has no cached buffers to refresh")
+                buffers.extend(cached)
+            batched.extend((view, buffers))
+            return batched
+
         def write_object_root_states(rows: torch.Tensor, states: torch.Tensor) -> None:
-            env_ids = env_ids_for(rows)
-            source = states if env_ids is None else states[rows]
-            for index, handle in enumerate(object_handles):
-                handle.write_root_state_to_sim(fullstate_xyzw_to_wxyz(source[:, index]), env_ids=env_ids)
+            if not object_handles:
+                return
+            view, buffers = batched_object_view()
+            flat = states.transpose(0, 1).reshape(-1, 13)  # PhysX applies only the rows in indices
+            indices = (torch.arange(len(object_handles), device=rows.device)[:, None] * self.num_envs + rows).flatten()
+            view.set_transforms(flat[:, :7].contiguous(), indices=indices)
+            view.set_velocities(flat[:, 7:].contiguous(), indices=indices)
+            # Written behind Isaac Lab's back, so its cached reads must come from PhysX again.
+            for buffer in buffers:
+                buffer.timestamp = -1.0
 
         self.state.register(
             "object_root_states",
