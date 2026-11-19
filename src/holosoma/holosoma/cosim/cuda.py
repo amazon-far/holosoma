@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class FieldSpec:
-    """A field's name and layout, e.g. one the head asks its peer to own."""
+    """A SimState field's name and layout, as the head declares it at the handshake."""
 
     name: str
     shape: tuple[int, ...]

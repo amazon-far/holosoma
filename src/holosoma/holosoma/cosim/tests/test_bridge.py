@@ -156,7 +156,7 @@ def _in_order(calls: list[Any], *expected: Any) -> bool:
     return all(item in remaining for item in expected)
 
 
-def test_peer_frame_lifecycle(peer: PeerFixture) -> None:
+def test_peer_snapshot_lifecycle(peer: PeerFixture) -> None:
     worker, calls, replies, _messages = peer
     worker.run()
     place = ("place", [[0.0, 0.0, 0.0]])
@@ -242,7 +242,9 @@ def test_reading_a_field_the_head_does_not_share_fails_before_mapping(peer: Peer
     assert "map" not in calls and replies[-1]["type"] == "ERROR"
 
 
-def test_duplicate_frame_is_rejected_and_import_is_released(peer: PeerFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_duplicate_snapshot_is_rejected_and_import_is_released(
+    peer: PeerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     worker, calls, replies, messages = peer
     messages.insert(2, dict(messages[1]))
     monkeypatch.setattr(bridge.MappedBuffers, "release_error", RuntimeError("cleanup failed"))
@@ -328,7 +330,7 @@ def test_mapped_buffers_serve_linked_tensors_and_tell_owner_writes_from_local_on
         mapped.record_exchange()
 
 
-def test_publisher_without_shared_state_fails_before_connecting(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_head_bridge_without_shared_state_fails_before_connecting(monkeypatch: pytest.MonkeyPatch) -> None:
     values = {"dof_pos": torch.zeros(1, 2)}
     state = SimpleNamespace(names=lambda: list(values), get=values.__getitem__)
     monkeypatch.setitem(sys.modules, "warp", SimpleNamespace())

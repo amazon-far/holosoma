@@ -22,11 +22,12 @@ class LidarReturnRecord(Protocol):
         """Write one output's buffer in place for the current scan."""
 
 
-def points_from_ranges(directions: torch.Tensor, ranges: torch.Tensor) -> torch.Tensor:
-    """Convert reported radial ranges into sensor-frame XYZ, preserving configured sentinels."""
-    points = ranges.unsqueeze(-1) * directions.unsqueeze(0)
-    # Scalar sentinel: a full_like fill would allocate and write a second [..., 3] buffer.
-    return torch.where(torch.isfinite(ranges).unsqueeze(-1), points, float("nan")).to(torch.float32)
+def points_from_ranges(directions: torch.Tensor, ranges: torch.Tensor, out: torch.Tensor | None = None) -> torch.Tensor:
+    """Convert reported radial ranges into sensor-frame XYZ, preserving configured sentinels; into ``out`` if given."""
+    if out is None:
+        out = torch.empty((*ranges.shape, 3), dtype=torch.float32, device=ranges.device)
+    torch.mul(ranges.unsqueeze(-1), directions.unsqueeze(0), out=out)
+    return out.masked_fill_(~torch.isfinite(ranges).unsqueeze(-1), float("nan"))
 
 
 def finalize_lidar_returns(
@@ -49,8 +50,7 @@ def finalize_lidar_returns(
             out=ranges,
         ).hit_mask
     with sensor_record.writing("points") as points:
-        torch.mul(ranges.unsqueeze(-1), directions.unsqueeze(0), out=points)
-        points.masked_fill_(~torch.isfinite(ranges).unsqueeze(-1), float("nan"))
+        points_from_ranges(directions, ranges, out=points)
     if geom_ids is not None:
         with sensor_record.writing("geom_ids") as ids:
             torch.where(hit_mask, geom_ids.to(torch.int32), ids.new_tensor(-1), out=ids)

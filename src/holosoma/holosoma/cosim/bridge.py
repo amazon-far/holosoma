@@ -223,10 +223,10 @@ class HeadBridge:
 
     @property
     def imports(self) -> dict[str, torch.Tensor]:
-        """The peer's exports, by request name, read in place; valid after an exchange until the next one.
+        """The peer's exports, by written field name, read in place; valid after an exchange until the next one.
 
-        The same tensors throughout, read-only; each version moves once per exchange. Requested SimState
-        outputs are linked onto them, so they serve the peer's memory as well.
+        The same tensors throughout, read-only; each version moves once per exchange. The written SimState
+        fields are linked onto them, so they serve the peer's memory as well.
         """
         return self._imports.tensors
 

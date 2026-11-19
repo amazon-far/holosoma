@@ -81,7 +81,8 @@ class SensorRecord:
         """Record a new frame in ``output``'s buffer written by someone else, e.g. a co-simulation peer."""
         self.written.add(output)
         self.rendered.add(output)
-        self._drop_device_cache(output)
+        for key in [key for key in self._device_cache if key[0] == output]:
+            del self._device_cache[key]
 
     def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
         """Copy a finished frame into ``output``'s buffer."""
@@ -89,15 +90,6 @@ class SensorRecord:
             if tensor.shape != buffer.shape:
                 raise ValueError(f"{self.name} {output} must be {tuple(buffer.shape)}, got {tuple(tensor.shape)}")
             buffer.copy_(tensor)
-
-    def set_buffer_rows(self, output: str, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
-        """Copy frames for ``env_ids`` into ``output``'s buffer, e.g. after a partial re-render."""
-        with self.writing(output, env_ids) as buffer:
-            buffer[env_ids] = rows
-
-    def _drop_device_cache(self, output: str) -> None:
-        for key in [key for key in self._device_cache if key[0] == output]:
-            del self._device_cache[key]
 
     def buffer_on(self, output: str, device: torch.device | str | None = None) -> torch.Tensor:
         """``output``'s buffer, or with ``device``, a snapshot of the current frame there (cached per frame)."""
@@ -118,14 +110,6 @@ class CameraRecord(SensorRecord):
     config: CameraSensorConfig
 
     kind: ClassVar[str] = "camera"
-
-    def allocate_outputs(self, num_envs: int, device: str) -> None:
-        """Allocate rgb ``uint8 [E, H, W, 3]`` and depth ``float32 [E, H, W, 1]`` for the configured types."""
-        config = self.config
-        for data_type in config.data_types:
-            rgb = data_type == "rgb"
-            shape = (num_envs, config.height, config.width, 3 if rgb else 1)
-            self.allocate(data_type, shape, torch.uint8 if rgb else torch.float32, device)
 
     def _finish(self, output: str, env_ids: torch.Tensor | None) -> None:
         """Apply the configured depth no-return semantics in place."""
@@ -207,7 +191,10 @@ class SensorManager:
             mount_poses=self._initial_mount_poses(config),
             state=self.state,
         )
-        record.allocate_outputs(self.num_envs, self.device)
+        for data_type in config.data_types:  # rgb uint8 [E, H, W, 3], depth float32 [E, H, W, 1]
+            rgb = data_type == "rgb"
+            shape = (self.num_envs, config.height, config.width, 3 if rgb else 1)
+            record.allocate(data_type, shape, torch.uint8 if rgb else torch.float32, self.device)
         self._cameras[name] = record
         self._order.append(name)
         return record
@@ -382,7 +369,7 @@ class SensorManager:
 
     @property
     def last_due(self) -> set[str]:
-        """Camera names rendered by the latest camera collection."""
+        """Camera names due in the latest camera collection."""
         return self._last_camera_due
 
     @property

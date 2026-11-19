@@ -1267,7 +1267,7 @@ class MuJoCo(BaseSimulator):
 
         Returns the holosoma-facing index (0-based over the robot-only ``body_names``,
         world excluded), matching the cross-backend convention (IsaacSim) and
-        the layout of the ``_rigid_body_*`` / ``contact_forces`` tensors. This is NOT
+        the layout of the ``rigid_body_*_w`` / ``contact_forces`` tensors. This is NOT
         the raw MuJoCo body id. Callers needing the raw MuJoCo body id (e.g. xfrc /
         ``applied_forces``) map through ``body_ids[index]``.
 

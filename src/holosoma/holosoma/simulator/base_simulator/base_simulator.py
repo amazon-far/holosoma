@@ -463,12 +463,6 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'find_rigid_body_indice' method must be implemented in subclasses.")
 
-    # ----- Robot rigid-body kinematics (public, cross-backend) -----
-    #
-    # Bare properties, not getters: each returns the served _rigid_body_* tensor, which keeps its
-    # identity across steps. Treat as read-only — mutate state via set_actor_states /
-    # apply_external_force, not through these tensors.
-
     # ----- External forces (public, cross-backend) -----
 
     def apply_external_force(

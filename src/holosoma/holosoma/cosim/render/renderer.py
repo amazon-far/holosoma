@@ -1,4 +1,4 @@
-"""Co-simulation rendering, renderer side: render a head's state and export the cameras it requests.
+"""Co-simulation rendering, renderer side: render a head's state and write the camera outputs it names.
 
 usage: python -m holosoma.cosim.render --endpoint ipc://... <run_sim arguments>
 
@@ -95,7 +95,7 @@ def create_render_task(run: RunSimConfig) -> AbstractContextManager[RenderTask]:
 
 
 class RenderHandler(PeerHandler):
-    """Mirror the head's state into ``task``, render it, and export the camera outputs the head requests.
+    """Mirror the head's state into ``task``, render it, and export the camera outputs the head names to write.
 
     Adopts the head's environment origins, rejects any other scene difference, and links the head fields
     writable on ``task``'s simulator to its state, so the head's changes reach it at each render.

@@ -49,7 +49,9 @@ def test_camera_buffer_rows_apply_depth_clipping_and_drop_device_copies() -> Non
     stale_copy = record.buffer_on("depth", "cpu")
     rows = torch.tensor([float("inf"), 1.0, 0.05, 2.0]).view(1, 2, 2, 1)
 
-    record.set_buffer_rows("depth", torch.tensor([3]), rows)
+    ids = torch.tensor([3])
+    with record.writing("depth", ids) as depth:  # a partial re-render writes only these rows
+        depth[ids] = rows
 
     assert record.buffers["depth"][3].flatten().tolist() == [3.0, 1.0, 3.0, 2.0]
     assert torch.all(record.buffers["depth"][[0, 1, 2, 4]] == 1.0)

@@ -9,8 +9,10 @@ access after the simulation state changed, and ``write`` flushes in-place change
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
 simulation state. In-place writes reach the simulation before its next physics step, FK pass or any
 state write that would replace them: the changed rows (environments) are flushed through the tensor's
-``write``. A tensor bound without ``write`` is read-only. :meth:`SimState.link` serves writable tensors whose memory is
-written from outside: they are never re-read, and their changed rows flush like in-place writes.
+``write``. A tensor bound without ``write`` is read-only. :meth:`SimState.link` serves a tensor from memory
+written outside the simulation instead of its read: a writable one flushes the changed rows its owner reports,
+and a read-only one (e.g. a sensor output, registered without a read) is written inside
+:meth:`SimState.producing`.
 
 Fields go stale by group. Each field goes stale with the groups in its ``stale_with``, and with a group
 named after itself; marking a group stale (:meth:`SimState.mark_stale`) marks its fields stale. Staleness
@@ -288,11 +290,11 @@ class SimState:
         try:
             yield
         finally:
-            self.mark_stale({group})
+            self.mark_stale(group)
 
     def flush_writes(self) -> None:
         """Write the rows written in place to the simulation, then mark the ``stales`` groups of the fields
-        written.
+        written stale.
 
         A flushed buffer already holds what the simulation now has, so it stays valid.
         """
@@ -415,10 +417,6 @@ class SimState:
 
     def names(self) -> list[str]:
         return [*self._by_name, *self._tensors]
-
-    def dtype(self, name: str) -> torch.dtype:
-        """The dtype of registered tensor ``name``'s buffer."""
-        return self._by_name[name].dtype
 
     def writable_names(self) -> list[str]:
         """Names of registered tensors whose in-place writes flush to the simulation."""

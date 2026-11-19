@@ -170,7 +170,7 @@ def test_a_flush_keeps_other_writable_tensors_valid() -> None:
 def test_a_stale_write_raises_at_the_next_flush() -> None:
     state, backing, _, flushed = _counting_state()
     held = state.get("x")
-    state.mark_stale((STATE, DERIVED))  # a physics step
+    state.mark_stale(STATE)  # as a physics step does
     held[0] = -1.0
     with pytest.raises(RuntimeError, match="written in place after"):
         state.flush_writes()
@@ -275,6 +275,45 @@ def test_moving_a_linked_field_onto_other_memory_is_not_a_write() -> None:
     state = SimState()
     image = _output(state, "camera/cam/depth", torch.zeros(2, 3))
     image.set_(torch.ones(2, 3))  # e.g. onto a co-simulation export
-    with state.producing("camera/cam/depth"):
+    state.flush_writes()  # the move alone is not a consumer write
+    with state.producing("camera/cam/depth"):  # nor does it fail the producer's check
         image.fill_(2.0)
-    state.flush_writes()
+    assert torch.equal(state.get("camera/cam/depth"), torch.full((2, 3), 2.0))
+
+
+@pytest.mark.parametrize(
+    ("event", "joint_reread", "pose_reread"),
+    [("state", True, True), ("derived", False, True), ("pose write", False, False), ("joint write", False, True)],
+)
+def test_staleness_cascades_from_inputs_to_derived_fields(event: str, joint_reread: bool, pose_reread: bool) -> None:
+    state = SimState()
+    joints, poses, mount = torch.zeros(1, 2), torch.zeros(1, 3), torch.zeros(1, 7)
+    reads = {"joints": 0, "poses": 0}
+
+    def read(name: str, value: torch.Tensor):  # type: ignore[no-untyped-def]
+        def counted() -> torch.Tensor:
+            reads[name] += 1
+            return value
+
+        return counted
+
+    state.register(
+        "joints",
+        read("joints", joints),
+        write=lambda _rows, out: joints.copy_(out),
+        stale_with=(STATE,),
+        stales=(DERIVED,),
+    )
+    state.register("poses", read("poses", poses), stale_with=(DERIVED,), stales=())  # derived from the joints
+    state.register("mount", lambda: mount, write=lambda _rows, out: mount.copy_(out), stale_with=(STATE,), stales=())
+    for name in ("joints", "poses", "mount"):
+        state.get(name)
+    if event in ("state", "derived"):
+        with state.mutation(STATE if event == "state" else DERIVED):
+            pass
+    else:
+        state.get("mount" if event == "pose write" else "joints")[0, 0] = 1.0
+        state.flush_writes()
+    before = dict(reads)
+    state.get("joints"), state.get("poses")
+    assert (reads["joints"] > before["joints"], reads["poses"] > before["poses"]) == (joint_reread, pose_reread)

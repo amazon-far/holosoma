@@ -1,4 +1,4 @@
-"""An MJWarp render task renders exactly what an MJWarp source publishes over the co-sim bridge."""
+"""An MJWarp render task renders exactly what an MJWarp head publishes over the co-sim bridge."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ if not torch.cuda.is_available():
 from tests.cosim.cosim_pair_roles import run_pair  # noqa: E402
 
 
-def test_mjwarp_receiver_renders_the_published_state() -> None:
+def test_mjwarp_peer_renders_the_published_state() -> None:
     sent, rendered = run_pair(1)
 
     assert sent["frames"] == rendered["frames"] > 1 and rendered["linked"]
@@ -24,7 +24,7 @@ def test_mjwarp_receiver_renders_the_published_state() -> None:
     assert torch.equal(rendered["overview/rgb"], sent["overview/rgb"])
 
 
-def test_receiver_images_become_the_source_remote_camera_data() -> None:
+def test_peer_images_become_the_head_remote_camera_data() -> None:
     sent, rendered = run_pair(2, "--loopback")
     outputs = ("loopback/rgb", "loopback/depth")
 
@@ -37,4 +37,4 @@ def test_receiver_images_become_the_source_remote_camera_data() -> None:
         assert torch.equal(sent[output], sent[output.replace("loopback", "overview")])
     moved, still = rendered["loopback/depth"], rendered["still/depth"]
     finite = moved.isfinite() & still.isfinite()
-    assert (moved - still)[finite].abs().mean() > 0.005  # metres; the source moved the mount 0.2 m
+    assert (moved - still)[finite].abs().mean() > 0.005  # metres; the head moved the mount 0.2 m

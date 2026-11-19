@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 class HeadPlugin:
     """Share ``simulator``'s state with a peer through a :class:`HeadBridge` and close it with the simulator.
 
-    Subclasses choose what to request from the peer, the metadata the peer receives, and the hooks that
+    Subclasses choose the fields the peer writes, the metadata the peer receives, and the hooks that
     publish. Installs the shared cache allocator, so it must run before anything reads simulator state;
     construction blocks until the peer accepts.
     """
@@ -93,18 +93,18 @@ class PeerHandler:
 
         self.accept(meta)
         reads = self.reads({spec.name: spec for spec in fields})
-        sources = [(request, self.export_source(request)) for request in writes]
-        for request, source in sources:
-            allocation = allocate_shared(request.shape, request.dtype, self.device)
-            self.allocations[request.name] = allocation
+        sources = [(spec, self.export_source(spec)) for spec in writes]
+        for spec, source in sources:
+            allocation = allocate_shared(spec.shape, spec.dtype, self.device)
+            self.allocations[spec.name] = allocation
             export = wp.to_torch(allocation)
             if not isinstance(source, torch.Tensor):
                 self._exports.append((export, source))
                 continue
             if (source.shape, source.dtype, source.device) != (export.shape, export.dtype, export.device):
                 raise ValueError(
-                    f"Export source for {request.name!r} is {source.dtype} {tuple(source.shape)} on "
-                    f"{source.device}, the request is {export.dtype} {tuple(export.shape)} on {export.device}"
+                    f"Export source for {spec.name!r} is {source.dtype} {tuple(source.shape)} on "
+                    f"{source.device}, the field is {export.dtype} {tuple(export.shape)} on {export.device}"
                 )
             with torch.inference_mode(False):
                 source.set_(export)
@@ -133,10 +133,10 @@ class PeerHandler:
     def export_source(self, request: FieldSpec) -> torch.Tensor | Callable[[], torch.Tensor]:
         """Return what fills the export for the written head field ``request``; raise if it cannot be answered.
 
-        A tensor shaped like the request is moved onto the export (``set_``), so whoever writes it writes the
+        A tensor shaped like the field is moved onto the export (``set_``), so whoever writes it writes the
         export and it keeps that memory; a callable returns the tensor to copy into the export after each step.
         """
-        raise ValueError(f"Peer has no export for the head's request {request.name!r}")
+        raise ValueError(f"Peer has no export for the head's field {request.name!r}")
 
     def step(self, snapshot: Snapshot, state: Mapping[str, torch.Tensor]) -> None:
         """Process the head's read-only ``state`` for ``snapshot``; it is valid only during the call."""

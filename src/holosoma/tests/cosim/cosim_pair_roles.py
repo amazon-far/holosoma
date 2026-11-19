@@ -1,12 +1,12 @@
-"""Run one side of a co-simulation with an MJWarp source and save its last camera frame and state.
+"""Run one side of a co-simulation with an MJWarp head and save its last camera frame and state.
 
-usage: cosim_pair_roles.py {source,receiver} --endpoint ipc://... --output DIR [--frames N] [--num-envs N]
+usage: cosim_pair_roles.py {head,peer} --endpoint ipc://... --output DIR [--frames N] [--num-envs N]
        [--loopback] [--simulator {mjwarp,isaacsim}]
-The receiver writes ``DIR/ready`` once it accepts connections and exits after the source closes. ``--simulator``
-selects the receiver's backend; the source is always MJWarp.
+The peer writes ``DIR/ready`` once it accepts connections and exits after the head closes. ``--simulator``
+selects the peer's backend; the head is always MJWarp.
 
 With ``--loopback`` both sides add rgb + depth cameras ``loopback`` and ``still`` at ``overview``'s pose; the
-source's ``loopback`` is remote, and halfway through the source moves ``overview`` and ``loopback`` the same way.
+head's ``loopback`` is remote, and halfway through the head moves ``overview`` and ``loopback`` the same way.
 :func:`run_pair` runs both roles for tests.
 """
 
@@ -27,7 +27,7 @@ _TIMEOUT_S = 900
 
 
 def config(num_envs: int, loopback: bool = False, *, endpoint: str | None = None, backend: str = "mjwarp") -> Any:
-    """The scene both sides run on ``backend``; with ``endpoint``, the source's, publishing there."""
+    """The scene both sides run on ``backend``; with ``endpoint``, the head's, publishing there."""
     from holosoma.config_types.plugin import CosimRenderPluginConfig, PluginConfig
     from holosoma.config_types.run_sim import RunSimConfig
     from holosoma.config_values import sensor, simulator
@@ -57,23 +57,19 @@ def config(num_envs: int, loopback: bool = False, *, endpoint: str | None = None
 def capture(sim: Any, saved: dict[str, Any]) -> None:
     """Save the latest frame's cameras and state into ``saved``, and the first frame's into ``saved["first"]``."""
     latest: dict[str, Any] = {}
-    _capture(sim, latest)
+    for name in sim.sensor_manager.camera_names:
+        for data_type in sim.sensor_manager.get(name).config.data_types:
+            latest[f"{name}/{data_type}"] = sim.get_camera_data(name, data_type).clone().cpu()
+    latest["robot_root_states"] = sim.robot_root_states.clone().cpu()
+    latest["dof_pos"] = sim.dof_pos.clone().cpu()
+    latest["body_pos"] = sim.rigid_body_pos_w.clone().cpu()
+    latest["body_rot"] = sim.rigid_body_quat_w.clone().cpu()
+    latest["body_names"] = list(sim.body_names)
     saved.update(latest)
     saved.setdefault("first", latest)
 
 
-def _capture(sim: Any, saved: dict[str, Any]) -> None:
-    for name in sim.sensor_manager.camera_names:
-        for data_type in sim.sensor_manager.get(name).config.data_types:
-            saved[f"{name}/{data_type}"] = sim.get_camera_data(name, data_type).clone().cpu()
-    saved["robot_root_states"] = sim.robot_root_states.clone().cpu()
-    saved["dof_pos"] = sim.dof_pos.clone().cpu()
-    saved["body_pos"] = sim.rigid_body_pos_w.clone().cpu()
-    saved["body_rot"] = sim.rigid_body_quat_w.clone().cpu()
-    saved["body_names"] = list(sim.body_names)
-
-
-def receiver(endpoint: str, output: Path, num_envs: int, loopback: bool, backend: str) -> None:
+def peer(endpoint: str, output: Path, num_envs: int, loopback: bool, backend: str) -> None:
     import torch
 
     from holosoma.cosim.bridge import PeerBridge
@@ -96,14 +92,14 @@ def receiver(endpoint: str, output: Path, num_envs: int, loopback: bool, backend
                 )
                 super().step(snapshot, state)
 
-        receiver_loop = PeerBridge(LinkCheckingHandler(task), endpoint=endpoint)
+        bridge = PeerBridge(LinkCheckingHandler(task), endpoint=endpoint)
         (output / "ready").write_text("ready\n")
-        receiver_loop.run()
+        bridge.run()
         # Inside the session: closing Isaac Sim's app ends the process.
-        torch.save({**saved, "frames": task.frames_rendered}, output / "receiver.pt")
+        torch.save({**saved, "frames": task.frames_rendered}, output / "peer.pt")
 
 
-def source(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bool) -> None:
+def head(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bool) -> None:
     import torch
 
     from holosoma.simulator.base_simulator.hooks import Phase
@@ -128,13 +124,13 @@ def source(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bo
         saved["imports_in_place"] = all(
             sim.state.get(name).data_ptr() == tensor.data_ptr() for name, tensor in cosim.bridge.imports.items()
         )
-    torch.save(saved, output / "source.pt")
+    torch.save(saved, output / "head.pt")
 
 
 def _role(role: str, output: Path, args: list[str], renderer: str) -> subprocess.Popen[bytes]:
     command = [str(Path(__file__)), role, "--output", str(output), *args]
     log = (output / f"{role}.log").open("wb")
-    if role == "receiver" and renderer != "mjwarp":
+    if role == "peer" and renderer != "mjwarp":
         # Another simulator's environment, running this tree.
         setup = _REPO / "scripts" / f"source_{renderer}_setup.sh"
         script = f"source {shlex.quote(str(setup))} && PYTHONPATH={shlex.quote(str(_REPO / 'src/holosoma'))} "
@@ -144,7 +140,7 @@ def _role(role: str, output: Path, args: list[str], renderer: str) -> subprocess
 
 
 def run_pair(num_envs: int, *extra: str, renderer: str = "mjwarp") -> tuple[dict, dict]:
-    """Run an MJWarp source against a ``renderer`` receiver to completion; return what each saved.
+    """Run an MJWarp head against a ``renderer`` peer to completion; return what each saved.
 
     A ``renderer`` other than ``mjwarp`` runs under ``scripts/source_<renderer>_setup.sh``.
     """
@@ -154,24 +150,24 @@ def run_pair(num_envs: int, *extra: str, renderer: str = "mjwarp") -> tuple[dict
     with tempfile.TemporaryDirectory(prefix="cosim-") as directory:
         output = Path(directory)
         args = ["--endpoint", f"ipc://{output}/control.sock", "--num-envs", str(num_envs), *extra]
-        receiver = _role("receiver", output, args, renderer)
+        peer_process = _role("peer", output, args, renderer)
         try:
             deadline = time.monotonic() + _TIMEOUT_S
             while not (output / "ready").exists():
-                assert receiver.poll() is None, (output / "receiver.log").read_text()
-                assert time.monotonic() < deadline, "receiver did not start"
+                assert peer_process.poll() is None, (output / "peer.log").read_text()
+                assert time.monotonic() < deadline, "peer did not start"
                 time.sleep(0.2)
-            source = _role("source", output, args, renderer)
-            assert source.wait(_TIMEOUT_S) == 0, (output / "source.log").read_text()
-            assert receiver.wait(_TIMEOUT_S) == 0, (output / "receiver.log").read_text()
+            head_process = _role("head", output, args, renderer)
+            assert head_process.wait(_TIMEOUT_S) == 0, (output / "head.log").read_text()
+            assert peer_process.wait(_TIMEOUT_S) == 0, (output / "peer.log").read_text()
         finally:
-            receiver.kill()
-        return torch.load(output / "source.pt"), torch.load(output / "receiver.pt")
+            peer_process.kill()
+        return torch.load(output / "head.pt"), torch.load(output / "peer.pt")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("role", choices=["source", "receiver"])
+    parser.add_argument("role", choices=["head", "peer"])
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--frames", type=int, default=40)
@@ -179,10 +175,10 @@ def main() -> None:
     parser.add_argument("--loopback", action="store_true")
     parser.add_argument("--simulator", choices=["mjwarp", "isaacsim"], default="mjwarp")
     args = parser.parse_args()
-    if args.role == "receiver":
-        receiver(args.endpoint, args.output, args.num_envs, args.loopback, args.simulator)
+    if args.role == "peer":
+        peer(args.endpoint, args.output, args.num_envs, args.loopback, args.simulator)
     else:
-        source(args.endpoint, args.output, args.frames, args.num_envs, args.loopback)
+        head(args.endpoint, args.output, args.frames, args.num_envs, args.loopback)
 
 
 if __name__ == "__main__":
