@@ -1432,8 +1432,7 @@ def main() -> int:
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
         config,
-        device=device,
-        run=dataclasses.replace(config.run, num_envs=args.num_envs),
+        run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs),
     )
 
     # Apply the scenario's link_physics onto the one-link robot's asset, so the robot link carries the
