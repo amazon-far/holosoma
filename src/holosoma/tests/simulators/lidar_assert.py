@@ -696,8 +696,7 @@ def main() -> int:
     device = "cpu" if args.simulator == "mujoco" else "cuda:0"
     config = dataclasses.replace(
         config,
-        device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs),
     )
 
     if args.simulator == "isaacsim":
@@ -722,7 +721,7 @@ def main() -> int:
     if args.num_envs > 1:
         env_origins[:, 0] = torch.arange(args.num_envs, device=device, dtype=torch.float32) * 5.0
         env_origins[:, 2] = torch.arange(args.num_envs, device=device, dtype=torch.float32) * 0.25
-    init = config.robot.init_state
+    init = config.env.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
         device=device,
@@ -822,7 +821,7 @@ def main() -> int:
         )
         if args.simulator in {"mujoco", "mjwarp"}:
             failures += _check_mujoco_geometry_ids(sim, sensor_heights, plane_normal, static_directions)
-        physics_per_control = config.simulator.config.sim.control_decimation_steps
+        physics_per_control = config.env.simulator.config.sim.control_decimation_steps
         failures += _check_tracked_target(sim, env_ids, actor_states, physics_per_control)
         failures += _check_static_range_clipping(
             sim,

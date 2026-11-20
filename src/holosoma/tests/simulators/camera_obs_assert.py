@@ -70,9 +70,7 @@ def main() -> int:
         config = _camera_presets.as_mjwarp(config)
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
-    config = dataclasses.replace(
-        config, device=device, training=dataclasses.replace(config.training, num_envs=args.num_envs)
-    )
+    config = dataclasses.replace(config, run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs))
 
     sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(headless)
@@ -83,7 +81,7 @@ def main() -> int:
 
     n = args.num_envs
     env_origins = torch.zeros(n, 3, device=device)
-    init = config.robot.init_state
+    init = config.env.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
     )
@@ -102,7 +100,7 @@ def main() -> int:
         print(f"[{args.simulator}] FAIL: expected fast_cam+slow_cam, got {sim.get_sensor_names()}")
         return 1
 
-    _first_cam = cast("CameraSensorConfig", next(iter(config.sensor.values())))
+    _first_cam = cast("CameraSensorConfig", next(iter(config.env.sensor.values())))
     h, w = _first_cam.height, _first_cam.width
     # A dict (concatenate=False) group: fast_cam as CHW float01 rgb, slow_cam as plain rgb.
     rgb_tf = {"layout": "CHW", "scale": "float01"}

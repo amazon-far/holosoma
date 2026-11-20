@@ -12,9 +12,11 @@ import torch
 import yaml
 from omegaconf import OmegaConf
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.evaluation import EvalConfig
+from holosoma.config_types.experiment import EvaluationExperimentConfig, TrainingExperimentConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
+from holosoma.eval_agent import evaluation_config
 from holosoma.utils.config_registry import parse_config
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.eval_utils import (
@@ -232,7 +234,7 @@ def test_load_saved_experiment_config_with_wandb_run_only(tmp_path: Path) -> Non
 
 def test_load_saved_experiment_config_from_checkpoint(tmp_path: Path) -> None:
     checkpoint_path = tmp_path / "model.pt"
-    cfg = ExperimentConfig()
+    cfg = TrainingExperimentConfig()
     torch.save(
         {
             "actor_model_state_dict": {},
@@ -251,7 +253,7 @@ def test_load_saved_experiment_config_from_checkpoint(tmp_path: Path) -> None:
 
 def _load_saved_config(
     data: dict[str, Any], source: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[ExperimentConfig, str | None]:
+) -> tuple[TrainingExperimentConfig, str | None]:
     if source == "checkpoint":
         path = tmp_path / "model.pt"
         torch.save({"experiment_config": data, "wandb_run_path": "entity/project/run"}, path)
@@ -269,19 +271,20 @@ def _load_saved_config(
 def test_historical_saved_configs_transition_warp_capacities(
     source: str, backend: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = replace(ExperimentConfig(), simulator=SIMULATOR_REGISTRY[backend], plugin={})
+    default = TrainingExperimentConfig()
+    cfg = replace(default, env=replace(default.env, simulator=SIMULATOR_REGISTRY[backend], plugin={}))
     saved = cfg.to_serializable_dict()
-    saved["simulator"]["config"]["sim"].pop("mujoco")
-    saved["simulator"]["config"]["mujoco_warp"] = {"nconmax_per_env": 128, "njmax_per_env": 900}
+    saved["env"]["simulator"]["config"]["sim"].pop("mujoco")
+    saved["env"]["simulator"]["config"]["mujoco_warp"] = {"nconmax_per_env": 128, "njmax_per_env": 900}
     loaded, run_path = _load_saved_config(saved, source, tmp_path, monkeypatch)
     assert run_path == "entity/project/run"
-    assert loaded.simulator.config.name == cfg.simulator.config.name
-    assert loaded.simulator.config.mujoco_backend == cfg.simulator.config.mujoco_backend
-    assert loaded.simulator.config.sim.mujoco.warp == MujocoWarpConfig(nconmax_per_env=128, njmax_per_env=900)
-    assert loaded.robot == cfg.robot
-    assert loaded.training == cfg.training
-    assert loaded.plugin == {}
-    assert "mujoco_warp" not in loaded.to_serializable_dict()["simulator"]["config"]
+    assert loaded.env.simulator.config.name == cfg.env.simulator.config.name
+    assert loaded.env.simulator.config.mujoco_backend == cfg.env.simulator.config.mujoco_backend
+    assert loaded.env.simulator.config.sim.mujoco.warp == MujocoWarpConfig(nconmax_per_env=128, njmax_per_env=900)
+    assert loaded.env.robot == cfg.env.robot
+    assert loaded.run == cfg.run
+    assert loaded.env.plugin == {}
+    assert "mujoco_warp" not in loaded.to_serializable_dict()["env"]["simulator"]["config"]
 
 
 @pytest.mark.parametrize("source", ["checkpoint", "wandb"])
@@ -289,10 +292,10 @@ def test_historical_saved_configs_transition_warp_capacities(
 def test_saved_native_gravity_transitions_to_extra(
     source: str, gravity: list[float] | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    saved = ExperimentConfig().to_serializable_dict()
-    saved["simulator"]["config"]["sim"]["mujoco"]["gravity"] = gravity
+    saved = TrainingExperimentConfig().to_serializable_dict()
+    saved["env"]["simulator"]["config"]["sim"]["mujoco"]["gravity"] = gravity
     loaded, _ = _load_saved_config(saved, source, tmp_path, monkeypatch)
-    assert loaded.simulator.config.sim.mujoco.extra == ({} if gravity is None else {"gravity": gravity})
+    assert loaded.env.simulator.config.sim.mujoco.extra == ({} if gravity is None else {"gravity": gravity})
 
 
 @pytest.mark.parametrize("source", ["checkpoint", "wandb"])
@@ -309,10 +312,11 @@ def test_saved_native_physics_preserves_zero_false_and_extras(
         warp=MujocoWarpConfig(nconmax_per_env=128, naconmax=300, graph_conditional=False),
     )
     simulator = replace(simulator, config=replace(simulator.config, sim=replace(simulator.config.sim, mujoco=native)))
-    saved = replace(ExperimentConfig(), simulator=simulator, plugin={}).to_serializable_dict()
+    default = TrainingExperimentConfig()
+    saved = replace(default, env=replace(default.env, simulator=simulator, plugin={})).to_serializable_dict()
     loaded, _ = _load_saved_config(saved, source, tmp_path, monkeypatch)
-    assert loaded.simulator.config.sim.mujoco == native
-    assert loaded.plugin == {}
+    assert loaded.env.simulator.config.sim.mujoco == native
+    assert loaded.env.plugin == {}
     assert loaded.to_serializable_dict() == saved
 
 
@@ -320,9 +324,9 @@ def test_saved_native_physics_preserves_zero_false_and_extras(
 def test_saved_warp_transition_rejects_conflicting_values(
     source: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    saved = ExperimentConfig().to_serializable_dict()
-    saved["simulator"]["config"]["mujoco_warp"] = {"nconmax_per_env": 128}
-    saved["simulator"]["config"]["sim"]["mujoco"]["warp"]["nconmax_per_env"] = 64
+    saved = TrainingExperimentConfig().to_serializable_dict()
+    saved["env"]["simulator"]["config"]["mujoco_warp"] = {"nconmax_per_env": 128}
+    saved["env"]["simulator"]["config"]["sim"]["mujoco"]["warp"]["nconmax_per_env"] = 64
     with pytest.raises(ValueError, match=r"conflicting mujoco_warp\.nconmax_per_env.*sim\.mujoco\.warp"):
         _load_saved_config(saved, source, tmp_path, monkeypatch)
 
@@ -331,7 +335,7 @@ def test_load_saved_experiment_config_uses_generic_remote_loader(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     checkpoint_path = tmp_path / "model.pt"
-    cfg = ExperimentConfig()
+    cfg = TrainingExperimentConfig()
     torch.save(
         {
             "experiment_config": cfg.to_serializable_dict(),
@@ -549,7 +553,7 @@ def _without(block: dict[str, Any], key: str = "isaacgym") -> dict[str, Any]:
     return {k: v for k, v in block.items() if k != key}
 
 
-def _load_through(boundary: str, data: dict[str, Any], tmp_path: Path) -> ExperimentConfig:
+def _load_through(boundary: str, data: dict[str, Any], tmp_path: Path) -> TrainingExperimentConfig:
     if boundary == "checkpoint":
         checkpoint_path = tmp_path / "model.pt"
         torch.save({"experiment_config": data, "wandb_run_path": None}, checkpoint_path)
@@ -570,18 +574,19 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     saved = _previous_schema(fixture_name)
 
     loaded_cfg = _load_through(boundary, saved, tmp_path)
-    loaded = loaded_cfg.to_serializable_dict()
+    loaded = loaded_cfg.to_serializable_dict()["env"]
 
     preset = SIMULATOR_REGISTRY[_SURVIVING_BACKEND_FIXTURES[fixture_name]]
-    assert (loaded_cfg.simulator._target_, loaded_cfg.simulator.config.name) == (preset._target_, preset.config.name)
+    simulator = loaded_cfg.env.simulator
+    assert (simulator._target_, simulator.config.name) == (preset._target_, preset.config.name)
     saved_simulator = copy.deepcopy(saved["simulator"])
     saved_simulator["config"].pop("contact_sensor_history_length")
     saved_warp = saved_simulator["config"].pop("mujoco_warp")
     loaded_simulator = copy.deepcopy(loaded["simulator"])
     loaded_simulator["config"]["sim"].pop("mujoco")
     assert loaded_simulator == saved_simulator
-    assert loaded_cfg.simulator.config.sim.mujoco.warp.nconmax_per_env == saved_warp["nconmax_per_env"]
-    assert loaded_cfg.simulator.config.sim.mujoco.warp.njmax_per_env == saved_warp["njmax_per_env"]
+    assert simulator.config.sim.mujoco.warp.nconmax_per_env == saved_warp["nconmax_per_env"]
+    assert simulator.config.sim.mujoco.warp.njmax_per_env == saved_warp["njmax_per_env"]
     assert loaded["robot"]["asset"]["link_physics"] == _without(saved["robot"]["asset"]["link_physics"])
     assert "apply_dof_armature_in_isaacgym" not in loaded["robot"]
     for name, sensor in saved["sensor"].items():
@@ -618,21 +623,20 @@ def test_scene_object_physics_drops_only_the_isaacgym_block() -> None:
 def test_saved_isaacgym_simulator_reports_unsupported_without_override(tmp_path: Path) -> None:
     saved_cfg = _load_through("checkpoint", _previous_schema("g1_29dof_isaacgym"), tmp_path)
 
-    eval_cfg = replace_retired_simulator(saved_cfg.get_eval_config(), [])
+    eval_cfg = replace_retired_simulator(evaluation_config(saved_cfg, EvalConfig()), [])
 
     with pytest.raises(ValueError, match="Isaac Gym simulator is no longer supported"):
-        set_simulator_type(eval_cfg.simulator)
+        set_simulator_type(eval_cfg.env.simulator)
 
 
 @pytest.mark.parametrize("backend", ["isaacsim", "mujoco", "mjwarp"])
 def test_saved_isaacgym_simulator_can_be_overridden_on_the_cli(backend: str, tmp_path: Path) -> None:
     # Without replace_retired_simulator, tyro attaches the unmatched Isaac Gym default to the
-    # isaacsim slot, so `simulator:isaacsim` would come back as Isaac Gym.
+    # isaacsim slot, so `env.simulator:isaacsim` would come back as Isaac Gym.
     saved_cfg = _load_through("checkpoint", _previous_schema("g1_29dof_isaacgym"), tmp_path)
-    args = [f"simulator:{backend}"]
+    args = [f"env.simulator:{backend}"]
 
-    eval_cfg = parse_config(
-        ExperimentConfig, default=replace_retired_simulator(saved_cfg.get_eval_config(), args), args=args
-    )
+    default = replace_retired_simulator(evaluation_config(saved_cfg, EvalConfig()), args)
+    eval_cfg = parse_config(EvaluationExperimentConfig, default=default, args=args)
 
-    assert eval_cfg.simulator == SIMULATOR_REGISTRY[backend]
+    assert eval_cfg.env.simulator == SIMULATOR_REGISTRY[backend]

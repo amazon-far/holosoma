@@ -49,9 +49,7 @@ def main() -> int:
         config = _camera_presets.as_mjwarp(config)
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
-    config = dataclasses.replace(
-        config, device=device, training=dataclasses.replace(config.training, num_envs=args.num_envs)
-    )
+    config = dataclasses.replace(config, run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs))
 
     sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(headless)
@@ -62,7 +60,7 @@ def main() -> int:
 
     n = args.num_envs
     env_origins = torch.zeros(n, 3, device=device)
-    init = config.robot.init_state
+    init = config.env.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
     )
@@ -80,7 +78,7 @@ def main() -> int:
 
     fails: list[str] = []
     img = sim.get_camera_data("panel_cam", "rgb")  # [N,H,W,3] uint8
-    cam = cast("CameraSensorConfig", next(iter(config.sensor.values())))
+    cam = cast("CameraSensorConfig", next(iter(config.env.sensor.values())))
     if tuple(img.shape) != (n, cam.height, cam.width, 3) or img.dtype != torch.uint8:
         fails.append(f"{args.simulator}: actor-mount frame shape/dtype {tuple(img.shape)} {img.dtype}")
     for e in range(n):

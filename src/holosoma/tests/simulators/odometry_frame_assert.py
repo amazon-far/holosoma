@@ -93,8 +93,7 @@ def _build(simulator: str):
     device = "cpu" if simulator == "mujoco" else "cuda:0"
     config = dataclasses.replace(
         config,
-        device=device,
-        training=dataclasses.replace(config.training, num_envs=1, headless=True),
+        run=dataclasses.replace(config.run, device=device, num_envs=1, headless=True),
     )
 
     import torch
@@ -105,7 +104,7 @@ def _build(simulator: str):
     sim.setup_terrain()
     sim.load_assets()
     origins = torch.zeros(1, 3, device=resolved_device)
-    init = config.robot.init_state
+    init = config.env.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
         device=resolved_device,

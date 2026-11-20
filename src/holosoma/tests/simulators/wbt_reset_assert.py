@@ -38,8 +38,8 @@ def main() -> int:
     preset = experiment.g1_29dof_wbt
     tyro_config = dataclasses.replace(
         preset,
-        simulator=SIMULATOR_REGISTRY[args.simulator],
-        training=dataclasses.replace(preset.training, num_envs=NUM_ENVS, headless=True),
+        env=dataclasses.replace(preset.env, simulator=SIMULATOR_REGISTRY[args.simulator]),
+        run=dataclasses.replace(preset.run, num_envs=NUM_ENVS, headless=True),
     )
 
     failures: list[str] = []
@@ -50,7 +50,7 @@ def main() -> int:
         if not bool(motion.body_pos_relative_w.abs().amax() > 0.0):
             failures.append("the reset left the tracked-body targets at zero")
 
-        actions = torch.zeros(NUM_ENVS, tyro_config.robot.actions_dim, device=env.device)
+        actions = torch.zeros(NUM_ENVS, tyro_config.env.robot.actions_dim, device=env.device)
         _, _, dones, _ = env.step({"actions": actions})
         ended = int(dones.sum())
         if ended:

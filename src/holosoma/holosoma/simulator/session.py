@@ -35,7 +35,7 @@ def get_local_rank() -> int | None:
 def get_process_seed(config: EnvConfig) -> int:
     """Return the configured seed offset by this process's global rank."""
     global_rank = int(os.environ.get("RANK", "0")) if int(os.environ.get("WORLD_SIZE", "1")) > 1 else 0
-    return config.training.seed + global_rank
+    return config.run.seed + global_rank
 
 
 def resolve_simulation_device(config: EnvConfig, local_rank: int | None = None) -> str:
@@ -49,8 +49,8 @@ def resolve_simulation_device(config: EnvConfig, local_rank: int | None = None) 
         and getattr(sim_config, "mujoco_backend", MujocoBackend.CLASSIC) == MujocoBackend.WARP
     )
 
-    if config.device is not None:
-        device = config.device
+    if config.run.device is not None:
+        device = config.run.device
     elif local_rank is not None:
         device = f"cuda:{local_rank}"
     elif is_mujoco_warp:
@@ -98,10 +98,10 @@ def task_session(config: EnvConfig, required_class: type[_TaskT]) -> Iterator[_T
 
             task_class = get_class(config.env_class)
             if not issubclass(task_class, required_class):
-                raise TypeError(f"env_class {config.env_class!r} is not a {required_class.__name__} subclass.")
+                raise TypeError(f"{config.env_class!r} is not a {required_class.__name__} subclass.")
             logger.info(f"Creating task: {config.env_class}")
             # Pinned so the task allocates on the device the provider launched on.
-            task = task_class(dataclasses.replace(config, device=device))
+            task = task_class(dataclasses.replace(config, run=dataclasses.replace(config.run, device=device)))
             yield task
         except BaseException:
             try:

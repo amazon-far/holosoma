@@ -1,9 +1,9 @@
 """Test-only scene and sensor presets for the camera assertion harness.
 
-Scene presets are registered into the production ``scene:`` CLI menu at test time (so
-``scene:camera-target`` resolves on the lazy tyro path). Sensor presets are plain camera dicts
+Scene presets are registered into the production ``env.scene:`` CLI menu at test time (so
+``env.scene:camera-target`` resolves on the lazy tyro path). Sensor presets are plain camera dicts
 (``dict[str, CameraSensorConfig]``, keyed by sensor name) injected directly into the parsed config
-by the harness — they exercise camera *behavior*, not the per-key ``--sensor`` CLI (covered
+by the harness — they exercise camera *behavior*, not the per-key ``env.sensor`` CLI (covered
 elsewhere), and a multi-camera rig can't be named by a single CLI token.
 
 Geometry: robot base frame is +X forward, +Z up. An identity mount orientation looks down the
@@ -350,16 +350,16 @@ def register() -> None:
 
 
 def as_mjwarp(config):
-    """Switch a MuJoCo ``RunSimConfig`` to the Warp backend (GPU, multi-env capable)."""
+    """Switch a MuJoCo ``SimulationExperimentConfig`` to the Warp backend (GPU, multi-env capable)."""
     import dataclasses
 
     from holosoma.config_types.simulator import MujocoBackend
 
     sim_cfg = dataclasses.replace(
-        config.simulator,
-        config=dataclasses.replace(config.simulator.config, mujoco_backend=MujocoBackend.WARP),
+        config.env.simulator,
+        config=dataclasses.replace(config.env.simulator.config, mujoco_backend=MujocoBackend.WARP),
     )
-    return dataclasses.replace(config, simulator=sim_cfg)
+    return dataclasses.replace(config, env=dataclasses.replace(config.env, simulator=sim_cfg))
 
 
 # Register on import so `import _camera_presets` installs the presets without an explicit call.

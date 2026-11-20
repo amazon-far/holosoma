@@ -2,7 +2,7 @@ from typing import Annotated
 
 import tyro
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import TrainingExperimentConfig
 from holosoma.config_values.loco.g1.experiment import g1_29dof, g1_29dof_fast_sac
 from holosoma.config_values.loco.t1.experiment import t1_29dof, t1_29dof_fast_sac
 from holosoma.config_values.wbt.g1.experiment import (
@@ -13,7 +13,7 @@ from holosoma.config_values.wbt.g1.experiment import (
 )
 from holosoma.utils.config_registry import ConfigRegistry
 
-EXPERIMENT_REGISTRY = ConfigRegistry(ExperimentConfig, group="holosoma.config.experiment")
+EXPERIMENT_REGISTRY = ConfigRegistry(TrainingExperimentConfig, group="holosoma.config.experiment")
 
 EXPERIMENT_REGISTRY.add("g1_29dof", g1_29dof)
 EXPERIMENT_REGISTRY.add("g1_29dof_fast_sac", g1_29dof_fast_sac)
@@ -28,7 +28,7 @@ EXPERIMENT_REGISTRY.add("g1_29dof_wbt_fast_sac_w_object", g1_29dof_wbt_fast_sac_
 def get_annotated_experiment_config() -> type:
     """Return the ``exp:`` subcommand type."""
     return Annotated[  # type: ignore[return-value]  # Annotated[...] alias; mypy models it as object
-        ExperimentConfig,
+        TrainingExperimentConfig,
         tyro.conf.arg(
             constructor=tyro.extras.subcommand_type_from_defaults(
                 {f"exp:{k.replace('_', '-')}": v for k, v in EXPERIMENT_REGISTRY.items()}

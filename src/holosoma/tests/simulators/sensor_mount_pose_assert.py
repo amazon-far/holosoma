@@ -113,7 +113,7 @@ def main() -> int:
         config = _camera_presets.as_mjwarp(config)
     device = "cpu" if args.simulator == "mujoco" else "cuda:0"
     config = dataclasses.replace(
-        config, device=device, training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=True)
+        config, run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs, headless=True)
     )
     sim, device, _app = launch_simulator(config, device=device)
     manager = sim.sensor_manager
@@ -129,7 +129,7 @@ def main() -> int:
     origins[:, 0] = 5.0 + ids * 10.0
     origins[:, 1] = -2.0
     origins[:, 2] = 0.25 + ids * 0.25
-    init = config.robot.init_state
+    init = config.env.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
     )

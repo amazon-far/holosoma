@@ -244,7 +244,7 @@ class WarpBackend(IMujocoBackend):
             try:
                 self.mjw_model = mjw.put_model(model)
             except (ValueError, NotImplementedError) as exc:
-                raise ValueError(f"simulator.config.sim.mujoco / model attributes: {exc}") from exc
+                raise ValueError(f"env.simulator.config.sim.mujoco / model attributes: {exc}") from exc
             apply_warp_model(self.mjw_model, warp_config, options)
             self._lidar_render_context: Any = None
             self._lidar_render_context_groups: tuple[int, ...] | None = None
@@ -262,7 +262,7 @@ class WarpBackend(IMujocoBackend):
             try:
                 self.mjw_data = mjw.make_data(model, **allocation)
             except (ValueError, NotImplementedError) as exc:
-                raise ValueError(f"simulator.config.sim.mujoco.warp allocation: {exc}") from exc
+                raise ValueError(f"env.simulator.config.sim.mujoco.warp allocation: {exc}") from exc
 
             # Create zero-copy PyTorch tensors tethered to Warp arrays
             # These tensors share memory with the Warp arrays - no copying!

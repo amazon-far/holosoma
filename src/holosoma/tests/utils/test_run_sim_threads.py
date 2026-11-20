@@ -27,7 +27,7 @@ import pytest
 
 import holosoma.config_values.simulator
 from holosoma import run_sim
-from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_types.experiment import SimulationExperimentConfig
 from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
 from holosoma.run_sim import limit_cpu_math_threads
@@ -40,6 +40,7 @@ pytestmark = pytest.mark.no_sim
 
 CLASSIC_PRESET = "mujoco"  # the only single-env CPU-physics backend
 OTHER_PRESETS = ["isaacsim", "mjwarp"]
+INTERACTIVE_PRESETS = ["sim-mujoco", "sim-isaacsim", "sim-mjwarp"]  # same backends as above, for run_sim
 THREAD_LIMIT_VARIABLES = ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"]
 
 
@@ -58,9 +59,12 @@ def requested(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     return calls
 
 
-def _config(preset: str, device: str | None) -> RunSimConfig:
-    """A real simulator preset plus the device. The rest of RunSimConfig the guard never reads."""
-    return cast("RunSimConfig", SimpleNamespace(simulator=SIMULATOR_REGISTRY.get(preset), device=device))
+def _config(preset: str, device: str | None) -> SimulationExperimentConfig:
+    """A real simulator preset plus the device. The rest of the config the guard never reads."""
+    config = SimpleNamespace(
+        env=SimpleNamespace(simulator=SIMULATOR_REGISTRY.get(preset)), run=SimpleNamespace(device=device)
+    )
+    return cast("SimulationExperimentConfig", config)
 
 
 def test_thread_limit_variables_match_production() -> None:
@@ -90,7 +94,7 @@ def test_known_backends_are_the_ones_this_file_decides_for() -> None:
     # inheriting whatever the shared mujoco_backend default happens to give it. Deliberately not
     # asserted over the whole registry: that would also fail for a third-party preset, which is
     # none of this file's business and would make the result depend on test order.
-    assert _in_tree_presets() == {CLASSIC_PRESET, *OTHER_PRESETS}
+    assert _in_tree_presets() == {CLASSIC_PRESET, *OTHER_PRESETS, *INTERACTIVE_PRESETS}
 
 
 @pytest.mark.parametrize("device", ["cpu", "cpu:0"])
@@ -140,16 +144,16 @@ def test_explicit_environment_limit_wins(requested: list[int], monkeypatch: pyte
 # Calling the guard directly cannot show that run_simulation still calls it, nor where. These
 # children drive the real entry point and read the pool back out of Torch at two points.
 #
-# The config is a REAL RunSimConfig from the production parser, not a stand-in: run_simulation
+# The config is a REAL SimulationExperimentConfig from the production parser, not a stand-in: run_simulation
 # resolves an unset device from the config's simulator preset, which is how
-# ``python -m holosoma.run_sim simulator:mujoco`` actually runs.
+# ``python -m holosoma.run_sim env.simulator:sim-mujoco`` actually runs.
 _CHILD = textwrap.dedent(
     """
     import contextlib
     import dataclasses
 
     import holosoma.run_sim as runner
-    from holosoma.config_types.run_sim import RunSimConfig
+    from holosoma.config_types.experiment import SimulationExperimentConfig
     from holosoma.utils.config_registry import parse_config
     from holosoma.utils.safe_torch_import import torch
 
@@ -164,11 +168,11 @@ _CHILD = textwrap.dedent(
         print(f"AT_SETUP={torch.get_num_threads()}", flush=True)
         yield Task()
 
-    RunSimConfig.create_task = create_task
+    SimulationExperimentConfig.create_task = create_task
 
-    config = parse_config(RunSimConfig, args=[f"simulator:{PRESET}"])
+    config = parse_config(SimulationExperimentConfig, args=[f"env.simulator:sim-{PRESET}"])
     if DEVICE is not None:
-        config = dataclasses.replace(config, device=DEVICE)
+        config = dataclasses.replace(config, run=dataclasses.replace(config.run, device=DEVICE))
     runner.run_simulation(config)
     """
 )

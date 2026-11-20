@@ -14,19 +14,19 @@ import traceback
 
 from loguru import logger
 
-from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_types.experiment import SimulationExperimentConfig
 from holosoma.utils.eval_utils import init_eval_logging
 
 _THREAD_LIMIT_VARIABLES = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
 
 
-def limit_cpu_math_threads(config: RunSimConfig, device: str | None = None) -> None:
+def limit_cpu_math_threads(config: SimulationExperimentConfig, device: str | None = None) -> None:
     """Serialize Torch's CPU intra-op pool for classic MuJoCo on cpu, unless the operator set a limit.
 
     Classic MuJoCo runs one env on the host, where every tensor is small enough that a machine-sized
     pool costs more per elementwise op in fork/join than the op itself. A no-op for Warp and
     IsaacSim, which keep this work on the GPU, and for training, which does not route through here.
-    ``device`` is the resolved simulation device; it defaults to ``config.device``.
+    ``device`` is the resolved simulation device; it defaults to ``config.run.device``.
     """
     from holosoma.config_types.simulator import MujocoBackend
     from holosoma.utils.safe_torch_import import torch
@@ -34,10 +34,10 @@ def limit_cpu_math_threads(config: RunSimConfig, device: str | None = None) -> N
     # Both halves are needed: ``mujoco_backend`` lives on the shared SimulatorInitConfig and
     # defaults to CLASSIC, so every backend's preset reports CLASSIC unless it overrides it. The
     # name is the same discriminator ``resolve_simulation_device`` uses.
-    sim_config = config.simulator.config
+    sim_config = config.env.simulator.config
     is_classic = sim_config.name == "mujoco" and getattr(sim_config, "mujoco_backend", None) == MujocoBackend.CLASSIC
     if device is None:
-        device = config.device
+        device = config.run.device
     if not is_classic or device is None or not device.startswith("cpu"):
         return
     # Truthiness, not presence: OpenMP and MKL ignore an empty value, so an empty one is not an
@@ -50,19 +50,18 @@ def limit_cpu_math_threads(config: RunSimConfig, device: str | None = None) -> N
     logger.info("Classic MuJoCo on cpu - limiting Torch to 1 CPU thread")
 
 
-def run_simulation(config: RunSimConfig) -> None:
+def run_simulation(config: SimulationExperimentConfig) -> None:
     """Build the configured simulation task and run it until shutdown.
 
     Parameters
     ----------
-    config : RunSimConfig
+    config : SimulationExperimentConfig
         Configuration containing all simulation settings.
     """
-    from holosoma.config_types.env import get_run_sim_env_config
     from holosoma.simulator.session import get_local_rank, resolve_simulation_device
 
     # Resolved as the task session will, so the CPU thread cap applies before the task is built.
-    limit_cpu_math_threads(config, resolve_simulation_device(get_run_sim_env_config(config), get_local_rank()))
+    limit_cpu_math_threads(config, resolve_simulation_device(config.env_config(), get_local_rank()))
 
     try:
         with config.create_task() as task:
@@ -84,13 +83,14 @@ def main() -> None:
     from holosoma.utils.config_registry import parse_config
 
     config = parse_config(
-        RunSimConfig,
+        SimulationExperimentConfig,
         description="Run simulation with direct simulator control and bridge support.\n\n"
-        "Usage: python -m holosoma.run_sim simulator:<sim> robot:<robot> terrain:<terrain>\n"
+        "Usage: python -m holosoma.run_sim env.simulator:<sim> env.robot:<robot> env.terrain:<terrain>\n"
         "Examples:\n"
         "  python -m holosoma.run_sim # defaults \n"
-        "  python -m holosoma.run_sim simulator:mujoco robot:t1_29dof_waist_wrist terrain:terrain_locomotion_plane\n"
-        "  python -m holosoma.run_sim simulator:isaacsim robot:g1_29dof terrain:terrain_locomotion_mix",
+        "  python -m holosoma.run_sim env.simulator:sim-mujoco env.robot:t1-29dof-waist-wrist "
+        "env.terrain:terrain-locomotion-plane\n"
+        "  python -m holosoma.run_sim env.simulator:sim-isaacsim env.robot:g1-29dof env.terrain:terrain-locomotion-mix",
     )
 
     # Run simulation directly with parsed config

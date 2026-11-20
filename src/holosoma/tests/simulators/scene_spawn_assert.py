@@ -34,6 +34,7 @@ import sys
 if sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
 
+from holosoma.config_types.experiment import SimulationExperimentConfig
 from holosoma.config_types.light import (
     DEFAULT_LIGHT_KEY,
     DefaultLightConfig,
@@ -43,7 +44,6 @@ from holosoma.config_types.light import (
     RectLightConfig,
     SphereLightConfig,
 )
-from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.simulator import IsaacSimRenderConfig
 from holosoma.simulator.shared.object_registry import ObjectType
 from tests.simulators import _scene_presets
@@ -54,8 +54,10 @@ _DEFAULT_SUN_INTENSITY = 1000.0
 _DEFAULT_SUN_COLOR = (1.0, 1.0, 1.0)
 
 
-def _build_run_sim_config(simulator: str, scene: str, robot: str, terrain: str, record_dir: str | None) -> RunSimConfig:
-    """Bridge/gantry-disabled RunSimConfig with optional (default-camera) video — see _sim_harness."""
+def _build_run_sim_config(
+    simulator: str, scene: str, robot: str, terrain: str, record_dir: str | None
+) -> SimulationExperimentConfig:
+    """Bridge/gantry-disabled SimulationExperimentConfig with optional (default-camera) video — see _sim_harness."""
     return build_run_sim_config(simulator, scene, robot, terrain, record_dir=record_dir)
 
 
@@ -181,17 +183,17 @@ def main() -> int:
             kit_args=(f"--{_KIT_ARG_SETTING}={args.kit_arg_sentinel}" if args.kit_arg_sentinel is not None else ""),
         )
         simulator = dataclasses.replace(
-            config.simulator,
-            config=dataclasses.replace(config.simulator.config, isaacsim=render_config),
+            config.env.simulator,
+            config=dataclasses.replace(config.env.simulator.config, isaacsim=render_config),
         )
-        scene = config.scene
+        scene = config.env.scene
         if args.scene_lights == "empty":
             # No rig: no default sun, only the scene's baked lights remain.
             scene = dataclasses.replace(scene, lights={})
         elif args.scene_lights == "default":
             # The default rig: its "default_light" sun makes an unlit scene visible.
             scene = dataclasses.replace(scene, lights={DEFAULT_LIGHT_KEY: DefaultLightConfig()})
-        config = dataclasses.replace(config, simulator=simulator, scene=scene)
+        config = dataclasses.replace(config, env=dataclasses.replace(config.env, simulator=simulator, scene=scene))
     if args.probe_lights:
         if args.simulator != "isaacsim":
             parser.error("--probe-lights requires --simulator isaacsim")
@@ -210,17 +212,16 @@ def main() -> int:
         }
         config = dataclasses.replace(
             config,
-            scene=dataclasses.replace(config.scene, lights=rig),
+            env=dataclasses.replace(config.env, scene=dataclasses.replace(config.env.scene, lights=rig)),
         )
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
-    # num_envs must be set on the training config too: backends size their per-env state
-    # tensors (Warp qpos/qvel, IsaacSim buffers) from training_config.num_envs at
+    # num_envs must be set on the run config too: backends size their per-env state
+    # tensors (Warp qpos/qvel, IsaacSim buffers) from run_config.num_envs at
     # setup()/load_assets(), before create_envs(n,...) runs. Passing n only to create_envs
     # leaves the tensors sized for 1 env and indexing env 1..n-1 is out of bounds.
     config = dataclasses.replace(
         config,
-        device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs),
     )
 
     sim, device, _app = launch_simulator(config, device=device)
@@ -246,7 +247,7 @@ def main() -> int:
         sun_prim = stage.GetPrimAtPath(sun_path)
         has_default_sun = sun_prim.IsValid()
         # The default rig (a DefaultLightConfig entry) authors a sun; an empty rig authors none.
-        expected_sun = any(isinstance(cfg, DefaultLightConfig) for cfg in config.scene.lights.values())
+        expected_sun = any(isinstance(cfg, DefaultLightConfig) for cfg in config.env.scene.lights.values())
         if has_default_sun != expected_sun:
             print(f"FAIL: {sun_path} existence={has_default_sun} != expected {expected_sun}")
             return 1
@@ -403,7 +404,7 @@ def main() -> int:
     env_origins = torch.zeros(n, 3, device=device)
     if n > 1:
         env_origins[:, 0] = torch.arange(n, device=device, dtype=torch.float32) * 5.0
-    init = config.robot.init_state
+    init = config.env.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
         device=device,
@@ -459,7 +460,7 @@ def main() -> int:
     # world pos = env_origin + the object's configured local position), so the objects are
     # NOT all stacked at one world point. Checked on x/y (the spread axes); z is left to the
     # fall check. At num_envs=1 origins are zero and this reduces to the original placement.
-    free_cfg = {name: o for name, o in config.scene.rigid_objects.items() if not o.fixed}
+    free_cfg = {name: o for name, o in config.env.scene.rigid_objects.items() if not o.fixed}
     if n > 1:
         unique_origins = torch.unique(actual_env_origins, dim=0)
         if unique_origins.shape[0] != n:
@@ -488,7 +489,7 @@ def main() -> int:
     # matches the config directly on every backend (MuJoCo returns body-local velocity).
     vel_cfg = {
         name: (list(o.linear_velocity), list(o.angular_velocity))
-        for name, o in config.scene.rigid_objects.items()
+        for name, o in config.env.scene.rigid_objects.items()
         if not o.fixed
     }
     moving = {nm: v for nm, v in vel_cfg.items() if (any(v[0]) or any(v[1])) and nm in free_names}

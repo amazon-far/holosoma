@@ -71,9 +71,7 @@ def main() -> int:
         config = _camera_presets.as_mjwarp(config)
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
-    config = dataclasses.replace(
-        config, device=device, training=dataclasses.replace(config.training, num_envs=args.num_envs)
-    )
+    config = dataclasses.replace(config, run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs))
 
     sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(headless)
@@ -87,7 +85,7 @@ def main() -> int:
     env_origins = torch.zeros(n, 3, device=device)
     if n > 1:
         env_origins[:, 0] = torch.arange(n, device=device, dtype=torch.float32) * 10.0
-    init = config.robot.init_state
+    init = config.env.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
     )
@@ -161,7 +159,7 @@ def main() -> int:
         step(sim, 2)
         sim.render_sensors()
 
-    cam_name, _cam = next(iter(config.sensor.items()))
+    cam_name, _cam = next(iter(config.env.sensor.items()))
     _place(0.0, base_rot)
     before = [
         _panel_median_depth(sim.get_camera_data(cam_name, "rgb")[e], sim.get_camera_data(cam_name, "depth")[e])

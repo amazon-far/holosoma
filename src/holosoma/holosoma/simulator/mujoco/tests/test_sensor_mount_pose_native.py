@@ -41,7 +41,7 @@ def _make_sim(model: Any, sensors: dict[str, SensorConfig], origins: torch.Tenso
     """Run the real sensor pipeline on a small native scene, without an unrelated robot lifecycle."""
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
-    config = cast("FullSimConfig", SimpleNamespace(training=SimpleNamespace(num_envs=1)))
+    config = cast("FullSimConfig", SimpleNamespace(run=SimpleNamespace(num_envs=1)))
     instance = MuJoCo.__new__(MuJoCo)
     instance.root_model, instance.root_data = model, data
     instance.backend = ClassicBackend(model, data, config, "cpu")

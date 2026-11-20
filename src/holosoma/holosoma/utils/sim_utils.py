@@ -129,18 +129,18 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     # Parse known arguments to get argparse params
     args_cli, unknown_args = parser.parse_known_args()
 
-    args_cli.num_envs = config.training.num_envs
-    args_cli.seed = config.training.seed
+    args_cli.num_envs = config.run.num_envs
+    args_cli.seed = config.run.seed
     args_cli.env_spacing = config.scene.env_spacing
-    args_cli.output_dir = config.logger.base_dir
-    args_cli.headless = config.training.headless
+    args_cli.output_dir = config.run.logger.base_dir
+    args_cli.headless = config.run.headless
     args_cli.device = device
     # Distribute the simulator across GPUs when using multi-GPU training.
     if int(os.environ.get("WORLD_SIZE", "1")) > 1:
         args_cli.distributed = True
 
     # LiDAR and ray-cast camera queries do not need RTX; only video and RTX cameras enable the renderer.
-    video_enabled = config.logger.video.enabled or config.logger.headless_recording
+    video_enabled = config.run.logger.video.enabled or config.run.logger.headless_recording
     cameras_enabled = any(
         isinstance(sensor, CameraSensorConfig) and not is_isaacsim_raycast_camera(sensor)
         for sensor in config.sensors.values()

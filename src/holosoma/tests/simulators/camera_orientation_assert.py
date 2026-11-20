@@ -69,9 +69,7 @@ def main() -> int:
         config = _camera_presets.as_mjwarp(config)
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
-    config = dataclasses.replace(
-        config, device=device, training=dataclasses.replace(config.training, num_envs=args.num_envs)
-    )
+    config = dataclasses.replace(config, run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs))
 
     sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(headless)
@@ -82,7 +80,7 @@ def main() -> int:
 
     n = args.num_envs
     env_origins = torch.zeros(n, 3, device=device)
-    init = config.robot.init_state
+    init = config.env.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
     )
@@ -99,7 +97,7 @@ def main() -> int:
     step(sim, max(2, steps_for_seconds(sim, 0.05)))
     sim.render_sensors()
 
-    cam_name, sensor = next(iter(config.sensor.items()))
+    cam_name, sensor = next(iter(config.env.sensor.items()))
     cam = cast("CameraSensorConfig", sensor)
     fails: list[str] = []
     img_all = sim.get_camera_data(cam_name, "rgb")  # [N,H,W,3]

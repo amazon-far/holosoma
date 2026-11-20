@@ -6,12 +6,12 @@ import os
 import sys
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from loguru import logger
 
 from holosoma.agents.distillation.checkpoint import infer_num_teachers_from_checkpoint
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import TrainingExperimentConfig
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.eval_utils import load_checkpoint
 from holosoma.utils.helpers import get_class
@@ -90,20 +90,20 @@ def configure_logging(distributed_conf: MultGPUConfig | None = None, log_dir: Pa
     logging.getLogger().addHandler(LoguruLoggingBridge())
 
 
-def split_envs_across_ranks(tyro_config: ExperimentConfig) -> ExperimentConfig:
-    """Return ``tyro_config`` with ``training.num_envs`` divided among the distributed ranks.
+def split_envs_across_ranks(tyro_config: TrainingExperimentConfig) -> TrainingExperimentConfig:
+    """Return ``tyro_config`` with ``run.num_envs`` divided among the distributed ranks.
 
     Call it before ``create_task()``: each rank builds only its share of the environments.
     """
     world_size = int(os.getenv("WORLD_SIZE", "1"))
     if world_size <= 1:
         return tyro_config
-    original_num_envs = tyro_config.training.num_envs
+    original_num_envs = tyro_config.run.num_envs
     tyro_config = dataclasses.replace(
-        tyro_config, training=dataclasses.replace(tyro_config.training, num_envs=original_num_envs // world_size)
+        tyro_config, run=dataclasses.replace(tyro_config.run, num_envs=original_num_envs // world_size)
     )
     logger.info(
-        f"Distributed training: each of {world_size} GPUs will run {tyro_config.training.num_envs} "
+        f"Distributed training: each of {world_size} GPUs will run {tyro_config.run.num_envs} "
         f"environments (total across all GPUs: {original_num_envs})"
     )
     return tyro_config
@@ -118,32 +118,33 @@ class TrainingSetup:
     experiment_dir: Path
 
 
-def setup_training(tyro_config: ExperimentConfig) -> TrainingSetup:
+def setup_training(tyro_config: TrainingExperimentConfig) -> TrainingSetup:
     """Start the process group and route logs to the run's experiment directory."""
     from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
 
     distributed_conf = configure_multi_gpu()
     timestamp = get_timestamp()
-    experiment_dir = get_experiment_dir(tyro_config.logger, tyro_config.training, timestamp, task_name="locomotion")
+    run = tyro_config.run
+    experiment_dir = get_experiment_dir(run.logger, run.project, run.name, timestamp, task_name="locomotion")
     configure_logging(distributed_conf=distributed_conf, log_dir=experiment_dir)
     return TrainingSetup(distributed_conf, timestamp, experiment_dir)
 
 
-def train(tyro_config: ExperimentConfig) -> None:
+def train(tyro_config: TrainingExperimentConfig) -> None:
     """Train an agent on the task built from ``tyro_config``."""
     tyro_config = split_envs_across_ranks(tyro_config)
     try:
         # Before the task is built, so construction logs reach the run's log files.
         setup = setup_training(tyro_config)
         with tyro_config.create_task() as env:
-            train_on_task(tyro_config, env, setup)
+            train_on_task(tyro_config, cast("PolicyTask", env), setup)
     except Exception as e:
         tb_str = traceback.format_exc()
         logger.error(f"Exception occurred during training: {e}\n{tb_str}")
         sys.exit(1)  # manually set exit code, not possible via isaacsim app.close()
 
 
-def train_on_task(tyro_config: ExperimentConfig, env: PolicyTask, setup: TrainingSetup | None = None) -> None:
+def train_on_task(tyro_config: TrainingExperimentConfig, env: PolicyTask, setup: TrainingSetup | None = None) -> None:
     """Train an agent on ``env``, a task built from ``tyro_config`` that the caller owns.
 
     ``setup`` comes from :func:`setup_training`; it is created here when the caller has none.
@@ -163,7 +164,7 @@ def train_on_task(tyro_config: ExperimentConfig, env: PolicyTask, setup: Trainin
     is_distributed = distributed_conf is not None
     is_main_process = distributed_conf is None or distributed_conf["global_rank"] == 0
 
-    logger_cfg = tyro_config.logger
+    logger_cfg = tyro_config.run.logger
     wandb_enabled = logger_cfg.type == "wandb"
 
     wandb_run_path: str | None = None
@@ -174,20 +175,16 @@ def train_on_task(tyro_config: ExperimentConfig, env: PolicyTask, setup: Trainin
 
         assert isinstance(logger_cfg, WandbLoggerConfig), "Logger config must be WandbLoggerConfig when type is wandb"
         wandb_cfg = logger_cfg
-        # Use training config for project/name, fallback to logger config, then defaults
-        default_project = tyro_config.training.project or wandb_cfg.project or "default_project"
-        default_run_name = (
-            f"{timestamp}_{tyro_config.training.name or 'run'}_"
-            f"{wandb_cfg.group or 'default'}_{tyro_config.robot.asset.robot_type}"
-        )
+        robot_type = tyro_config.env.robot.asset.robot_type
+        default_run_name = f"{timestamp}_{tyro_config.run.name}_{wandb_cfg.group or 'default'}_{robot_type}"
         wandb_dir = Path(wandb_cfg.dir or (experiment_dir / ".wandb"))
         wandb_dir.mkdir(exist_ok=True, parents=True)
         logger.info(f"Saving wandb logs to {wandb_dir}")
 
         # Only pass optional parameters when specified so wandb can fall back to environment defaults.
         wandb_kwargs: dict[str, Any] = {
-            "project": wandb_cfg.project or default_project,
-            "name": wandb_cfg.name or default_run_name,
+            "project": tyro_config.run.project,
+            "name": wandb_cfg.display_name or default_run_name,
             "config": dataclasses.asdict(tyro_config),
             "dir": str(wandb_dir),
             "mode": wandb_cfg.mode,
@@ -230,25 +227,21 @@ def train_on_task(tyro_config: ExperimentConfig, env: PolicyTask, setup: Trainin
     # Resolve teacher count before setup, when the policy allocates its slots.
     # Full checkpoints are inspected so resume does not require teacher paths again.
     teacher_checkpoints: list[str] = []
-    if tyro_config.training.teacher_checkpoint is not None:
-        teacher_checkpoints = [s.strip() for s in tyro_config.training.teacher_checkpoint.split(",") if s.strip()]
+    if tyro_config.algo.teacher_checkpoint is not None:
+        teacher_checkpoints = [s.strip() for s in tyro_config.algo.teacher_checkpoint.split(",") if s.strip()]
         if not teacher_checkpoints:
-            raise ValueError("training.teacher_checkpoint must contain at least one checkpoint path.")
+            raise ValueError("algo.teacher_checkpoint must contain at least one checkpoint path.")
 
     resume_checkpoint: Path | None = None
     resume_teacher_count: int | None = None
-    if tyro_config.training.checkpoint is not None:
-        resume_checkpoint = load_checkpoint(tyro_config.training.checkpoint, str(experiment_save_dir))
+    if tyro_config.algo.resume_from is not None:
+        resume_checkpoint = load_checkpoint(tyro_config.algo.resume_from, str(experiment_save_dir))
         checkpoint_data = torch.load(resume_checkpoint, map_location="cpu")
         if not isinstance(checkpoint_data, dict):
             raise TypeError("Training checkpoint must contain a dictionary.")
         resume_teacher_count = infer_num_teachers_from_checkpoint(checkpoint_data)
         tyro_config = dataclasses.replace(
-            tyro_config,
-            training=dataclasses.replace(
-                tyro_config.training,
-                checkpoint=str(resume_checkpoint),
-            ),
+            tyro_config, algo=dataclasses.replace(tyro_config.algo, resume_from=str(resume_checkpoint))
         )
 
     if teacher_checkpoints and resume_teacher_count is not None:
@@ -281,7 +274,7 @@ def train_on_task(tyro_config: ExperimentConfig, env: PolicyTask, setup: Trainin
     if teacher_checkpoints:
         if not hasattr(algo, "load_teacher"):
             raise RuntimeError(
-                f"`training.teacher_checkpoint` was set but algorithm "
+                f"`algo.teacher_checkpoint` was set but algorithm "
                 f"{type(algo).__name__} does not implement load_teacher()."
             )
         teacher_ckpt_paths = [str(load_checkpoint(tc, str(experiment_save_dir))) for tc in teacher_checkpoints]

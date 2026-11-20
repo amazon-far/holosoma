@@ -14,7 +14,7 @@ pytest.importorskip("mujoco")
 
 import mujoco
 
-import holosoma.config_values.run_sim as run_sim_values
+import holosoma.config_values.simulator as simulator_values
 from holosoma.config_types.light import (
     DEFAULT_LIGHT_KEY,
     DefaultLightConfig,
@@ -33,7 +33,7 @@ pytestmark = pytest.mark.mujoco_classic
 def _manager() -> MujocoSceneManager:
     # MujocoSceneManager annotates its arg as SimulatorConfig but reads .sim.fps off the inner
     # SimulatorInitConfig (.config); the real backend passes it with the same type: ignore.
-    return MujocoSceneManager(run_sim_values.mujoco.config)  # type: ignore[arg-type]
+    return MujocoSceneManager(simulator_values.sim_mujoco.config)  # type: ignore[arg-type]
 
 
 def test_add_lighting_builds_supported_and_skips_unsupported() -> None:

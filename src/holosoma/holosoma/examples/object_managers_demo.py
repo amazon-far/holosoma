@@ -66,7 +66,7 @@ import dataclasses
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from holosoma.config_types.experiment import ExperimentConfig
+    from holosoma.config_types.experiment import TrainingExperimentConfig
     from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
     from holosoma.simulator.mujoco.backends import WarpBackend
     from holosoma.simulator.mujoco.mujoco import MuJoCo
@@ -88,8 +88,8 @@ _OBJ_OBS_TERMS = "holosoma.managers.observation.terms.objects"
 _OBJ_RAND = "holosoma.managers.randomization.terms.objects"
 
 
-def _experiment_config(backend: str, num_envs: int, headless: bool) -> ExperimentConfig:
-    """Build the ExperimentConfig for the demo: the g1_29dof locomotion preset, retargeted to the
+def _experiment_config(backend: str, num_envs: int, headless: bool) -> TrainingExperimentConfig:
+    """Build the training config for the demo: the g1_29dof locomotion preset, retargeted to the
     chosen backend + the object-managers demo scene, with the object managers wired in PURELY via
     config — the env then runs them through its real manager stack, exactly as training does:
 
@@ -110,11 +110,11 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> Experimen
 
     base = experiment_values.g1_29dof
     sim_cfg = getattr(simulator_values, _BACKENDS[backend][0])
-    assert base.observation is not None, "g1_29dof preset must define an ObservationManager"
-    assert base.randomization is not None, "g1_29dof preset must define a RandomizationManager"
+    assert base.mdp.observation is not None, "g1_29dof preset must define an ObservationManager"
+    assert base.env.randomization is not None, "g1_29dof preset must define a RandomizationManager"
 
     # Add an object_obs group alongside the preset's existing actor/critic groups.
-    obs_groups = dict(base.observation.groups)
+    obs_groups = dict(base.mdp.observation.groups)
     obs_groups["object_obs"] = ObsGroupCfg(
         concatenate=True,
         enable_noise=False,
@@ -126,12 +126,12 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> Experimen
             "object_ang_vel_b": ObsTermCfg(func=f"{_OBJ_OBS_TERMS}:object_ang_vel_b"),
         },
     )
-    observation = dataclasses.replace(base.observation, groups=obs_groups)
+    observation = dataclasses.replace(base.mdp.observation, groups=obs_groups)
 
     # Object physics DR as startup randomizers: the RandomizationManager applies these once at
     # env build (after expanding the required model fields). Exaggerated, far-from-default bands
     # so the effect is unambiguous when we read it back (default box mass is 0.1 kg << [5,6]).
-    setup_terms = dict(base.randomization.setup_terms)
+    setup_terms = dict(base.env.randomization.setup_terms)
     setup_terms["randomize_object_mass"] = RandomizationTermCfg(
         func=f"{_OBJ_RAND}:randomize_object_rigid_body_mass_startup",
         params={"mass_distribution_params": [5.0, 6.0]},
@@ -164,7 +164,7 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> Experimen
     )
 
     # Pose-jitter as a reset randomizer (runs on every reset).
-    reset_terms = dict(base.randomization.reset_terms)
+    reset_terms = dict(base.env.randomization.reset_terms)
     reset_terms["jitter_object_pose"] = RandomizationTermCfg(
         func=f"{_OBJ_RAND}:jitter_object_pose_on_reset",
         params={"xy_range": 0.1, "yaw_range": 0.3, "enabled": True},
@@ -173,19 +173,23 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> Experimen
     # in the manager's _failed_randomizers) rather than crashing the build. The object DR terms
     # are cross-backend, so nothing is skipped here today — this just keeps the demo robust.
     randomization = dataclasses.replace(
-        base.randomization, setup_terms=setup_terms, reset_terms=reset_terms, ignore_unsupported=True
+        base.env.randomization, setup_terms=setup_terms, reset_terms=reset_terms, ignore_unsupported=True
     )
 
     return dataclasses.replace(
         base,
-        simulator=sim_cfg,
-        scene=scene_values.object_managers_demo,
-        observation=observation,
-        randomization=randomization,
-        training=dataclasses.replace(
-            base.training, num_envs=num_envs, headless=headless, seed=0, torch_deterministic=False
+        env=dataclasses.replace(
+            base.env, simulator=sim_cfg, scene=scene_values.object_managers_demo, randomization=randomization
         ),
-        device=_BACKENDS[backend][1],
+        mdp=dataclasses.replace(base.mdp, observation=observation),
+        run=dataclasses.replace(
+            base.run,
+            num_envs=num_envs,
+            headless=headless,
+            seed=0,
+            torch_deterministic=False,
+            device=_BACKENDS[backend][1],
+        ),
     )
 
 

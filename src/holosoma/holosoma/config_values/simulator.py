@@ -1,9 +1,13 @@
+import dataclasses
+
 from holosoma.config_types.simulator import (
+    BridgeConfig,
     MujocoBackend,
     PhysxConfig,
     SimEngineConfig,
     SimulatorConfig,
     SimulatorInitConfig,
+    VirtualGantryCfg,
 )
 from holosoma.utils.config_registry import ConfigRegistry
 
@@ -81,6 +85,26 @@ mjwarp = SIMULATOR_REGISTRY.add(
         ),
     ),
 )
+
+
+def _interactive(preset: SimulatorConfig, fps: int) -> SimulatorConfig:
+    """``preset`` with the robot bridge and virtual gantry on, stepping physics at ``fps``."""
+    return dataclasses.replace(
+        preset,
+        config=dataclasses.replace(
+            preset.config,
+            bridge=BridgeConfig(enabled=True),
+            virtual_gantry=VirtualGantryCfg(enabled=True),
+            sim=dataclasses.replace(preset.config.sim, fps=fps),
+        ),
+    )
+
+
+# Interactive simulation: an external controller drives the robot over the bridge, and the virtual
+# gantry holds it until released.
+sim_isaacsim = SIMULATOR_REGISTRY.add("sim-isaacsim", _interactive(isaacsim, 200))
+sim_mujoco = SIMULATOR_REGISTRY.add("sim-mujoco", _interactive(mujoco, 2000))
+sim_mjwarp = SIMULATOR_REGISTRY.add("sim-mjwarp", _interactive(mjwarp, 400))
 
 from holosoma.utils.config_registry import (  # noqa: E402
     deprecated_defaults_alias as _deprecated_defaults_alias,

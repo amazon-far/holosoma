@@ -17,14 +17,17 @@ from holosoma.config_values.simulator import SIMULATOR_REGISTRY  # noqa: E402
 
 def test_full_reset_keeps_the_setup_joint_position_bias():
     preset = experiment.g1_29dof
-    terms = dict(preset.randomization.setup_terms)
+    terms = dict(preset.env.randomization.setup_terms)
     bias_term = terms["setup_dof_pos_bias"]
     terms["setup_dof_pos_bias"] = dataclasses.replace(bias_term, params={**bias_term.params, "enabled": True})
     config = dataclasses.replace(
         preset,
-        simulator=SIMULATOR_REGISTRY["mujoco"],
-        randomization=dataclasses.replace(preset.randomization, setup_terms=terms),
-        training=dataclasses.replace(preset.training, num_envs=1, headless=True),
+        env=dataclasses.replace(
+            preset.env,
+            simulator=SIMULATOR_REGISTRY["mujoco"],
+            randomization=dataclasses.replace(preset.env.randomization, setup_terms=terms),
+        ),
+        run=dataclasses.replace(preset.run, num_envs=1, headless=True),
     )
 
     with config.create_task() as env:

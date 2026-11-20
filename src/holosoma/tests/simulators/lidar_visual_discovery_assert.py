@@ -106,7 +106,7 @@ def main() -> int:
         sensors=sensors,
     )
     visual_collision_asset = str(Path(__file__).with_name("data") / "lidar_visual_collision_target.usda")
-    scene_objects = dict(config.scene.rigid_objects)
+    scene_objects = dict(config.env.scene.rigid_objects)
     scene_objects["visual_collision_target"] = RigidObjectConfig(
         usd_file=visual_collision_asset,
         position=_lidar_presets.VISUAL_COLLISION_TARGET_POSITION,
@@ -115,9 +115,8 @@ def main() -> int:
     )
     config = dataclasses.replace(
         config,
-        device="cuda:0",
-        scene=dataclasses.replace(config.scene, rigid_objects=scene_objects),
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        env=dataclasses.replace(config.env, scene=dataclasses.replace(config.env.scene, rigid_objects=scene_objects)),
+        run=dataclasses.replace(config.run, device="cuda:0", num_envs=args.num_envs),
     )
 
     sim, device, _app = launch_simulator(config, device="cuda:0")
@@ -131,7 +130,7 @@ def main() -> int:
     env_origins = torch.zeros(args.num_envs, 3, device=device)
     env_origins[:, 0] = torch.arange(args.num_envs, device=device, dtype=torch.float32) * 5.0
     env_origins[:, 2] = torch.arange(args.num_envs, device=device, dtype=torch.float32) * 0.25
-    init = config.robot.init_state
+    init = config.env.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
         device=device,

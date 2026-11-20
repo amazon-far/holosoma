@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import pytest
 
+from holosoma.config_types.run import RunConfig
 from holosoma.utils import sim_utils
 from holosoma.utils.simulator_config import SimulatorType
 
@@ -112,8 +113,7 @@ class EnvConfigStub:
     """The EnvConfig fields task_session reads."""
 
     env_class: str
-    training: object
-    device: str | None = None
+    run: RunConfig
 
 
 class Environment:
@@ -183,7 +183,7 @@ def run_task_session(
     monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.ISAACSIM)
     monkeypatch.setattr(session, "setup_isaaclab_launcher", lambda _config, _device: app)
     monkeypatch.setattr(session, "get_class", lambda _target: Task)
-    config = cast("Any", EnvConfigStub(env_class="test.Task", training=SimpleNamespace(headless=True)))
+    config = cast("Any", EnvConfigStub(env_class="test.Task", run=RunConfig(headless=True)))
     with session.task_session(config, SimulationTask) as task:
         if on_enter is not None:
             on_enter()

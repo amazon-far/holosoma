@@ -66,7 +66,7 @@ class _FakeSimulator:
         self.hooks = HookRegistry()
         self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name="sensors.render")
         self.sensor_config = dict(cams)
-        self.training_config = _FakeTrainingConfig()
+        self.run_config = _FakeTrainingConfig()
         self.num_envs = 1
         self.headless = True
         self.simulator_config = _FakeSimulatorConfig()

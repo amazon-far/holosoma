@@ -59,11 +59,15 @@ def _build(simulator: str, num_envs: int, device: str | None = None):
     config = build_run_sim_config(simulator, "empty", ROBOT, TERRAIN)
     config = dataclasses.replace(
         config,
-        device=device or ("cpu" if simulator == "mujoco" else "cuda:0"),
-        training=dataclasses.replace(config.training, num_envs=num_envs, headless=True),
+        run=dataclasses.replace(
+            config.run,
+            device=device or ("cpu" if simulator == "mujoco" else "cuda:0"),
+            num_envs=num_envs,
+            headless=True,
+        ),
     )
 
-    sim, device, _ = launch_simulator(config, device=config.device)
+    sim, device, _ = launch_simulator(config, device=config.run.device)
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()
@@ -71,7 +75,7 @@ def _build(simulator: str, num_envs: int, device: str | None = None):
     origins = torch.zeros(num_envs, 3, device=device)
     if num_envs > 1:
         origins[:, 0] = torch.arange(num_envs, device=device, dtype=torch.float32) * 8.0
-    init_state = config.robot.init_state
+    init_state = config.env.robot.init_state
     base_init = torch.tensor(
         list(init_state.pos) + list(init_state.rot) + list(init_state.lin_vel) + list(init_state.ang_vel), device=device
     )

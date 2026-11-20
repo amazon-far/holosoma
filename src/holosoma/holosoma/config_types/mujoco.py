@@ -77,7 +77,7 @@ class MujocoWarpConfig:
     njmax_per_env: Count | None = None
     """Hard constraint-row capacity per world; None uses max(6*nconmax_per_env, 4*model.nv)."""
     naconmax: Count | None = None
-    """Total contact-pool capacity across all worlds; None uses nconmax_per_env*training.num_envs."""
+    """Total contact-pool capacity across all worlds; None uses nconmax_per_env*run.num_envs."""
     graph_conditional: Annotated[bool, Field(strict=True)] | None = None
     """Use conditional CUDA graph nodes for solver loops; set before capture. None keeps MJWarp's default."""
     extras: ExtraSettings = field(default_factory=dict)
@@ -89,7 +89,7 @@ class MujocoWarpConfig:
         allocation_owners = {
             "nconmax": "nconmax_per_env",
             "njmax": "njmax_per_env",
-            "nworld": "training.num_envs",
+            "nworld": "run.num_envs",
             "mjm": "the model from core setup",
         }
         for name in self.extras:

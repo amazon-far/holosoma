@@ -5,15 +5,14 @@ from pydantic.dataclasses import dataclass
 from holosoma.config_types.action import ActionManagerCfg
 from holosoma.config_types.command import CommandManagerCfg
 from holosoma.config_types.curriculum import CurriculumManagerCfg
-from holosoma.config_types.experiment import ExperimentConfig, TrainingConfig
-from holosoma.config_types.frequency import DecimationLike
-from holosoma.config_types.logger import LoggerConfig
+from holosoma.config_types.environment import EnvironmentConfig
+from holosoma.config_types.mdp import MDPConfig
 from holosoma.config_types.observation import ObservationManagerCfg
 from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.reward import RewardManagerCfg
 from holosoma.config_types.robot import RobotConfig
-from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_types.run import RunConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import CameraSensorConfig, SensorConfig, validate_camera_dict
 from holosoma.config_types.simulator import SimulatorConfig
@@ -39,95 +38,32 @@ class EnvConfig:
     command: CommandManagerCfg | None
     curriculum: CurriculumManagerCfg | None
     robot: RobotConfig
-    training: TrainingConfig
-    logger: LoggerConfig
+    run: RunConfig
     plugin: dict[str, PluginConfig]
     """Plugins to install on the simulator (key -> resolved PluginConfig), including the
     ROS2/viz/video egress sinks. Installed after the concrete simulator backend is ready."""
 
-    device: str | None = None
-    """Requested device. ``None`` resolves from the simulator backend and process rank."""
 
-    time_scale: float = 0.0
-    """Sim-time to real-time ratio for physics-step pacing. ``0`` disables pacing."""
-
-    viewer_update_decimation: DecimationLike = "<60Hz"
-    """Viewer render rate: a physics-step decimation, or a frequency string resolved against the
-    physics rate."""
-
-
-def _validate_cameras(sensors: dict[str, SensorConfig]) -> None:
-    validate_camera_dict({name: sensor for name, sensor in sensors.items() if isinstance(sensor, CameraSensorConfig)})
-
-
-def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
-    """Convert ExperimentConfig to EnvConfig for environment construction.
-
-    Parameters
-    ----------
-    tyro_config : ExperimentConfig
-        The experiment configuration containing all settings.
-
-    Returns
-    -------
-    EnvConfig
-        Environment configuration with extracted fields.
-    """
-    _validate_cameras(tyro_config.sensor)
-    return EnvConfig(
-        env_class=tyro_config.env_class,
-        training=tyro_config.training,
-        simulator=tyro_config.simulator,
-        scene=tyro_config.scene,
-        # The CLI declares sensors per-key in the dynamic ``sensor`` dict (key = sensor name).
-        sensors=dict(tyro_config.sensor),
-        plugin=dict(tyro_config.plugin),
-        terrain=tyro_config.terrain,
-        observation=tyro_config.observation,
-        action=tyro_config.action,
-        reward=tyro_config.reward,
-        termination=tyro_config.termination,
-        randomization=tyro_config.randomization,
-        command=tyro_config.command,
-        curriculum=tyro_config.curriculum,
-        robot=tyro_config.robot,
-        logger=tyro_config.logger,
-        device=tyro_config.device,
+def build_env_config(env_class: str, env: EnvironmentConfig, run: RunConfig, mdp: MDPConfig | None = None) -> EnvConfig:
+    """Bundle a config's parts for environment construction; ``mdp`` is None for tasks without MDP managers."""
+    validate_camera_dict(
+        {name: sensor for name, sensor in env.sensor.items() if isinstance(sensor, CameraSensorConfig)}
     )
-
-
-def get_run_sim_env_config(config: RunSimConfig) -> EnvConfig:
-    """Convert RunSimConfig to EnvConfig for a simulation task without policy managers.
-
-    Parameters
-    ----------
-    config : RunSimConfig
-        The simulation configuration.
-
-    Returns
-    -------
-    EnvConfig
-        Environment configuration with no policy managers.
-    """
-    _validate_cameras(config.sensor)
     return EnvConfig(
-        env_class=config.env_class,
-        training=config.training,
-        simulator=config.simulator,
-        scene=config.scene,
-        sensors=dict(config.sensor),
-        plugin=dict(config.plugin),
-        terrain=config.terrain,
-        observation=None,
-        action=None,
-        reward=None,
-        termination=config.termination,
-        randomization=config.randomization,
-        command=None,
-        curriculum=None,
-        robot=config.robot,
-        logger=config.logger,
-        device=config.device,
-        time_scale=config.time_scale,
-        viewer_update_decimation=config.viewer_update_decimation,
+        env_class=env_class,
+        simulator=env.simulator,
+        scene=env.scene,
+        # The CLI declares sensors per-key in the dynamic ``sensor`` dict (key = sensor name).
+        sensors=dict(env.sensor),
+        plugin=dict(env.plugin),
+        terrain=env.terrain,
+        termination=env.termination,
+        randomization=env.randomization,
+        robot=env.robot,
+        observation=mdp.observation if mdp else None,
+        action=mdp.action if mdp else None,
+        reward=mdp.reward if mdp else None,
+        command=mdp.command if mdp else None,
+        curriculum=mdp.curriculum if mdp else None,
+        run=run,
     )

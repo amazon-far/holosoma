@@ -42,7 +42,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 import tyro
 
-from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_types.experiment import SimulationExperimentConfig
 from holosoma.config_types.scene import RigidObjectConfig, SceneConfig
 from holosoma.simulator.shared.object_registry import ObjectType
 
@@ -77,24 +77,29 @@ def _scene() -> SceneConfig:
 def _build(simulator: str, num_envs: int):
     from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 
-    argv = [f"simulator:{simulator}", "robot:g1-29dof", "terrain:terrain_locomotion_plane", "scene:empty"]
-    config = tyro.cli(RunSimConfig, args=argv)
+    argv = [
+        f"env.simulator:sim-{simulator}",
+        "env.robot:g1-29dof",
+        "env.terrain:terrain_locomotion_plane",
+        "env.scene:empty",
+    ]
+    config = tyro.cli(SimulationExperimentConfig, args=argv)
     sim_cfg = dataclasses.replace(
-        config.simulator,
+        config.env.simulator,
         config=dataclasses.replace(
-            config.simulator.config, bridge=BridgeConfig(enabled=False), virtual_gantry=VirtualGantryCfg(enabled=False)
+            config.env.simulator.config,
+            bridge=BridgeConfig(enabled=False),
+            virtual_gantry=VirtualGantryCfg(enabled=False),
         ),
     )
     config = dataclasses.replace(
         config,
-        simulator=sim_cfg,
-        scene=_scene(),
-        device=("cpu" if simulator == "mujoco" else "cuda:0"),
-        training=dataclasses.replace(config.training, num_envs=num_envs),
+        env=dataclasses.replace(config.env, simulator=sim_cfg, scene=_scene()),
+        run=dataclasses.replace(config.run, device=("cpu" if simulator == "mujoco" else "cuda:0"), num_envs=num_envs),
     )
     import torch
 
-    s, device, _ = launch_simulator(config, device=config.device)
+    s, device, _ = launch_simulator(config, device=config.run.device)
     s.set_headless(True)
     s.setup()
     s.setup_terrain()
@@ -102,7 +107,7 @@ def _build(simulator: str, num_envs: int):
     origins = torch.zeros(num_envs, 3, device=device)
     if num_envs > 1:
         origins[:, 0] = torch.arange(num_envs, device=device, dtype=torch.float32) * 8.0
-    init = config.robot.init_state
+    init = config.env.robot.init_state
     base_init = torch.tensor(list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device)
     s.create_envs(num_envs, origins, base_init)
     s.prepare_sim()

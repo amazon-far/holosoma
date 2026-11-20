@@ -58,7 +58,7 @@ def num_dof():
 
 def _build_playback_sim(tmp_path, num_dof, *, ramp: bool = False, seconds: float = 0.1):
     # Clip fps = the sim's control rate, so one clip frame maps to one control frame exactly.
-    from holosoma.config_values.run_sim import mujoco as mujoco_preset
+    from holosoma.config_values.simulator import sim_mujoco as mujoco_preset
 
     control_hz = mujoco_preset.config.sim.fps / mujoco_preset.config.sim.control_decimation_steps
     frames = int(seconds * control_hz) + 1

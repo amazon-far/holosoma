@@ -101,8 +101,7 @@ def main() -> int:
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
         config,
-        device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs),
     )
 
     if args.check_recorder:
@@ -111,7 +110,12 @@ def main() -> int:
         # in __init__ and it registers its publish on FRAME_END (after the render hook).
         from holosoma.config_types.plugin import CameraVizPluginConfig
 
-        config = dataclasses.replace(config, plugin={**config.plugin, "rec": CameraVizPluginConfig(record_video=True)})
+        config = dataclasses.replace(
+            config,
+            env=dataclasses.replace(
+                config.env, plugin={**config.env.plugin, "rec": CameraVizPluginConfig(record_video=True)}
+            ),
+        )
 
     sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(headless)
@@ -124,7 +128,7 @@ def main() -> int:
     env_origins = torch.zeros(n, 3, device=device)
     if n > 1:
         env_origins[:, 0] = torch.arange(n, device=device, dtype=torch.float32) * 5.0
-    init = config.robot.init_state
+    init = config.env.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
         device=device,
@@ -148,7 +152,7 @@ def main() -> int:
     sim.hooks.emit(Phase.FRAME_END)
 
     fails: list[str] = []
-    cam_cfgs = cast("dict[str, CameraSensorConfig]", dict(config.sensor))
+    cam_cfgs = cast("dict[str, CameraSensorConfig]", dict(config.env.sensor))
     for name in names:
         cam = cam_cfgs[name]
         img = sim.get_camera_data(name, "rgb")

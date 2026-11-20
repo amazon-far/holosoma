@@ -1,242 +1,82 @@
+"""Top-level configuration types, one per workflow, each built from the parts that workflow uses."""
+
 from __future__ import annotations
 
 import dataclasses
-import datetime
 import json
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import yaml
+from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
-import holosoma.config_values.action
 import holosoma.config_values.algo
-import holosoma.config_values.command
-import holosoma.config_values.curriculum
-import holosoma.config_values.logger
-import holosoma.config_values.observation
-import holosoma.config_values.plugin
-import holosoma.config_values.randomization
-import holosoma.config_values.reward
-import holosoma.config_values.robot
-import holosoma.config_values.scene
-import holosoma.config_values.sensor
 import holosoma.config_values.simulator
-import holosoma.config_values.termination
-import holosoma.config_values.terrain
-from holosoma.config_types.action import ActionManagerCfg
 from holosoma.config_types.algo import AlgoConfig
-from holosoma.config_types.command import CommandManagerCfg
-from holosoma.config_types.curriculum import CurriculumManagerCfg
-from holosoma.config_types.logger import LoggerConfig
-from holosoma.config_types.observation import ObservationManagerCfg
-from holosoma.config_types.plugin import PluginConfig
-from holosoma.config_types.randomization import RandomizationManagerCfg
-from holosoma.config_types.reward import RewardManagerCfg
-from holosoma.config_types.robot import RobotConfig
-from holosoma.config_types.scene import SceneConfig
-from holosoma.config_types.sensor import SensorConfig
-from holosoma.config_types.simulator import SimulatorConfig
-from holosoma.config_types.termination import TerminationManagerCfg
-from holosoma.config_types.terrain import TerrainManagerCfg
+from holosoma.config_types.environment import EnvironmentConfig
+from holosoma.config_types.evaluation import EvalConfig
+from holosoma.config_types.logger import DisabledLoggerConfig
+from holosoma.config_types.mdp import MDPConfig
+from holosoma.config_types.run import RunConfig
+from holosoma.config_types.video import VideoConfig
 from holosoma.utils.config_registry import UseRegistry
 
 if TYPE_CHECKING:
-    from holosoma.envs.policy_task import PolicyTask
+    from typing_extensions import Self
+
+    from holosoma.config_types.env import EnvConfig
+    from holosoma.envs.base_task.base_task import BaseTask
+
+SIMULATE = "holosoma.envs.simulation_task:SimulationTask.simulate"
+LOCOMOTION_TRAIN = "holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager.train"
+LOCOMOTION_EVALUATE = "holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager.evaluate"
 
 
-def now_timestamp() -> str:
-    return datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+def task_class_path(task: str) -> str:
+    """The dotted import path of the class a ``module:Class.function`` task names."""
+    module, sep, attribute = task.partition(":")
+    cls, dot, function = attribute.rpartition(".")
+    if not (module and sep and cls and dot and function):
+        raise ValueError(f"task must be 'module:Class.function', got {task!r}")
+    return f"{module}.{cls}"
 
 
-@dataclass(frozen=True)
-class NightlyConfig:
-    iterations: int
-    metrics: dict[str, list[float | str]]
+# Unknown fields are rejected, so code still passing a moved or removed field fails loudly.
+_STRICT = ConfigDict(extra="forbid")
 
 
-@dataclass(frozen=True)
-class TrainingConfig:
-    """Configuration for training execution and evaluation."""
-
-    # Simulation settings
-    headless: bool = True
-    """Run simulation without rendering."""
-
-    torch_deterministic: bool = False
-    """Enable PyTorch deterministic mode."""
-
-    multigpu: bool = False
-    """Enable multi-GPU training."""
-
-    # Environment settings
-    num_envs: int = 4096
-    """Number of parallel environments."""
-
-    seed: int = 42
-    """Random seed for reproducibility."""
-
-    # Checkpoint settings
-    checkpoint: str | None = None
-    """Path to checkpoint for resuming training."""
-
-    teacher_checkpoint: str | None = None
-    """Optional path to a teacher-only checkpoint, loaded into the student-teacher
-    policy's teacher branch after env+algo setup. Orthogonal to ``checkpoint``:
-    ``checkpoint`` resumes full algo state (for distillation this includes student,
-    critic, optimizer, storage); ``teacher_checkpoint`` only populates the frozen
-    teacher MLP from a trained PPO-actor checkpoint."""
-
-    # Logging settings
-    project: str = "default_project"
-    """Project name for logging. `logger.project` takes precedence if set."""
-
-    name: str = "run"
-    """Run name for logging. `logger.name` takes precedence if set."""
-
-    # Evaluation settings
-    max_eval_steps: int | None = None
-    """Maximum number of evaluation steps (None for unlimited)."""
-
-    export_onnx: bool = True
-    """Export policy as ONNX model."""
-
-
-@dataclass(frozen=True)
-class EvalOverridesConfig:
-    headless: bool = False
-    num_envs: int = 1
-    disable_logger: bool = True
-    max_episode_length_s: float = 100000.0
-    randomize_tiles: bool = False
-    """Use deterministic spawn at tile (0,0) for reproducible evaluation."""
-    xy_offset_range: float = 0.0
-    """Disable XY offset for deterministic spawn position."""
-
-
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=_STRICT)
 class ExperimentConfig:
-    """Top-level experiment configuration used by the Tyro CLI."""
+    """What every workflow's config holds: the task that runs it, the world, and how the run executes."""
 
-    env_class: str = "holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager"
+    task: str = SIMULATE
+    """The task class and the classmethod that runs this config, as ``module:Class.function``."""
 
-    device: str | None = None
-    """Device for the task. None (the default) resolves from the simulator backend and process
-    rank, as ``RunSimConfig.device`` does; pass e.g. "cuda:0" to override. Not carried into eval."""
+    env: EnvironmentConfig = EnvironmentConfig()
+    """The robot, the simulator and the world around it."""
 
-    training: TrainingConfig = TrainingConfig()
-    algo: Annotated[AlgoConfig, UseRegistry(holosoma.config_values.algo.ALGO_REGISTRY)] = (
-        holosoma.config_values.algo.ppo
-    )
-    simulator: Annotated[SimulatorConfig, UseRegistry(holosoma.config_values.simulator.SIMULATOR_REGISTRY)] = (
-        holosoma.config_values.simulator.isaacsim
-    )
-    terrain: Annotated[TerrainManagerCfg, UseRegistry(holosoma.config_values.terrain.TERRAIN_REGISTRY)] = (
-        holosoma.config_values.terrain.terrain_locomotion_plane
-    )
-    scene: Annotated[SceneConfig, UseRegistry(holosoma.config_values.scene.SCENE_REGISTRY)] = (
-        holosoma.config_values.scene.empty
-    )
-    # Mounted sensors, declared per-key on the CLI as ``sensor.<name>:<variant>`` (resolved from
-    # SENSOR_REGISTRY), optionally with per-key field overrides. The dict key becomes the sensor name.
-    sensor: dict[str, Annotated[SensorConfig, UseRegistry(holosoma.config_values.sensor.SENSOR_REGISTRY)]] = (
-        dataclasses.field(default_factory=dict)
-    )
-    # Plugins, declared per-key as ``plugin.<key>:<variant>`` (resolved from PLUGIN_REGISTRY),
-    # optionally with per-key field overrides. Includes the camera-frame egress sinks (ROS2 publish,
-    # viz window, video record) and any custom plugin. Installed after simulator setup.
-    plugin: dict[str, Annotated[PluginConfig, UseRegistry(holosoma.config_values.plugin.PLUGIN_REGISTRY)]] = (
-        dataclasses.field(default_factory=dict)
-    )
-    observation: Annotated[
-        ObservationManagerCfg | None, UseRegistry(holosoma.config_values.observation.OBSERVATION_REGISTRY)
-    ] = holosoma.config_values.observation.none
-    action: Annotated[ActionManagerCfg | None, UseRegistry(holosoma.config_values.action.ACTION_REGISTRY)] = (
-        holosoma.config_values.action.none
-    )
-    reward: Annotated[RewardManagerCfg | None, UseRegistry(holosoma.config_values.reward.REWARD_REGISTRY)] = (
-        holosoma.config_values.reward.none
-    )
-    termination: Annotated[
-        TerminationManagerCfg | None, UseRegistry(holosoma.config_values.termination.TERMINATION_REGISTRY)
-    ] = holosoma.config_values.termination.none
-    randomization: Annotated[
-        RandomizationManagerCfg | None, UseRegistry(holosoma.config_values.randomization.RANDOMIZATION_REGISTRY)
-    ] = holosoma.config_values.randomization.none
-    command: Annotated[CommandManagerCfg | None, UseRegistry(holosoma.config_values.command.COMMAND_REGISTRY)] = (
-        holosoma.config_values.command.none
-    )
-    curriculum: Annotated[
-        CurriculumManagerCfg | None, UseRegistry(holosoma.config_values.curriculum.CURRICULUM_REGISTRY)
-    ] = holosoma.config_values.curriculum.none
-    robot: Annotated[RobotConfig, UseRegistry(holosoma.config_values.robot.ROBOT_REGISTRY)] = (
-        holosoma.config_values.robot.g1_29dof
-    )
-    logger: Annotated[LoggerConfig, UseRegistry(holosoma.config_values.logger.LOGGER_REGISTRY)] = (
-        holosoma.config_values.logger.disabled
-    )
-    nightly: NightlyConfig | None = None
+    run: RunConfig = RunConfig()
+    """How the run executes, and how it is named and logged."""
 
-    eval_overrides: EvalOverridesConfig = EvalOverridesConfig()
+    _task_base = "holosoma.envs.base_task.base_task.BaseTask"
+    """The class ``task``'s class must be or subclass."""
 
-    def get_nightly_config(self) -> ExperimentConfig:
-        if self.nightly is None:
-            raise ValueError("nightly config is missing.")
+    def __post_init__(self) -> None:
+        task_class_path(self.task)
 
-        return dataclasses.replace(
-            self,
-            algo=dataclasses.replace(
-                self.algo,
-                config=dataclasses.replace(  # type: ignore[arg-type]
-                    self.algo.config,
-                    num_learning_iterations=self.nightly.iterations,
-                ),
-            ),
-        )
+    def env_config(self) -> EnvConfig:
+        """The bundle of configs the task class is constructed from."""
+        from holosoma.config_types.env import build_env_config
 
-    def get_eval_config(self) -> ExperimentConfig:
-        # Create eval spawn config with overrides
-        eval_spawn_cfg = dataclasses.replace(
-            self.terrain.terrain_term.spawn,
-            randomize_tiles=self.eval_overrides.randomize_tiles,
-            xy_offset_range=self.eval_overrides.xy_offset_range,
-        )
+        return build_env_config(task_class_path(self.task), self.env, self.run)
 
-        return dataclasses.replace(
-            self,
-            device=None,
-            terrain=dataclasses.replace(
-                self.terrain,
-                terrain_term=dataclasses.replace(
-                    self.terrain.terrain_term,
-                    spawn=eval_spawn_cfg,
-                ),
-            ),
-            simulator=dataclasses.replace(
-                self.simulator,
-                config=dataclasses.replace(
-                    self.simulator.config,
-                    sim=dataclasses.replace(
-                        self.simulator.config.sim,
-                        max_episode_length_s=self.eval_overrides.max_episode_length_s,
-                    ),
-                ),
-            ),
-            training=dataclasses.replace(
-                self.training,
-                headless=self.eval_overrides.headless,
-                num_envs=self.eval_overrides.num_envs,
-            ),
-            logger=holosoma.config_values.logger.disabled if self.eval_overrides.disable_logger else self.logger,
-        )
-
-    def create_task(self) -> AbstractContextManager[PolicyTask]:
-        """Return a context that builds the configured policy task and owns its resources."""
-        from holosoma.config_types.env import get_tyro_env_config
-        from holosoma.envs.policy_task import PolicyTask
+    def create_task(self) -> AbstractContextManager[BaseTask]:
+        """Return a context that builds ``task``'s class and owns its resources."""
         from holosoma.simulator.session import task_session
+        from holosoma.utils.helpers import get_class
 
-        return task_session(get_tyro_env_config(self), PolicyTask)
+        return task_session(self.env_config(), get_class(self._task_base))
 
     def save_config(self, path: str) -> None:
         with open(path, "w") as file:
@@ -247,3 +87,67 @@ class ExperimentConfig:
         # Directly using yaml.safe_dump does not handle string enums properly,
         # so round-trip through JSON to coerce typing objects into primitives.
         return cast("dict[str, Any]", json.loads(json.dumps(dataclasses.asdict(self))))
+
+
+@dataclass(frozen=True, config=_STRICT)
+class SimulationExperimentConfig(ExperimentConfig):
+    """Simulation with no policy: one environment on an interactive simulator, in the viewer at real time."""
+
+    env: EnvironmentConfig = EnvironmentConfig(simulator=holosoma.config_values.simulator.sim_mujoco)
+    run: RunConfig = RunConfig(
+        num_envs=1,
+        headless=False,
+        time_scale=1.0,
+        logger=DisabledLoggerConfig(video=VideoConfig(enabled=False), base_dir="logs"),
+    )
+
+    _task_base = "holosoma.envs.simulation_task.SimulationTask"
+
+
+@dataclass(frozen=True, config=_STRICT)
+class TrainingExperimentConfig(ExperimentConfig):
+    """Training a policy on an MDP with an algorithm."""
+
+    task: str = LOCOMOTION_TRAIN
+    mdp: MDPConfig = MDPConfig()
+    """The managers the policy is trained on."""
+
+    algo: Annotated[AlgoConfig, UseRegistry(holosoma.config_values.algo.ALGO_REGISTRY)] = (
+        holosoma.config_values.algo.ppo
+    )
+    """The algorithm, its hyperparameters and its training options."""
+
+    _task_base = "holosoma.envs.policy_task.PolicyTask"
+
+    def env_config(self) -> EnvConfig:
+        from holosoma.config_types.env import build_env_config
+
+        return build_env_config(task_class_path(self.task), self.env, self.run, self.mdp)
+
+    def get_nightly_config(self) -> Self:
+        """This config with the nightly check's shortened iteration count."""
+        if self.algo.nightly is None:
+            raise ValueError("nightly config is missing.")
+        algo_config = dataclasses.replace(self.algo.config, num_learning_iterations=self.algo.nightly.iterations)
+        return dataclasses.replace(self, algo=dataclasses.replace(self.algo, config=algo_config))  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True, config=_STRICT)
+class EvaluationExperimentConfig(ExperimentConfig):
+    """Evaluating a trained checkpoint on the MDP it was trained on."""
+
+    task: str = LOCOMOTION_EVALUATE
+    mdp: MDPConfig = MDPConfig()
+    """The managers the policy was trained on, from the checkpoint's saved config."""
+
+    eval: EvalConfig = EvalConfig()
+    """What to evaluate and what to do while evaluating it."""
+
+    run: RunConfig = RunConfig(num_envs=1, headless=False)
+
+    _task_base = "holosoma.envs.policy_task.PolicyTask"
+
+    def env_config(self) -> EnvConfig:
+        from holosoma.config_types.env import build_env_config
+
+        return build_env_config(task_class_path(self.task), self.env, self.run, self.mdp)

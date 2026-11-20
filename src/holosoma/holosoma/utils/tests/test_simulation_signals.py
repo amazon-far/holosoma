@@ -21,7 +21,7 @@ _CHILD = textwrap.dedent(
     from types import SimpleNamespace
 
     import holosoma.run_sim as runner
-    from holosoma.config_types import env as env_types
+    from holosoma.config_types.run import RunConfig
     from holosoma.config_values.simulator import SIMULATOR_REGISTRY
     from holosoma.envs.simulation_task import SimulationTask
     from holosoma.simulator import session
@@ -47,13 +47,13 @@ _CHILD = textwrap.dedent(
     session.resolve_simulation_device = lambda *_args: "cpu"
     session.get_simulator_type = lambda: SimulatorType.MUJOCO
     session.get_class = lambda _target: Task
-    env_config = EnvConfigStub(env_class="test.Task", training=SimpleNamespace(headless=True))
-    env_types.get_run_sim_env_config = lambda _config: env_config
+    env_config = EnvConfigStub(env_class="test.Task", run=RunConfig(headless=True))
     config = SimpleNamespace(
-        device="cpu",
+        run=SimpleNamespace(device="cpu"),
         # A real preset, so the fields run_simulation reads (``config.name``, ``config.mujoco_backend``)
         # have the shapes they have in production.
-        simulator=SIMULATOR_REGISTRY.get("mujoco"),
+        env=SimpleNamespace(simulator=SIMULATOR_REGISTRY.get("mujoco")),
+        env_config=lambda: env_config,
         create_task=lambda: session.task_session(env_config, SimulationTask),
     )
     runner.run_simulation(config)

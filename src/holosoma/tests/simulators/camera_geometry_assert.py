@@ -133,9 +133,7 @@ def main() -> int:
         config = _camera_presets.as_mjwarp(config)
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
-    config = dataclasses.replace(
-        config, device=device, training=dataclasses.replace(config.training, num_envs=args.num_envs)
-    )
+    config = dataclasses.replace(config, run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs))
 
     sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(headless)
@@ -147,7 +145,7 @@ def main() -> int:
     n = args.num_envs
     # All envs co-located at the origin so every env's robot and panel align.
     env_origins = torch.zeros(n, 3, device=device)
-    init = config.robot.init_state
+    init = config.env.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
     )
@@ -215,7 +213,7 @@ def main() -> int:
     step(sim, 4)
     sim.render_sensors()
 
-    cam_name, sensor = next(iter(config.sensor.items()))
+    cam_name, sensor = next(iter(config.env.sensor.items()))
     cam = cast("CameraSensorConfig", sensor)
     # Camera-to-panel-face distance: panel center at x=_PANEL_DISTANCE, minus the camera mount x
     # offset, minus the panel half-thickness (0.01 m).

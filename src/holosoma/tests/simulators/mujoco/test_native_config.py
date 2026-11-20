@@ -17,10 +17,10 @@ from pydantic import TypeAdapter
 mujoco = pytest.importorskip("mujoco")
 torch = pytest.importorskip("torch")
 
-from holosoma.config_types.experiment import ExperimentConfig  # noqa: E402
+from holosoma.config_types.environment import EnvironmentConfig  # noqa: E402
+from holosoma.config_types.experiment import SimulationExperimentConfig, TrainingExperimentConfig  # noqa: E402
 from holosoma.config_types.full_sim import FullSimConfig  # noqa: E402
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig  # noqa: E402
-from holosoma.config_types.run_sim import RunSimConfig  # noqa: E402
 from holosoma.config_types.scene import MujocoPhysicsConfig, PhysicsConfig  # noqa: E402
 from holosoma.config_values.robot import g1_29dof  # noqa: E402
 from holosoma.config_values.simulator import mjwarp  # noqa: E402
@@ -54,12 +54,12 @@ def compiled(native, backend=preset, *, xml=XML):
 
 
 def warp_backend_config(native):
-    run = RunSimConfig()
+    config = SimulationExperimentConfig()
     return FullSimConfig(
         simulator=replace(mjwarp.config, sim=replace(mjwarp.config.sim, fps=100, mujoco=native)),
-        robot=run.robot,
-        training=replace(run.training, num_envs=2),
-        logger=run.logger,
+        robot=config.env.robot,
+        run=replace(config.run, num_envs=2),
+        logger=config.run.logger,
         plugin={},
     )
 
@@ -427,40 +427,42 @@ def test_classic_keeps_warp_only_inputs_inactive_and_preserves_shared_dynamics(s
 
 def test_saved_warp_preset_can_override_only_backend_then_initialize_classic():
     warp_config = parse_config(
-        RunSimConfig,
+        SimulationExperimentConfig,
         args=[
-            "simulator:mjwarp",
-            "--simulator.config.sim.mujoco.integrator",
+            "env.simulator:sim-mjwarp",
+            "--env.simulator.config.sim.mujoco.integrator",
             "rk4",
-            "--simulator.config.sim.mujoco.cone",
+            "--env.simulator.config.sim.mujoco.cone",
             "elliptic",
-            "--simulator.config.sim.mujoco.impratio",
+            "--env.simulator.config.sim.mujoco.impratio",
             "10",
-            "--simulator.config.sim.mujoco.warp.nconmax-per-env",
+            "--env.simulator.config.sim.mujoco.warp.nconmax-per-env",
             "128",
-            "--simulator.config.sim.mujoco.warp.naconmax",
+            "--env.simulator.config.sim.mujoco.warp.naconmax",
             "300",
-            "--simulator.config.sim.mujoco.warp.graph-conditional",
+            "--env.simulator.config.sim.mujoco.warp.graph-conditional",
             "False",
-            "--simulator.config.sim.mujoco.extra",
+            "--env.simulator.config.sim.mujoco.extra",
             '{"ccd_iterations": 12}',
-            "--simulator.config.sim.mujoco.warp.extras",
+            "--env.simulator.config.sim.mujoco.warp.extras",
             '{"nccdmax": 64}',
         ],
     )
-    saved = TypeAdapter(RunSimConfig).validate_python(
-        yaml.safe_load(yaml.safe_dump(TypeAdapter(RunSimConfig).dump_python(warp_config, mode="json")))
+    saved = TypeAdapter(SimulationExperimentConfig).validate_python(
+        yaml.safe_load(yaml.safe_dump(TypeAdapter(SimulationExperimentConfig).dump_python(warp_config, mode="json")))
     )
-    classic = parse_config(RunSimConfig, default=saved, args=["--simulator.config.mujoco-backend", "CLASSIC"])
-    assert classic.simulator.config.sim.mujoco == saved.simulator.config.sim.mujoco
-    sim = build_classic_sim(simulator=classic.simulator)
+    classic = parse_config(
+        SimulationExperimentConfig, default=saved, args=["--env.simulator.config.mujoco-backend", "CLASSIC"]
+    )
+    assert classic.env.simulator.config.sim.mujoco == saved.env.simulator.config.sim.mujoco
+    sim = build_classic_sim(simulator=classic.env.simulator)
     try:
         assert sim.plugin_config == sim.installed_plugins == {}
         assert sim.root_model.opt.integrator == mujoco.mjtIntegrator.mjINT_RK4
         assert sim.root_model.opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC
         assert sim.root_model.opt.impratio == 10
         assert sim.root_model.opt.ccd_iterations == 12
-        assert sim.simulator_config.sim.mujoco == saved.simulator.config.sim.mujoco
+        assert sim.simulator_config.sim.mujoco == saved.env.simulator.config.sim.mujoco
         sim.backend.step()
         assert sim.root_data.time == pytest.approx(sim.sim_dt)
         mujoco.mj_resetData(sim.root_model, sim.root_data)
@@ -529,16 +531,19 @@ def test_training_checkpoint_native_physics_reaches_standalone_core_and_stepping
         warp=MujocoWarpConfig(nconmax_per_env=128, graph_conditional=False),
     )
     simulator = replace(mjwarp, config=replace(mjwarp.config, sim=replace(mjwarp.config.sim, mujoco=native)))
-    training = replace(ExperimentConfig(), simulator=simulator, plugin={})
+    default = TrainingExperimentConfig()
+    training = replace(default, env=replace(default.env, simulator=simulator, plugin={}))
     checkpoint = tmp_path / "model.pt"
     torch.save({"experiment_config": training.to_serializable_dict()}, checkpoint)
     loaded, _ = load_saved_experiment_config(CheckpointConfig(checkpoint=str(checkpoint)))
     standalone = parse_config(
-        RunSimConfig,
-        default=RunSimConfig(simulator=loaded.simulator, robot=loaded.robot, plugin={}),
-        args=["--simulator.config.mujoco-backend", "CLASSIC"],
+        SimulationExperimentConfig,
+        default=SimulationExperimentConfig(
+            env=EnvironmentConfig(simulator=loaded.env.simulator, robot=loaded.env.robot, plugin={})
+        ),
+        args=["--env.simulator.config.mujoco-backend", "CLASSIC"],
     )
-    sim = build_classic_sim(simulator=standalone.simulator)
+    sim = build_classic_sim(simulator=standalone.env.simulator)
     try:
         assert sim.plugin_config == sim.installed_plugins == {}
         assert sim.root_model.opt.integrator == mujoco.mjtIntegrator.mjINT_RK4

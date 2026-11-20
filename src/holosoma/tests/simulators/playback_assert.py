@@ -53,7 +53,7 @@ def _build(simulator: str, num_envs: int, plugin=None, kinematic: bool = False):
     from tests.simulators._sim_harness import build_run_sim_config, launch_simulator
 
     config = build_run_sim_config(simulator, "empty", "g1-29dof", "terrain_locomotion_plane")
-    sim_cfg = config.simulator
+    sim_cfg = config.env.simulator
     if kinematic:
         sim_cfg = dataclasses.replace(
             sim_cfg,
@@ -64,10 +64,8 @@ def _build(simulator: str, num_envs: int, plugin=None, kinematic: bool = False):
     device = "cuda:0" if simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
         config,
-        simulator=sim_cfg,
-        device=device,
-        plugin=plugin or {},
-        training=dataclasses.replace(config.training, num_envs=num_envs),
+        env=dataclasses.replace(config.env, simulator=sim_cfg, plugin=plugin or {}),
+        run=dataclasses.replace(config.run, device=device, num_envs=num_envs),
     )
     sim, device, _ = launch_simulator(config, device=device)
     sim.set_headless(True)
@@ -75,10 +73,10 @@ def _build(simulator: str, num_envs: int, plugin=None, kinematic: bool = False):
     sim.setup_terrain()
     sim.load_assets()
     base_init = torch.tensor(
-        list(config.robot.init_state.pos)
-        + list(config.robot.init_state.rot)
-        + list(config.robot.init_state.lin_vel)
-        + list(config.robot.init_state.ang_vel)
+        list(config.env.robot.init_state.pos)
+        + list(config.env.robot.init_state.rot)
+        + list(config.env.robot.init_state.lin_vel)
+        + list(config.env.robot.init_state.ang_vel)
     )
     sim.create_envs(num_envs, torch.zeros(num_envs, 3, device=device), base_init)
     sim.prepare_sim()

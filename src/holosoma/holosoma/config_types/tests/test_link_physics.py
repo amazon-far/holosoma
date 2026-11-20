@@ -210,13 +210,18 @@ def test_no_circular_import() -> None:
 def test_tyro_cli_round_trips_link_physics(robot_key: str) -> None:
     import tyro
 
-    from holosoma.config_types.run_sim import RunSimConfig
+    from holosoma.config_types.experiment import SimulationExperimentConfig
 
     cfg = tyro.cli(
-        RunSimConfig,
-        args=["simulator:mujoco", f"robot:{robot_key}", "terrain:terrain-locomotion-plane", "scene:empty"],
+        SimulationExperimentConfig,
+        args=[
+            "env.simulator:sim-mujoco",
+            f"env.robot:{robot_key}",
+            "env.terrain:terrain-locomotion-plane",
+            "env.scene:empty",
+        ],
     )
     # The nested PhysicsConfig survives the CLI surface.
-    assert isinstance(cfg.robot.asset.link_physics, PhysicsConfig)
-    assert cfg.robot.asset.link_physics.physx is not None
-    assert cfg.robot.asset.link_physics.physx.linear_damping == 0.0
+    assert isinstance(cfg.env.robot.asset.link_physics, PhysicsConfig)
+    assert cfg.env.robot.asset.link_physics.physx is not None
+    assert cfg.env.robot.asset.link_physics.physx.linear_damping == 0.0

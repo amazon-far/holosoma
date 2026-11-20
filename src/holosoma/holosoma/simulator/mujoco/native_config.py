@@ -186,7 +186,7 @@ def effective_options(config: Any) -> dict[str, Any]:
     for name, value in cfg.extra.items():
         if not isinstance(getattr(mujoco.MjOption, name, None), property):
             raise ValueError(
-                f"simulator.config.sim.mujoco.extra.{name}: "
+                f"env.simulator.config.sim.mujoco.extra.{name}: "
                 "unknown public MjOption input; put MJWarp-only inputs in mujoco.warp.extras"
             )
         result[name] = value
@@ -202,9 +202,9 @@ def apply_world_config(spec: mujoco.MjSpec, config: Any) -> None:
     options = effective_options(config)
     for name, value in options.items():
         path = (
-            f"simulator.config.sim.mujoco.{name}"
+            f"env.simulator.config.sim.mujoco.{name}"
             if name in MujocoConfig.__dataclass_fields__
-            else f"simulator.config.sim.mujoco.extra.{name}"
+            else f"env.simulator.config.sim.mujoco.extra.{name}"
         )
         target, key = resolve_public(spec.option, name, path)
         setattr(target, key, validate_value(getattr(target, key), native_value(name, value, path), path))

@@ -12,6 +12,7 @@ import pytest
 
 import holosoma.replay as replay_module
 from holosoma import eval_agent, train_agent
+from holosoma.config_types.run import RunConfig
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.simulator import session
 from holosoma.utils import experiment_paths
@@ -66,7 +67,7 @@ def _patch_session(monkeypatch: pytest.MonkeyPatch, env: _Environment, app: obje
     monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.ISAACSIM)
     monkeypatch.setattr(session, "setup_isaaclab_launcher", launch)
     monkeypatch.setattr(session, "get_class", lambda _target: _Task)
-    env_config = EnvConfigStub(env_class="test.Task", training=SimpleNamespace(headless=True))
+    env_config = EnvConfigStub(env_class="test.Task", run=RunConfig(headless=True))
     return SimpleNamespace(create_task=lambda: session.task_session(env_config, BaseTask))  # type: ignore[arg-type]
 
 
@@ -97,8 +98,8 @@ def test_eval_interrupt_closes_environment_before_app(
             raise KeyboardInterrupt
 
     config = _patch_session(monkeypatch, env, app)
-    config.logger = object()
-    config.training = SimpleNamespace(export_onnx=False, max_eval_steps=5)
+    config.run = SimpleNamespace(logger=object(), project="project", name="run")
+    config.eval = SimpleNamespace(export_onnx=False, max_eval_steps=5)
     config.algo = SimpleNamespace(_target_="test.Algo", config=object())
     config.save_config = MagicMock()
     checkpoint_cfg = SimpleNamespace(checkpoint="model.pt")
@@ -158,16 +159,9 @@ def test_training_interrupt_closes_environment_before_app(
             raise KeyboardInterrupt
 
     config = _patch_session(monkeypatch, env, app)
-    config.logger = SimpleNamespace(type="local")
-    config.training = SimpleNamespace(
-        project=None,
-        name=None,
-        checkpoint=None,
-        teacher_checkpoint=None,
-        num_envs=1,
-    )
-    config.robot = SimpleNamespace(asset=SimpleNamespace(robot_type="test"))
-    config.algo = SimpleNamespace(_target_="test.Algo", config=object())
+    config.run = SimpleNamespace(logger=SimpleNamespace(type="local"), project="project", name="run", num_envs=1)
+    config.env = SimpleNamespace(robot=SimpleNamespace(asset=SimpleNamespace(robot_type="test")))
+    config.algo = SimpleNamespace(_target_="test.Algo", config=object(), resume_from=None, teacher_checkpoint=None)
     config.save_config = MagicMock()
     monkeypatch.setitem(sys.modules, "wandb", types.ModuleType("wandb"))
     monkeypatch.delenv("WORLD_SIZE", raising=False)
@@ -218,7 +212,7 @@ def test_experiment_create_task_rejects_a_non_policy_task_before_building_it(
 
     class _Rejected(SimulationTask):
         def __new__(cls, _config: object) -> Any:
-            raise AssertionError("a rejected env_class must not be constructed")
+            raise AssertionError("a rejected task must not be constructed")
 
     monkeypatch.setattr(session, "setup_simulator_imports", lambda _config: None)
     monkeypatch.setattr(session, "resolve_simulation_device", lambda *_args: "cpu")
