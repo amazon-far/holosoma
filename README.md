@@ -60,14 +60,16 @@ Train a G1 robot with FastSAC on IsaacSim:
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacsim \
-    logger:wandb \
-    --training.seed 1
+    env.simulator:isaacsim \
+    run.logger:wandb \
+    --run.seed 1
 ```
 
 > **Note:** For headless servers, see the [training guide](src/holosoma/README.md#video-recording) for video recording configuration.
 
 See the [Training Guide](src/holosoma/README.md) for more examples and configuration options.
+
+Every workflow also runs through the `holosoma` command and can be configured from a run document; see [Configs, the `holosoma` command and run documents](docs/config-files.md).
 
 ### Quick Demo
 

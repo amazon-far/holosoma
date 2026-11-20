@@ -53,12 +53,12 @@ publisher:
 
 ```bash
 source scripts/source_mujoco_setup.sh
-python src/holosoma/holosoma/run_sim.py robot:g1-29dof \
-    --simulator.config.sim.fps=500 \
-    sensor.d435i_front_depth:g1-d435i-front-depth \
-    plugin.depth:depth-shm-d435i \
-    terrain:terrain-locomotion-plane \
-    --simulator.config.bridge.enabled=True
+python src/holosoma/holosoma/run_sim.py env.robot:g1-29dof \
+    --env.simulator.config.sim.fps=500 \
+    env.sensor.d435i_front_depth:g1-d435i-front-depth \
+    env.plugin.depth:depth-shm-d435i \
+    env.terrain:terrain-locomotion-plane \
+    --env.simulator.config.bridge.enabled=True
 ```
 
 The robot will spawn in the simulator, hanging from a gantry. The log should show:

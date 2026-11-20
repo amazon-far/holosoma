@@ -213,9 +213,9 @@ python src/holosoma/holosoma/train_agent.py \
 Example 3: Robot+Terrain:
 python src/holosoma/holosoma/train_agent.py \
   exp:g1-29dof-wbt \
-  terrain:terrain-load-obj \
-  --terrain.terrain-term.obj-file-path="holosoma/data/motions/g1_29dof/whole_body_tracking/terrain_slope.obj" \
-  --command.setup_terms.motion_command.params.motion_config.motion_file\
+  env.terrain:terrain-load-obj \
+  --env.terrain.terrain-term.obj-file-path="holosoma/data/motions/g1_29dof/whole_body_tracking/terrain_slope.obj" \
+  --mdp.command.setup_terms.motion_command.params.motion_config.motion_file\
 ="holosoma/data/motions/g1_29dof/whole_body_tracking/motion_crawl_slope.npz" \
   --scene.env_spacing=0.0
 """

@@ -1,6 +1,6 @@
 # Adding Config Values to Holosoma
 
-Two ways to add a preset (robot, reward, simulator, inference policy, …): a **`--import-file`** for local/one-off use, or a packaged **entry point** for anything you ship. Both land in the same menu and work across `run_sim`, `train_agent`, `eval_agent`, `replay`, `run_policy`.
+Two ways to add a preset (robot, reward, simulator, inference policy, …): a **`--import-file`** for local/one-off use, or a packaged **entry point** for anything you ship. Both land in the same menu and work across `holosoma` (and its `run_sim`, `train_agent`, `eval_agent`, `replay` scripts) and `run_policy`.
 
 Each config family is a `ConfigRegistry` with an entry-point group. Presets are type-checked on the way in; a wrong type or a broken plugin is skipped.
 
@@ -17,7 +17,7 @@ ROBOT_REGISTRY.add("g1_stiff", replace(g1_29dof, control=replace(g1_29dof.contro
 ```
 
 ```bash
-python -m holosoma.run_sim --import-file my_presets.py robot:g1-stiff   # repeatable; selectable like a built-in
+python -m holosoma.run_sim --import-file my_presets.py env.robot:g1-stiff   # repeatable; selectable like a built-in
 ```
 
 `.add(name, value)` type-checks `value` and returns it, so `x = REGISTRY.add(...)` also keeps a normal module attribute.
@@ -137,13 +137,36 @@ Loaders may opt into joining relative values to `asset_root` with
 
 Publish an entry point under the group whose config type matches your preset. Training and inference share some group names on purpose — the type check routes each preset to the right registry.
 
-**Training (`holosoma`)** — `robot` `RobotConfig` · `simulator` `SimulatorConfig` · `run_sim` `SimulatorConfig` · `terrain` `TerrainManagerCfg` · `scene` `SceneConfig` · `algo` `PPOAlgoConfig`/`FastSACAlgoConfig` · `observation` `ObservationManagerCfg` · `action` `ActionManagerCfg` · `reward` `RewardManagerCfg` · `termination` `TerminationManagerCfg` · `randomization` `RandomizationManagerCfg` · `command` `CommandManagerCfg` · `curriculum` `CurriculumManagerCfg` · `logger` `DisabledLoggerConfig`/`WandbLoggerConfig` · `plugin` `PluginConfig` · `experiment` `ExperimentConfig` (top-level `exp:`)
+**Holosoma (`holosoma`)**, listed by where each preset is selected:
+- **`env.*`:** `robot` `RobotConfig` · `simulator` `SimulatorConfig` · `terrain` `TerrainManagerCfg` · `scene` `SceneConfig` · `sensor` `CameraSensorConfig`/`LidarSensorConfig` · `plugin` `PluginConfig` · `randomization` `RandomizationManagerCfg` · `termination` `TerminationManagerCfg`
+- **`mdp.*`:** `observation` `ObservationManagerCfg` · `action` `ActionManagerCfg` · `reward` `RewardManagerCfg` · `command` `CommandManagerCfg` · `curriculum` `CurriculumManagerCfg`
+- **The rest:**
+  - `algo` `PPOAlgoConfig`/`FastSACAlgoConfig` (`algo:`);
+  - `logger` `DisabledLoggerConfig`/`WandbLoggerConfig` (`run.logger:`);
+  - `experiment` `TrainingExperimentConfig` (the root `exp:`).
+
+The group string doesn't change with the path: a robot preset is still published under `holosoma.config.robot`, and is selected as `env.robot:<name>`.
 
 The `plugin` family runs custom per-step behavior — see [Plugins](#plugins) below.
 
 **Inference (`holosoma_inference`)** — `robot` `RobotConfig` · `observation` `ObservationConfig` · `task` `TaskConfig` · `inference` `InferenceConfig` (top-level `inference:`)
 
 Group string is `holosoma.config.<family>`, registry var is `<FAMILY>_REGISTRY` (e.g. `holosoma.config.reward` → `REWARD_REGISTRY`).
+
+## Tasks — custom workflows
+
+A config's `task` field names what runs, as `module:Class.function`.
+- **What the function must be:** a classmethod on a task class (a `BaseTask` subclass) that takes one finished config. Its parameter annotation names the config type the command line builds:
+
+  ```python
+  class MyLocomotionTask(LeggedRobotLocomotionManager):
+      @classmethod
+      def train(cls, config: TrainingExperimentConfig) -> None:
+          ...  # e.g. patch or extend, then super().train(config)
+  ```
+- **Selecting it:** `holosoma --task=my_pkg.tasks:MyLocomotionTask.train exp:g1-29dof`, or set `task` in an experiment preset so `exp:<name>` selects it.
+- **Inherited functions:** an `PolicyTask` subclass already has `train` and `evaluate`, and a `SimulationTask` subclass has `simulate` and `replay`.
+- **What the CLI checks:** that the path names such a classmethod, and that an explicit `task` names the same class as the `exp:` preset.
 
 ## Plugins — custom per-step behavior
 
@@ -176,7 +199,7 @@ PLUGIN_REGISTRY.add("log_height", LogHeightPluginConfig())
 ```
 
 ```bash
-python -m holosoma.run_sim --import-file my_plugins.py plugin.h:log_height --plugin.h.every=5Hz
+python -m holosoma.run_sim --import-file my_plugins.py env.plugin.h:log_height --env.plugin.h.every=5Hz
 ```
 
 Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrides via `--plugin.<key>.<field>=…`); each is constructed once in `BaseSimulator.install_plugins`, after the backend is ready. Ship them packaged via the `holosoma.config.plugin` entry-point group like any other preset.

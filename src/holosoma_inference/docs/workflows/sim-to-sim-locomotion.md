@@ -30,15 +30,15 @@ In one terminal, launch the MuJoCo environment:
 **For keyboard control:**
 ```bash
 source scripts/source_mujoco_setup.sh
-python src/holosoma/holosoma/run_sim.py robot:g1-29dof
+python src/holosoma/holosoma/run_sim.py env.robot:g1-29dof
 ```
 
 **For joystick control:**
 ```bash
 source scripts/source_mujoco_setup.sh
-python src/holosoma/holosoma/run_sim.py robot:g1-29dof \
-    --simulator.config.bridge.enabled=True \
-    --simulator.config.bridge.use-joystick=True
+python src/holosoma/holosoma/run_sim.py env.robot:g1-29dof \
+    --env.simulator.config.bridge.enabled=True \
+    --env.simulator.config.bridge.use-joystick=True
 ```
 
 The robot will spawn in the simulator, hanging from a gantry.
@@ -97,15 +97,15 @@ In one terminal, launch the MuJoCo environment:
 **For keyboard control:**
 ```bash
 source scripts/source_mujoco_setup.sh
-python src/holosoma/holosoma/run_sim.py robot:t1-29dof-waist-wrist
+python src/holosoma/holosoma/run_sim.py env.robot:t1-29dof-waist-wrist
 ```
 
 **For joystick control:**
 ```bash
 source scripts/source_mujoco_setup.sh
-python src/holosoma/holosoma/run_sim.py robot:t1-29dof-waist-wrist \
-    --simulator.config.bridge.enabled=True \
-    --simulator.config.bridge.use-joystick=True
+python src/holosoma/holosoma/run_sim.py env.robot:t1-29dof-waist-wrist \
+    --env.simulator.config.bridge.enabled=True \
+    --env.simulator.config.bridge.use-joystick=True
 ```
 
 The robot will spawn in the simulator, hanging from a gantry.

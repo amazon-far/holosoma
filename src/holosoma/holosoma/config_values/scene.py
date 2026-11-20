@@ -1,7 +1,7 @@
 """Named scene presets, selectable via the ``scene:`` subcommand.
 
 Each preset hard-defines which assets are spawned; can override fields of a preset's assets
-at the CLI (e.g. ``scene:object-managers-demo --scene.rigid-objects.free-box.position 0.9 0 0.7``),
+at the CLI (e.g. ``env.scene:object-managers-demo --env.scene.rigid-objects.free-box.position 0.9 0 0.7``),
 but cannot add/remove assets (the preset fixes the set of keys).
 
 This module holds ONLY production scenes — the ones a shipped experiment, the run-sim CLI, or the
