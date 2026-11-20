@@ -35,6 +35,10 @@ class EnvConfig:
     training: TrainingConfig
     logger: LoggerConfig
 
+    # FK noise injection overrides (propagated from ablation flags to controller)
+    fk_noise_enabled: bool = False
+    fk_noise_sigma: float = 0.0
+
 
 def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
     """Convert ExperimentConfig to EnvConfig for environment construction.
@@ -63,4 +67,6 @@ def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
         curriculum=tyro_config.curriculum,
         robot=tyro_config.robot,
         logger=tyro_config.logger,
+        fk_noise_enabled=tyro_config.fk_noise_enabled,
+        fk_noise_sigma=tyro_config.fk_noise_sigma,
     )

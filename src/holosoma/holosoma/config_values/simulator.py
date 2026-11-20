@@ -23,7 +23,9 @@ isaacgym = SimulatorConfig(
                 bounce_threshold_velocity=0.5,
             ),
         ),
-        contact_sensor_history_length=3,
+        # Must be >= control_decimation (4) so the contact-force history covers
+        # a full control interval for the touchdown peak-force penalty.
+        contact_sensor_history_length=4,
     ),
 )
 
@@ -49,7 +51,9 @@ isaacsim = SimulatorConfig(
             render_mode="human",
             render_interval=4,
         ),
-        contact_sensor_history_length=3,
+        # Must be >= control_decimation (4) so the contact-force history covers
+        # a full control interval for the touchdown peak-force penalty.
+        contact_sensor_history_length=4,
     ),
 )
 

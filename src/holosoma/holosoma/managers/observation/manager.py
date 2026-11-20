@@ -55,6 +55,12 @@ class ObservationManager:
             self._history_buffers[group_name] = {}
 
             for term_name, term_cfg in group_cfg.terms.items():
+                # Skip disabled terms
+                if not term_cfg.enabled:
+                    if self.logger:
+                        self.logger.info(f"[ObservationManager] Disabled term: {group_name}/{term_name}")
+                    continue
+
                 # Resolve function
                 func = resolve_callable(term_cfg.func, context="observation term")
 
@@ -114,6 +120,10 @@ class ObservationManager:
         obs_tensors = {}
 
         for term_name, term_cfg in group_cfg.terms.items():
+            # Skip disabled terms
+            if not term_cfg.enabled:
+                continue
+
             # 1. Compute base observation
             obs = self._compute_term(group_name, term_name, term_cfg)
 
@@ -139,8 +149,61 @@ class ObservationManager:
             # Concatenate in alphabetically sorted order (to match direct system behavior)
             # Direct system does: sorted(obs_config) before concatenation
             sorted_keys = sorted(obs_tensors.keys())
+            if not sorted_keys:
+                return torch.zeros(self.env.num_envs, 0, device=self.device)
             return torch.cat([obs_tensors[key] for key in sorted_keys], dim=-1)
         return obs_tensors
+
+    def compute_group_single_frame(self, group_name: str) -> torch.Tensor:
+        """Compute single-frame observations for a group without history stacking.
+
+        This method computes each term in the group with noise, scaling, and clipping
+        applied, but skips history stacking. The result is the current timestep's
+        observation concatenated across all enabled terms.
+
+        Parameters
+        ----------
+        group_name : str
+            Name of the observation group to compute.
+
+        Returns
+        -------
+        torch.Tensor
+            Concatenated single-frame observation tensor with shape
+            ``[num_envs, single_frame_dim]`` where ``single_frame_dim`` is the sum
+            of per-term dimensions without history multiplication.
+        """
+        group_cfg = self.cfg.groups[group_name]
+        obs_tensors = {}
+
+        for term_name, term_cfg in group_cfg.terms.items():
+            # Skip disabled terms
+            if not term_cfg.enabled:
+                continue
+
+            # 1. Compute base observation
+            obs = self._compute_term(group_name, term_name, term_cfg)
+
+            # 2. Apply noise (matches direct: noise before scaling)
+            if group_cfg.enable_noise and term_cfg.noise > 0:
+                obs = self._apply_noise(obs, term_cfg.noise)
+
+            # 3. Apply scaling (matches direct: scale after noise)
+            obs = self._apply_scale(obs, term_cfg.scale)
+
+            # 4. Apply clipping (if specified)
+            if term_cfg.clip is not None:
+                obs = obs.clip(term_cfg.clip[0], term_cfg.clip[1])
+
+            # Skip history stacking - store single-frame observation directly
+            obs_tensors[term_name] = obs
+
+        # Concatenate in alphabetically sorted order (to match compute_group behavior)
+        sorted_keys = sorted(obs_tensors.keys())
+        if not sorted_keys:
+            return torch.zeros(self.env.num_envs, 0, device=self.device)
+        return torch.cat([obs_tensors[key] for key in sorted_keys], dim=-1)
+
 
     def _compute_term(self, group_name: str, term_name: str, term_cfg: ObsTermCfg) -> torch.Tensor:
         """Compute a single observation term.
@@ -312,6 +375,10 @@ class ObservationManager:
                 # Sum up all term dimensions
                 total_dim = 0
                 for term_name, term_cfg in group_cfg.terms.items():
+                    # Skip disabled terms
+                    if not term_cfg.enabled:
+                        continue
+
                     # Compute term once to get its dimension
                     obs = self._compute_term(group_name, term_name, term_cfg)
                     term_dim = obs.shape[1]
@@ -327,6 +394,7 @@ class ObservationManager:
                 term_dims: dict[str, int] = {
                     term_name: self._compute_term(group_name, term_name, term_cfg).shape[1]
                     for term_name, term_cfg in group_cfg.terms.items()
+                    if term_cfg.enabled
                 }
                 dims[group_name] = term_dims
         return dims

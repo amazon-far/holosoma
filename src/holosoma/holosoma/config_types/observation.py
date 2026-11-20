@@ -27,6 +27,10 @@ class ObsTermCfg:
     clip: tuple[float, float] | None = None
     """Optional min/max clip bounds applied after scaling."""
 
+    enabled: bool = True
+    """If ``False``, this term is excluded from observation computation and
+    dimension calculations. Useful for ablation studies."""
+
 
 @dataclass(frozen=True)
 class ObsGroupCfg:

@@ -1,3 +1,4 @@
+import numpy as np
 from loguru import logger
 from unitree_interface import (
     LowState,
@@ -71,8 +72,15 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
         # Populate motor state
         self.low_state.motor.q = positions.tolist()
         self.low_state.motor.dq = velocities.tolist()
-        self.low_state.motor.ddq = accelerations.tolist()
         self.low_state.motor.tau_est = actuator_forces.tolist()
+
+        # Pack per-foot vertical GRF into imu.rpy[0:2] for sim-to-inference
+        # transfer. rpy is unused by the G1 inference path, so this is a free
+        # transported channel carrying a sim-only ground-truth signal (eval
+        # logging reads it when is_sim=True). Mirrors the root-pos-in-accel
+        # trick. (motor.ddq is not exposed by the SDK binding, so rpy is used.)
+        left_grf_z, right_grf_z = self._get_foot_grf_z()
+        self.low_state.imu.rpy = [left_grf_z, right_grf_z, 0.0]
 
         # Populate IMU state
         # Convert quaternion from torch tensor to list [w, x, y, z]
@@ -84,13 +92,75 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
             float(quat_array[3]),  # z
         ]
         self.low_state.imu.omega = gyro.detach().cpu().numpy().tolist()
-        self.low_state.imu.accel = acceleration.detach().cpu().numpy().tolist()
+        # Pack root position into imu.accel for sim-to-inference transfer.
+        # The inference side reads this as base_pos when is_sim=True.
+        root_pos = self.simulator.robot_root_states[0, :3].detach().cpu().numpy()
+        self.low_state.imu.accel = root_pos.tolist()
 
         # Set timestamp (milliseconds)
         self.low_state.tick = int(self.sim_time * 1e3)
 
         # Publish (CRC calculated automatically in C++)
         self.interface.publish_low_state(self.low_state)
+
+    # Foot body names for GRF extraction (G1 terminal foot links).
+    _FOOT_BODY_NAMES = ("left_ankle_roll_link", "right_ankle_roll_link")
+
+    def _get_foot_grf_z(self) -> tuple[float, float]:
+        """Get per-foot vertical (world-z) ground reaction force from the sim.
+
+        Computes contact forces directly from the current MuJoCo state via
+        ``mj_contactForce`` and aggregates per foot body. This is done on
+        demand because the simulator's ``contact_forces`` tensor is not
+        refreshed on the MuJoCo run-sim path. Returns (0.0, 0.0) if the
+        model/data or foot bodies are unavailable. Foot body ids are resolved
+        once and cached.
+        """
+        import mujoco
+
+        model = getattr(self.simulator, "root_model", None)
+        data = getattr(self.simulator, "root_data", None)
+        if model is None or data is None:
+            return 0.0, 0.0
+
+        if not hasattr(self, "_foot_body_ids"):
+            try:
+                self._foot_body_ids = [
+                    self.simulator.find_rigid_body_indice(name)
+                    for name in self._FOOT_BODY_NAMES
+                ]
+            except RuntimeError as e:
+                logger.warning(f"Foot GRF disabled — body lookup failed: {e}")
+                self._foot_body_ids = None
+
+        if self._foot_body_ids is None:
+            return 0.0, 0.0
+
+        left_id, right_id = self._foot_body_ids
+        left_grf_z = 0.0
+        right_grf_z = 0.0
+        forcetorque = np.zeros(6, dtype=np.float64)
+        for c_idx in range(data.ncon):
+            contact = data.contact[c_idx]
+            mujoco.mj_contactForce(model, data, c_idx, forcetorque)
+            # mj_contactForce returns the force in the CONTACT frame
+            # [normal, tangent1, tangent2]. Rotate into the world frame using
+            # contact.frame (3x3, rows = contact axes in world coords):
+            #   f_world = R^T @ f_contact
+            frame = np.asarray(contact.frame).reshape(3, 3)
+            fz = float(frame[:, 2] @ forcetorque[:3])  # world-z component
+            # Force is what geom1 exerts on geom2; body2 gets +, body1 gets -.
+            body1 = model.geom_bodyid[contact.geom1]
+            body2 = model.geom_bodyid[contact.geom2]
+            if body1 == left_id:
+                left_grf_z -= fz
+            elif body1 == right_id:
+                right_grf_z -= fz
+            if body2 == left_id:
+                left_grf_z += fz
+            elif body2 == right_id:
+                right_grf_z += fz
+        return left_grf_z, right_grf_z
 
     def publish_wireless_controller(self):
         """Publish wireless controller data using unitree_interface."""

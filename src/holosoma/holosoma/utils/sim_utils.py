@@ -81,15 +81,23 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     # Parse known arguments to get argparse params
     args_cli, unknown_args = parser.parse_known_args()
 
-    # Set values from config
-    args_cli.num_envs = config.training.num_envs
+    # Set values from config -- divided by world_size for multi-GPU so each rank's
+    # AppLauncher only allocates resources for its share of environments.
+    # (The full num_envs is divided again in train_agent.train(), but AppLauncher
+    # needs the per-rank count at init time to avoid over-allocating GPU memory.)
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    args_cli.num_envs = config.training.num_envs // world_size if world_size > 1 else config.training.num_envs
     args_cli.seed = config.training.seed
     args_cli.env_spacing = config.simulator.config.scene.env_spacing
     args_cli.output_dir = config.logger.base_dir
     args_cli.headless = config.training.headless
-    if int(os.environ.get("WORLD_SIZE", "1")) > 1:
-        # Distribute simulator across GPUs when using multi-gpu training
+    if world_size > 1:
+        # Distribute simulator across GPUs when using multi-gpu training.
+        # distributed=True also makes AppLauncher limit each Kit instance's CPU
+        # threads; without it the ranks' Kit processes fight over every CPU
+        # thread, which ends in CUDA context failures and NCCL timeouts.
         args_cli.device = f"cuda:{int(os.environ.get('LOCAL_RANK', '0'))}"
+        args_cli.distributed = True
     elif device is not None:
         # Use the resolved device
         args_cli.device = device

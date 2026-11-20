@@ -154,6 +154,13 @@ class MuJoCo(BaseSimulator):
         # Shape: [num_envs, 9] to match IsaacGym command structure
         self.commands: torch.Tensor | None = None  # Will be initialized in create_envs when num_envs is known
 
+        # Set by sim runner / bridge when inference policy is producing RL actions.
+        # The bridge detects this by checking for non-zero kp in incoming commands.
+        self.policy_active: bool = False
+
+        # Toggled by 'P' key in the viewer. Gates EE wrench application.
+        self.apply_ee_wrench: bool = False
+
         logger.info("=== MuJoCo Simulator Initialization Completed ===")
 
     def _build_name_maps(self) -> None:
@@ -463,21 +470,26 @@ class MuJoCo(BaseSimulator):
         self.robot_freejoint_id = mujoco.mj_name2id(self.root_model, mujoco.mjtObj.mjOBJ_JOINT, freejoint_name)
 
         if self.robot_freejoint_id == -1:
-            logger.warning(f"Robot freejoint '{freejoint_name}' not found in model")
+            logger.warning(f"Robot freejoint '{freejoint_name}' not found in model — fixed-base robot assumed")
             self.robot_freejoint_id = 0
             has_freejoint = False
+
+        self.has_freejoint = has_freejoint
+        # Identify the robot root body (first body after world)
+        self.robot_root_body_id = 1
 
         # Validate it's actually a freejoint
         if has_freejoint and self.root_model.jnt_type[self.robot_freejoint_id] != mujoco.mjtJoint.mjJNT_FREE:
             joint_type = self.root_model.jnt_type[self.robot_freejoint_id]
             raise ValueError(f"Joint '{freejoint_name}' is not a freejoint, got type {joint_type}")
 
-        # Get addressing info for freejoint
+        # Get addressing info for freejoint (or fallback joint 0 for fixed-base)
         self.robot_qpos_addr = self.root_model.jnt_qposadr[self.robot_freejoint_id]
         self.robot_qvel_addr = self.root_model.jnt_dofadr[self.robot_freejoint_id]
 
         logger.info(
-            f"Robot freejoint addressing: ID={self.robot_freejoint_id}, "
+            f"Robot joint addressing: has_freejoint={self.has_freejoint}, "
+            f"freejoint_id={self.robot_freejoint_id}, "
             f"qpos_addr={self.robot_qpos_addr}, qvel_addr={self.robot_qvel_addr}"
         )
 
@@ -621,11 +633,17 @@ class MuJoCo(BaseSimulator):
 
         Applies the robot's initial state configuration to the MuJoCo model,
         including root body position, orientation, and velocities.
+        For fixed-base robots (no freejoint), this is a no-op since the
+        root body pose is defined by the XML.
         """
         assert self.root_data
         assert self.robot_config
         assert self.robot_qpos_addr is not None
         assert self.robot_qvel_addr is not None
+
+        if not self.has_freejoint:
+            logger.info("Fixed-base robot — skipping initial root state (pose defined by XML)")
+            return
 
         # Set complete initial robot state (position, orientation, velocities)
         initial_pos = self.robot_config.init_state.pos
@@ -670,20 +688,37 @@ class MuJoCo(BaseSimulator):
         self.object_registry.register_object("robot", ObjectType.ROBOT, 0, robot_poses)
         self.object_registry.finalize_registration()
 
-        # Calculate indices for robot freejoint components
-        pos_indices = slice(self.robot_qpos_addr, self.robot_qpos_addr + 3)
-        quat_indices = slice(self.robot_qpos_addr + 3, self.robot_qpos_addr + 7)
-        vel_indices = slice(self.robot_qvel_addr, self.robot_qvel_addr + 3)
-        ang_vel_indices = slice(self.robot_qvel_addr + 3, self.robot_qvel_addr + 6)
+        if self.has_freejoint:
+            # Calculate indices for robot freejoint components
+            pos_indices = slice(self.robot_qpos_addr, self.robot_qpos_addr + 3)
+            quat_indices = slice(self.robot_qpos_addr + 3, self.robot_qpos_addr + 7)
+            vel_indices = slice(self.robot_qvel_addr, self.robot_qvel_addr + 3)
+            ang_vel_indices = slice(self.robot_qvel_addr + 3, self.robot_qvel_addr + 6)
 
-        # Create robot root states proxy via backend factory
-        root_addrs = {
-            "pos_indices": pos_indices,
-            "quat_indices": quat_indices,
-            "vel_indices": vel_indices,
-            "ang_vel_indices": ang_vel_indices,
-        }
-        self.robot_root_states = self.backend.create_root_view(root_addrs)  # type: ignore[assignment]
+            # Create robot root states proxy via backend factory
+            root_addrs = {
+                "pos_indices": pos_indices,
+                "quat_indices": quat_indices,
+                "vel_indices": vel_indices,
+                "ang_vel_indices": ang_vel_indices,
+            }
+            self.robot_root_states = self.backend.create_root_view(root_addrs)  # type: ignore[assignment]
+        else:
+            # Fixed-base: read root pose from MuJoCo body xpos/xquat
+            from holosoma.simulator.mujoco.tensor_views import FixedBaseRootStateView
+
+            self.robot_root_states = FixedBaseRootStateView(  # type: ignore[assignment]
+                xpos_array=self.root_data.xpos,
+                xquat_array=self.root_data.xquat,
+                body_id=self.robot_root_body_id,
+                num_envs=self.num_envs,
+                device=self.sim_device,
+            )
+            # Dummy slices for downstream code that references these
+            pos_indices = slice(0, 0)
+            quat_indices = slice(0, 0)
+            vel_indices = slice(0, 0)
+            ang_vel_indices = slice(0, 0)
 
         # Create all_root_states as a view of robot_root_states (single robot case)
         self.all_root_states = self.robot_root_states
@@ -714,9 +749,19 @@ class MuJoCo(BaseSimulator):
         # Create unified applied forces accessor for external force application (e.g., virtual gantry)
         self.applied_forces = self.backend.get_applied_forces_view()
 
+        # External force pusher for inference-time disturbances
+        from holosoma.simulator.shared.external_pusher import MuJoCoEEWrenchApplier
+        pusher_cfg = self.simulator_config.external_pusher
+        self.external_pusher = MuJoCoEEWrenchApplier(sim=self, cfg=pusher_cfg)
+
         # Create base_quat, base_angular_vel, base_linear_acc views via backend
-        self.base_quat = self.backend.create_quaternion_view(quat_indices)  # type: ignore[assignment]
-        self.base_angular_vel = self.backend.create_angular_velocity_view(ang_vel_indices)  # type: ignore[assignment]
+        if self.has_freejoint:
+            self.base_quat = self.backend.create_quaternion_view(quat_indices)  # type: ignore[assignment]
+            self.base_angular_vel = self.backend.create_angular_velocity_view(ang_vel_indices)  # type: ignore[assignment]
+        else:
+            # Fixed-base: provide static identity quat and zero angular velocity
+            self.base_quat = torch.tensor([[0.0, 0.0, 0.0, 1.0]], device=self.sim_device)  # type: ignore[assignment]
+            self.base_angular_vel = torch.zeros(self.num_envs, 3, device=self.sim_device)  # type: ignore[assignment]
 
         # Base linear acceleration: backend-specific handling
         base_lin_acc_indices = slice(0, 3)
@@ -894,6 +939,10 @@ class MuJoCo(BaseSimulator):
         if self.virtual_gantry:
             # Apply virtual gantry forces before step
             self.virtual_gantry.step()
+
+        # Apply external force disturbances (no-op when disabled)
+        if self.external_pusher:
+            self.external_pusher.step(self.time(), self.apply_ee_wrench)
 
         # Step bridge for updated torques before step using base class helper
         self._step_bridge()

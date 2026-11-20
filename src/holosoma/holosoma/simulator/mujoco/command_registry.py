@@ -38,7 +38,7 @@ class CommandRegistry:
             glfw.KEY_L: ("height_down", lambda: self._adjust_command(8, -0.1)),
             glfw.KEY_I: ("waist_yaw_up", lambda: self._adjust_command(5, 0.1)),
             glfw.KEY_K: ("waist_yaw_down", lambda: self._adjust_command(5, -0.1)),
-            glfw.KEY_P: ("push_robots", lambda: logger.warning("Push Robots not implemented, ignoring...")),
+            glfw.KEY_P: ("toggle_ee_wrench", lambda: self._toggle_ee_wrench()),
         }
 
         # Gantry commands (using new enum-based system with parameters)
@@ -96,3 +96,14 @@ class CommandRegistry:
     def _zero_commands(self):
         """Zero out movement commands."""
         self.simulator.commands[:, :4] = 0
+
+    def _toggle_ee_wrench(self):
+        """Toggle external EE wrench application on/off."""
+        if hasattr(self.simulator, "apply_ee_wrench"):
+            self.simulator.apply_ee_wrench = not self.simulator.apply_ee_wrench
+            status = "ON" if self.simulator.apply_ee_wrench else "OFF"
+            logger.info(f"EE wrench application: {status}")
+            if not self.simulator.apply_ee_wrench and hasattr(self.simulator, "external_pusher"):
+                self.simulator.external_pusher.reset()
+        else:
+            logger.warning("EE wrench not available on this simulator")

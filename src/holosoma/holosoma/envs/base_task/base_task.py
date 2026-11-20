@@ -141,6 +141,13 @@ class BaseTask:
         # Initialize remaining managers
         self.observation_manager = ObservationManager(observation_config, self, self.device)
         self.action_manager = ActionManager(action_config, self, self.device)
+        if self.action_manager.total_action_dim != self.dim_actions:
+            raise ValueError(
+                "Configured robot action dimension does not match action manager output size: "
+                f"robot_config.actions_dim={self.dim_actions}, "
+                f"action_manager.total_action_dim={self.action_manager.total_action_dim}"
+            )
+        self.dim_actions = self.action_manager.total_action_dim
         self.reward_manager = RewardManager(reward_config, self, self.device)
         self.termination_manager = TerminationManager(termination_config, self, self.device)
         # For IsaacSim, initialize randomization_manager now
@@ -221,7 +228,15 @@ class BaseTask:
         self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
         self.simulator.set_dof_state_tensor_robots(env_ids, self.simulator.dof_state)
 
-        actions = torch.zeros(self.num_envs, self.dim_actions, device=self.device, requires_grad=False)
+        # Refresh sim tensors so that derived quantities (Jacobians, rigid body
+        # poses, etc.) are consistent with the newly written state *before* the
+        # first step.  Without this, controllers that read Jacobians during
+        # process_actions see stale pre-reset values and produce large actions.
+        self.simulator.refresh_sim_tensors()
+
+        actions = torch.zeros(
+            self.num_envs, self.action_manager.total_action_dim, device=self.device, requires_grad=False
+        )
         actor_state = {}
         actor_state["actions"] = actions
         obs_dict, _, _, _ = self.step(actor_state)
@@ -307,11 +322,6 @@ class BaseTask:
             self.simulator.num_bodies,
             self.simulator.dof_names,
             self.simulator.body_names,
-        )
-
-        # check dimensions
-        assert self.num_dof == self.dim_actions, (
-            f"Number of DOFs ({self.num_dof}) must be equal to number of actions ({self.dim_actions})"
         )
 
         # other properties
@@ -403,14 +413,16 @@ class BaseTask:
     def step(self, actor_state):
         """Apply actions, advance the simulation, and return rollout buffers."""
         actions = actor_state["actions"]
-        self._pre_physics_step(actions)
+        # Store action mean if provided (for mean-action penalty terms)
+        action_mean = actor_state.get("action_mean", None)
+        self._pre_physics_step(actions, action_mean=action_mean)
         self._physics_step()
         self._post_physics_step()
         return self.obs_buf_dict, self.rew_buf, self.reset_buf, self.extras
 
-    def _pre_physics_step(self, actions):
+    def _pre_physics_step(self, actions, action_mean=None):
         if self.action_manager is not None:
-            self.action_manager.process_actions(actions)
+            self.action_manager.process_actions(actions, action_mean=action_mean)
 
     def _physics_step(self):
         self.render()

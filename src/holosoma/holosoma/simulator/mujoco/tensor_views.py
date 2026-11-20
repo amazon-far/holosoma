@@ -331,6 +331,60 @@ class MujocoRootStateView:
         return self[:].clone()
 
 
+class FixedBaseRootStateView:
+    """Root state view for fixed-base robots (no freejoint).
+
+    Reads position and orientation from MuJoCo's ``data.xpos`` / ``data.xquat``
+    for the welded root body.  Linear and angular velocities are always zero
+    because the base cannot move.
+
+    The 13-element layout matches :class:`MujocoRootStateView`::
+
+        [pos(3), quat_xyzw(4), lin_vel(3), ang_vel(3)]
+    """
+
+    _is_tensor_proxy: bool = True
+
+    def __init__(
+        self,
+        xpos_array: np.ndarray,
+        xquat_array: np.ndarray,
+        body_id: int,
+        num_envs: int,
+        device: str = "cpu",
+    ):
+        self.xpos_array = xpos_array    # data.xpos  (nbody, 3)
+        self.xquat_array = xquat_array  # data.xquat (nbody, 4) — MuJoCo [w,x,y,z]
+        self.body_id = body_id
+        self.num_envs = num_envs
+        self.device = device
+
+    @property
+    def shape(self) -> Tuple[int, ...]:
+        return (self.num_envs, 13)
+
+    def __getitem__(self, key) -> torch.Tensor:
+        pos = self.xpos_array[self.body_id].reshape(1, 3)
+        quat_mj = self.xquat_array[self.body_id].reshape(1, 4)
+        quat_holosoma = quat_mujoco_to_holosoma(quat_mj)
+        zeros = np.zeros((1, 3))
+        root_state = np.column_stack([pos, quat_holosoma, zeros, zeros])
+        tensor_data = torch.from_numpy(root_state).to(self.device, dtype=torch.float32)
+        return tensor_data[key]
+
+    def __setitem__(self, key, value):
+        pass  # fixed base — writes are no-ops
+
+    def __len__(self) -> int:
+        return self.num_envs
+
+    def dim(self) -> int:
+        return 2
+
+    def clone(self) -> torch.Tensor:
+        return self[:].clone()
+
+
 class MujocoDofStateView:
     """
     Specialized view for DOF states compatible with IsaacGym's flattened format.

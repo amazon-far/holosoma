@@ -189,6 +189,24 @@ class PPOConfig:
     min_critic_learning_rate: float | None = None
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @dataclass(frozen=True)
 class FastSACConfig:
     num_learning_iterations: int = 25000
@@ -227,6 +245,25 @@ class FastSACConfig:
     num_updates: int = 8
     """the number of updates to perform per step"""
 
+    sample_chunk_updates: int = 0
+    """Draw replay samples for this many updates at a time, instead of all
+    ``num_updates`` at once. 0 (the default) keeps the original behaviour: one
+    draw of ``num_updates`` batches, normalized and mirrored as a single block.
+
+    A memory setting. With wide history observations that block is several
+    GB per copy and is what runs the card out at large batch sizes; chunking
+    it caps the peak at about ``sample_chunk_updates / num_updates`` of that.
+    Samples are i.i.d. with replacement either way. Not bit-identical when
+    on: the observation normalizer's running statistics are then updated per
+    chunk, so later chunks are normalized with marginally fresher statistics.
+
+    With use_symmetry the stacked path ignores it and draws one update at a
+    time: a draw is mirrored as one block, [originals | mirrors], and then
+    split, so a multi-update draw gave each update originals only or mirrors
+    only (until 2026-10-21; with chunks of 2 every actor update got mirrors
+    only). The recursive actor's frame batches pair originals with their
+    mirrors inside every update whatever the chunk."""
+
     target_entropy_ratio: float = 0.0
     """the ratio of the target entropy to the number of actions"""
 
@@ -247,6 +284,22 @@ class FastSACConfig:
 
     use_symmetry: bool = False
     """whether to use symmetry"""
+
+    use_symmetry_loss: bool = False
+    """Primary on/off flag for the FastSAC symmetry regularization loss.
+
+    When False (default, and the resolved state of every existing config), the
+    symmetry-loss code path is completely inert: no extra forward passes, no mirror
+    computations, and no added loss terms. This flag is INDEPENDENT of `use_symmetry`
+    (which only controls replay-batch data-doubling); the symmetry loss is gated
+    exclusively on this flag."""
+
+    symmetry_actor_coef: float = 1.0
+    """Weight applied to the actor equivariance loss when use_symmetry_loss is True."""
+
+    symmetry_critic_coef: float = 0.0
+    """Weight applied to the critic invariance loss when use_symmetry_loss is True.
+    The critic term is still computed and logged when this is 0.0, for calibration."""
 
     alpha_init: float = 0.001
     """the initial value of the alpha"""
@@ -301,6 +354,14 @@ class FastSACConfig:
 
     use_cnn_encoder: bool = False
     """whether to use CNN for the encoder"""
+
+    fixed_scale_actor_obs_terms: tuple[str, ...] = ()
+    """Actor observation terms exempt from running normalization (held at
+    mean 0, std 1, so they pass through on their own fixed scale). Every
+    history frame of a stacked term is exempt."""
+
+    fixed_scale_critic_obs_terms: tuple[str, ...] = ()
+    """Critic observation terms exempt from running normalization."""
 
     actor_obs_keys: List[str] = field(default_factory=lambda: ["actor_obs"])
     critic_obs_keys: List[str] = field(default_factory=lambda: ["critic_obs"])

@@ -449,7 +449,7 @@ class VideoRecorderInterface(ABC):
             )
 
         except Exception as e:
-            raise RuntimeError(f"Video encoding failed: {e}") from e
+            logger.warning(f"Video encoding failed (non-fatal): {e}")
         finally:
             # Clear frame buffer
             self._clear_frame_buffer()

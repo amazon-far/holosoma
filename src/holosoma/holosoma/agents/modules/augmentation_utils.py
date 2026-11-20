@@ -108,7 +108,11 @@ class SymmetryUtils:
 
         for group_name, group_cfg in obs_manager.cfg.groups.items():
             # Compute dimension for each term in this group
-            term_keys = sorted(group_cfg.terms.keys())
+            # Only include enabled terms (disabled terms are excluded from the
+            # observation vector by the ObservationManager)
+            term_keys = sorted(
+                name for name, cfg in group_cfg.terms.items() if cfg.enabled
+            )
             self.sub_observation_keys[group_name] = term_keys
             self.sub_observation_indices[group_name] = {}
             self.sub_observation_indices_single_frame[group_name] = {}
@@ -188,6 +192,7 @@ class SymmetryUtils:
             dtype=torch.float,
         )
 
+
     def augment_observations(self, obs: torch.Tensor, env: Any, obs_list: Sequence[str]) -> torch.Tensor:
         """Applies x-z plane symmetry transformation for observation data augmentation.
 
@@ -260,17 +265,34 @@ class SymmetryUtils:
 
         for obs_key in obs_list:
             cur_obs_length = self.observation_dims[obs_key]
-            mirrored_obs = mirrored_obs_all[..., idx : idx + cur_obs_length]
-            # Reshape to [batch, history_length, single_frame_obs_dim]
-            mirrored_obs = mirrored_obs.reshape(
-                B, self.history_lengths[obs_key], self.observation_dims_single_frame[obs_key]
-            )
-            # Apply mirroring to each sub-observation component using single-frame indices
+            history_length = self.history_lengths[obs_key]
+
+            # LAYOUT: the ObservationManager stacks history PER TERM, so a group
+            # is term-major -- term A's H frames, then term B's H frames -- not
+            # step-major. Each term is therefore mirrored on its own block,
+            # viewed as [B, H, term_dim]; the mirror functions all act on the
+            # last dimension, so every frame is mirrored in one call.
+            #
+            # At H == 1 (every config here) term-major and step-major coincide.
+            offset = idx
             for sub_obs_key in self.sub_observation_keys[obs_key]:
-                mirrored_obs[..., self.sub_observation_indices_single_frame[obs_key][sub_obs_key]] = getattr(
-                    self, f"mirror_obs_{sub_obs_key}"
-                )(mirrored_obs[..., self.sub_observation_indices_single_frame[obs_key][sub_obs_key]])
-            mirrored_obs_all[..., idx : idx + cur_obs_length] = mirrored_obs.reshape(B, cur_obs_length)
+                term_dim = self.sub_observation_dims[sub_obs_key]
+                span = term_dim * history_length
+                frames = mirrored_obs_all[..., offset : offset + span].reshape(
+                    B, history_length, term_dim
+                )
+                mirrored = getattr(self, f"mirror_obs_{sub_obs_key}")(frames)
+                mirrored_obs_all[..., offset : offset + span] = mirrored.reshape(
+                    B, span
+                )
+                offset += span
+
+            if offset != idx + cur_obs_length:
+                raise RuntimeError(
+                    f"mirror_xz_plane: group '{obs_key}' terms span "
+                    f"{offset - idx} dims but the group is {cur_obs_length}. "
+                    "The term list and the observation layout disagree."
+                )
             idx += cur_obs_length
 
         return mirrored_obs_all
@@ -441,36 +463,55 @@ class SymmetryUtils:
         return command_base_height
 
     def mirror_obs_sin_phase(self, sin_phase: torch.Tensor) -> torch.Tensor:
-        """Mirrors the sine phase for gait timing.
+        """Mirrors the sine phase for gait timing by swapping left/right channels.
 
         Parameters
         ----------
         sin_phase : torch.Tensor
-            Sine of gait phase with layout [sin(φ_left), sin(φ_right), ...].
+            Sine of gait phase with layout [sin(φ_left), sin(φ_right)].
 
         Returns
         -------
         torch.Tensor
-            Mirrored phase with first component negated: [-sin(φ_left), sin(φ_right), ...].
+            Mirrored phase with left/right swapped: [sin(φ_right), sin(φ_left)].
         """
-        sin_phase[..., 0] = -sin_phase[..., 0]
-        return sin_phase
+        return sin_phase[..., [1, 0]]
 
     def mirror_obs_cos_phase(self, cos_phase: torch.Tensor) -> torch.Tensor:
-        """Mirrors the cosine phase for gait timing.
+        """Mirrors the cosine phase for gait timing by swapping left/right channels.
 
         Parameters
         ----------
         cos_phase : torch.Tensor
-            Cosine of gait phase with layout [cos(φ_left), cos(φ_right), ...].
+            Cosine of gait phase with layout [cos(φ_left), cos(φ_right)].
 
         Returns
         -------
         torch.Tensor
-            Mirrored phase with first component negated: [-cos(φ_left), cos(φ_right), ...].
+            Mirrored phase with left/right swapped: [cos(φ_right), cos(φ_left)].
         """
-        cos_phase[..., 0] = -cos_phase[..., 0]
-        return cos_phase
+        return cos_phase[..., [1, 0]]
+
+    def mirror_obs_torso_projected_gravity(self, torso_projected_gravity: torch.Tensor) -> torch.Tensor:
+        """Torso gravity direction; same reflection as the pelvis one (negate y)."""
+        return self.mirror_obs_projected_gravity(torso_projected_gravity)
+
+    def mirror_obs_pelvis_gravity_command(self, pelvis_gravity_command: torch.Tensor) -> torch.Tensor:
+        """Commanded pelvis gravity direction: a direction, so negate y."""
+        return self.mirror_obs_projected_gravity(pelvis_gravity_command)
+
+    def mirror_obs_torso_gravity_command(self, torso_gravity_command: torch.Tensor) -> torch.Tensor:
+        """Commanded torso gravity direction: a direction, so negate y."""
+        return self.mirror_obs_projected_gravity(torso_gravity_command)
+
+    def mirror_obs_pelvis_gravity_error(self, pelvis_gravity_error: torch.Tensor) -> torch.Tensor:
+        """Difference of two mirrored directions, so it mirrors the same way."""
+        return self.mirror_obs_projected_gravity(pelvis_gravity_error)
+
+    def mirror_obs_torso_gravity_error(self, torso_gravity_error: torch.Tensor) -> torch.Tensor:
+        """Difference of two mirrored directions, so it mirrors the same way."""
+        return self.mirror_obs_projected_gravity(torso_gravity_error)
+
 
     def mirror_obs_dof_pos(self, dof_pos: torch.Tensor) -> torch.Tensor:
         """Mirrors the joint positions using joint mapping and sign flipping.
@@ -524,6 +565,58 @@ class SymmetryUtils:
         """
         return actions[..., self.joint_index_map] * self.sign_flip_mask
 
+    def mirror_obs_dof_pos_relative(self, dof_pos_relative: torch.Tensor) -> torch.Tensor:
+        """Same shape and ordering as dof_pos; mirroring is identical."""
+        return self.mirror_obs_dof_pos(dof_pos_relative)
+
+    def mirror_obs_prev_prev_action(self, prev_prev_action: torch.Tensor) -> torch.Tensor:
+        """Two-step-old action; same layout as actions, mirroring is identical."""
+        return self.mirror_obs_actions(prev_prev_action)
+
+    def mirror_obs_base_height_command(self, base_height_command: torch.Tensor) -> torch.Tensor:
+        """Scalar target z (shape [..., 1]). Invariant under M = diag(1,-1,1)."""
+        return base_height_command
+
+    def mirror_obs_base_height_error(self, base_height_error: torch.Tensor) -> torch.Tensor:
+        """Scalar z error (shape [..., 1]). Invariant under M = diag(1,-1,1)."""
+        return base_height_error
+
+    def mirror_obs_last_action(self, last_action: torch.Tensor) -> torch.Tensor:
+        """Same shape and ordering as actions; mirroring is identical."""
+        return self.mirror_obs_actions(last_action)
+
+    def mirror_obs_last_raw_action(self, last_raw_action: torch.Tensor) -> torch.Tensor:
+        """Raw policy action a_{T-1}; same layout as actions, mirroring is identical."""
+        return self.mirror_obs_actions(last_raw_action)
+
+    def mirror_obs_prev_raw_action(self, prev_raw_action: torch.Tensor) -> torch.Tensor:
+        """Raw policy action a_{T-2}; same layout as actions, mirroring is identical."""
+        return self.mirror_obs_actions(prev_raw_action)
+
+
+    def mirror_obs_controller_arm_joint_command(
+        self, controller_arm_joint_command: torch.Tensor
+    ) -> torch.Tensor:
+        """Mirrors GAC's arm joint command (shape [..., 14], arm_dof_names order).
+
+        Layout: [L_shoulder_p, L_shoulder_r, L_shoulder_y, L_elbow,
+                 L_wrist_r, L_wrist_p, L_wrist_y,
+                 R_shoulder_p, R_shoulder_r, R_shoulder_y, R_elbow,
+                 R_wrist_r, R_wrist_p, R_wrist_y]
+
+        Per-arm sign flip mask follows flip_sign_joint_names: roll/yaw axes flip,
+        pitch/elbow axes do not -> [+, -, -, +, -, +, -]. Then swap L<->R 7-blocks.
+        """
+        sign_7 = torch.tensor(
+            [1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0],
+            device=controller_arm_joint_command.device,
+            dtype=controller_arm_joint_command.dtype,
+        )
+        left = controller_arm_joint_command[..., :7].clone() * sign_7
+        right = controller_arm_joint_command[..., 7:].clone() * sign_7
+        return torch.cat([right, left], dim=-1)
+
+
     def mirror_obs_ee_apply_force(self, ee_apply_force: torch.Tensor) -> torch.Tensor:
         """Mirrors the end-effector applied forces in base frame.
 
@@ -545,3 +638,183 @@ class SymmetryUtils:
         right_ee_apply_force = ee_apply_force[..., 3:].clone()
         right_ee_apply_force[..., 1] = -right_ee_apply_force[..., 1]
         return torch.cat([right_ee_apply_force, left_ee_apply_force], dim=-1)
+
+    def mirror_obs_arm_command(self, arm_command: torch.Tensor) -> torch.Tensor:
+        """Mirrors the arm command (per-hand position + rot6d) under the sagittal plane.
+
+        Each hand contributes a 9-block ``[pos(3), rot6d(6)]`` where ``rot6d`` stores
+        the first two columns of the rotation matrix R as
+        ``[c0_x, c0_y, c0_z, c1_x, c1_y, c1_z]``. Under the reflection
+        ``M = diag(1, -1, 1)``, R transforms as ``R' = M R M``, which yields:
+
+          - ``col0 = R[:, 0]`` -> ``M @ col0`` (negate y)
+          - ``col1 = R[:, 1]`` -> ``-M @ col1`` (negate x and z)
+
+        Position is a vector and transforms as ``M @ pos`` (negate y). The mirrored
+        left arm sees what the right arm saw, and vice versa, so the L/R 9-blocks
+        are also swapped.
+
+        Parameters
+        ----------
+        arm_command : torch.Tensor
+            Arm command with shape ``[..., 18]`` and layout
+            ``[left_pos(3), left_rot6d(6), right_pos(3), right_rot6d(6)]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Mirrored arm command (new tensor, input is not mutated). The L/R
+            9-blocks are swapped and each block has the per-hand sign mask
+            ``[+, -, +,  +, -, +,  -, +, -]`` applied.
+        """
+        sign_9 = torch.tensor(
+            [1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0],
+            device=arm_command.device,
+            dtype=arm_command.dtype,
+        )
+        left_block = arm_command[..., :9].clone() * sign_9
+        right_block = arm_command[..., 9:].clone() * sign_9
+        return torch.cat([right_block, left_block], dim=-1)
+
+    def mirror_obs_ee_error_pose(self, ee_error_pose: torch.Tensor) -> torch.Tensor:
+        """Mirrors the per-hand end-effector pose error (position + rot6d).
+
+        Mathematically identical to :meth:`mirror_obs_arm_command`. The rotation
+        error is ``R_err = R_target^T @ R_curr``; under conjugation by
+        ``M = diag(1, -1, 1)``, both ``R_target`` and ``R_curr`` map to ``M(.)M``,
+        so ``R_err' = M @ R_err @ M``. The position error
+        ``R_target^T (p_curr - p_target)`` transforms identically by the same
+        conjugation argument, so the per-hand 9-block sign mask is the same:
+        ``[+, -, +,  +, -, +,  -, +, -]``. L/R 9-blocks are swapped.
+
+        Parameters
+        ----------
+        ee_error_pose : torch.Tensor
+            EE pose error with shape ``[..., 18]`` and layout
+            ``[left_pos(3), left_rot6d(6), right_pos(3), right_rot6d(6)]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Mirrored pose error (new tensor, input is not mutated).
+        """
+        sign_9 = torch.tensor(
+            [1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0],
+            device=ee_error_pose.device,
+            dtype=ee_error_pose.dtype,
+        )
+        left_block = ee_error_pose[..., :9].clone() * sign_9
+        right_block = ee_error_pose[..., 9:].clone() * sign_9
+        return torch.cat([right_block, left_block], dim=-1)
+
+    def mirror_obs_ee_error_pose_tanh(self, ee_error_pose_tanh: torch.Tensor) -> torch.Tensor:
+        """Mirrors the per-hand tanh-squashed EE position error.
+
+        The squashed error is a 3-vector per hand and transforms as a vector
+        under ``M = diag(1, -1, 1)``: only the y-component is negated. L/R
+        3-blocks are swapped.
+
+        Parameters
+        ----------
+        ee_error_pose_tanh : torch.Tensor
+            Tanh-squashed EE pos error with shape ``[..., 6]`` and layout
+            ``[left_xyz(3), right_xyz(3)]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Mirrored tanh-squashed pos error (new tensor, input is not mutated).
+            Per-hand 3-block sign mask: ``[+, -, +]``; L/R 3-blocks swapped.
+        """
+        sign_3 = torch.tensor(
+            [1.0, -1.0, 1.0],
+            device=ee_error_pose_tanh.device,
+            dtype=ee_error_pose_tanh.dtype,
+        )
+        left_block = ee_error_pose_tanh[..., :3].clone() * sign_3
+        right_block = ee_error_pose_tanh[..., 3:].clone() * sign_3
+        return torch.cat([right_block, left_block], dim=-1)
+
+    def mirror_obs_ee_body_twist(self, ee_body_twist: torch.Tensor) -> torch.Tensor:
+        """Mirrors the per-hand body twist (linear + angular velocity).
+
+        Under ``M = diag(1, -1, 1)``:
+
+          - linear velocity is a vector: ``v -> M @ v`` (negate y)
+          - angular velocity is a pseudovector:
+            ``omega -> det(M) * (M @ omega) = -(M @ omega)`` (negate x and z)
+
+        L/R 6-blocks are swapped.
+
+        Parameters
+        ----------
+        ee_body_twist : torch.Tensor
+            EE body twist with shape ``[..., 12]`` and layout
+            ``[left_lin(3), left_ang(3), right_lin(3), right_ang(3)]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Mirrored body twist (new tensor, input is not mutated). Per-hand
+            6-block sign mask: ``[+, -, +,  -, +, -]``; L/R 6-blocks swapped.
+        """
+        sign_6 = torch.tensor(
+            [1.0, -1.0, 1.0, -1.0, 1.0, -1.0],
+            device=ee_body_twist.device,
+            dtype=ee_body_twist.dtype,
+        )
+        left_block = ee_body_twist[..., :6].clone() * sign_6
+        right_block = ee_body_twist[..., 6:].clone() * sign_6
+        return torch.cat([right_block, left_block], dim=-1)
+
+    def mirror_obs_ee_body_twist_full(self, ee_body_twist_full: torch.Tensor) -> torch.Tensor:
+        """Mirrors the critic-only full per-hand body twist.
+
+        Identical in shape, layout, and operation to
+        :meth:`mirror_obs_ee_body_twist`; this variant exists for the critic
+        observation namespace. Implementation simply delegates.
+
+        Parameters
+        ----------
+        ee_body_twist_full : torch.Tensor
+            EE body twist with shape ``[..., 12]`` and layout
+            ``[left_lin(3), left_ang(3), right_lin(3), right_ang(3)]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Mirrored body twist (new tensor, input is not mutated).
+        """
+        return self.mirror_obs_ee_body_twist(ee_body_twist_full)
+
+
+    def mirror_obs_gait_avg_velocity_state(
+        self, gait_avg_state: torch.Tensor
+    ) -> torch.Tensor:
+        """Mirror gait-averaged velocity accumulator state under sagittal-plane reflection.
+
+        Layout: ``[wz_running_mean, v_perp_running_mean, wz_cycle_mean,
+                   v_perp_cycle_mean, sample_count_norm]`` — shape ``[..., 5]``.
+
+        Under x-z plane (sagittal) reflection:
+        - wz (yaw rate) flips sign (rotation about z reverses).
+        - v_perp (signed lateral velocity) flips sign (y-direction reverses).
+        - sample_count_norm is a scalar counter — invariant.
+
+        Parameters
+        ----------
+        gait_avg_state : torch.Tensor
+            Gait-averaged velocity accumulator observation with shape ``[..., 5]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Mirrored accumulator state with wz and v_perp components negated.
+        """
+        mirrored = gait_avg_state.clone()
+        mirrored[..., 0] = -mirrored[..., 0]  # wz_running_mean
+        mirrored[..., 1] = -mirrored[..., 1]  # v_perp_running_mean
+        mirrored[..., 2] = -mirrored[..., 2]  # wz_cycle_mean
+        mirrored[..., 3] = -mirrored[..., 3]  # v_perp_cycle_mean
+        # mirrored[..., 4] unchanged (sample_count_norm)
+        return mirrored

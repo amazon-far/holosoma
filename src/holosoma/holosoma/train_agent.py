@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+import signal
 import sys
 import traceback
 from contextlib import contextmanager
@@ -23,6 +24,7 @@ from holosoma.utils.eval_utils import (
 from holosoma.utils.helpers import get_class
 from holosoma.utils.sim_utils import close_simulation_app
 from holosoma.utils.tyro_utils import TYRO_CONIFG
+from holosoma.ablation import apply_ablation_flags, build_ablation_suffix, extract_ablation_flags
 
 
 class TrainingContext:
@@ -59,6 +61,21 @@ class MultGPUConfig(TypedDict):
     world_size: int
 
 
+def _finalize_active_video_recording(env: Any) -> None:
+    """Flush any in-progress video before wandb teardown."""
+    simulator = getattr(env, "simulator", None)
+    video_recorder = getattr(simulator, "video_recorder", None)
+
+    if video_recorder is None or not getattr(video_recorder, "is_recording", False):
+        return
+
+    try:
+        logger.info("Finalizing active video recording before wandb teardown...")
+        video_recorder.stop_recording()
+    except Exception as exc:
+        logger.warning(f"Failed to finalize active video recording during shutdown: {exc}")
+
+
 def configure_multi_gpu() -> MultGPUConfig | None:
     """Configure multi-gpu training and return configuration dictionary, or `None` if single-GPU training."""
     import torch
@@ -78,7 +95,18 @@ def configure_multi_gpu() -> MultGPUConfig | None:
     if gpu_global_rank >= gpu_world_size:
         raise ValueError(f"Global rank '{gpu_global_rank}' is greater than or equal to world size '{gpu_world_size}'.")
 
-    torch.distributed.init_process_group(backend="nccl", rank=gpu_global_rank, world_size=gpu_world_size)
+    # Backend and timeout are configurable; the long default timeout keeps a
+    # slow IsaacSim start-up on one rank from timing out the others.
+    dist_backend = os.getenv("TORCH_DIST_BACKEND", "nccl")
+    dist_timeout_s = int(os.getenv("TORCH_DIST_INIT_TIMEOUT_S", "7200"))
+    from datetime import timedelta
+
+    torch.distributed.init_process_group(
+        backend=dist_backend,
+        rank=gpu_global_rank,
+        world_size=gpu_world_size,
+        timeout=timedelta(seconds=dist_timeout_s),
+    )
     torch.cuda.set_device(gpu_local_rank)
 
     multi_gpu_config: MultGPUConfig = {
@@ -135,7 +163,8 @@ def configure_logging(distributed_conf: MultGPUConfig | None = None, log_dir: Pa
     logging.getLogger().addHandler(LoguruLoggingBridge())
 
 
-def train(tyro_config: ExperimentConfig, training_context: TrainingContext | None = None) -> None:
+def train(tyro_config: ExperimentConfig, training_context: TrainingContext | None = None,
+          early_stop_cfg: Any | None = None, sigma_schedule_cfg: Any | None = None) -> None:
     """Train an agent with optional context for sim app management.
 
     Parameters
@@ -143,6 +172,10 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
     training_context : Optional[TrainingContext]
         Optional training context with pre-initialized sim app.
         If None, creates and manages sim app automatically.
+    early_stop_cfg : Optional[EarlyStopCfg]
+        If provided, attaches an early stop checker to the agent.
+    sigma_schedule_cfg : Optional[SigmaSchedulerCfg]
+        If provided, attaches a sigma scheduler to the agent.
     """
 
     if training_context is not None:
@@ -170,7 +203,7 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
         distributed_conf: MultGPUConfig | None = configure_multi_gpu()
         device: str = get_device(tyro_config, distributed_conf)
         is_distributed = distributed_conf is not None
-        is_main_process = distributed_conf is None or distributed_conf["local_rank"] == 0
+        is_main_process = distributed_conf is None or distributed_conf["global_rank"] == 0
 
         # Configure logger
         logger_cfg = tyro_config.logger
@@ -230,7 +263,7 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
             if wandb_cfg.resume is not None:
                 wandb_kwargs["resume"] = wandb_cfg.resume
 
-            wandb.init(**wandb_kwargs)
+            wandb.init(**wandb_kwargs, settings=wandb.Settings(init_timeout=300))
             if wandb.run is not None:
                 wandb_run_path = f"{wandb.run.entity}/{wandb.run.project}/{wandb.run.id}"
 
@@ -287,11 +320,34 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
             )
             algo.load(loaded_checkpoint)
 
+        # Attach early stop checker if configured
+        if early_stop_cfg is not None:
+            from holosoma.agents.early_stop import EarlyStopChecker
+            algo._early_stop_checker = EarlyStopChecker(early_stop_cfg, log_dir=experiment_save_dir)
+            logger.info(
+                f"[EarlyStop] Attached: metric={early_stop_cfg.metric}, "
+                f"threshold={early_stop_cfg.threshold}, patience={early_stop_cfg.patience}"
+            )
+
+        # Attach sigma scheduler if configured
+        if sigma_schedule_cfg is not None:
+            from holosoma.agents.sigma_scheduler import SigmaScheduler
+            # If phase_start_step is 0 and we loaded a checkpoint, use the checkpoint's global_step
+            if sigma_schedule_cfg.phase_start_step == 0 and hasattr(algo, "global_step"):
+                sigma_schedule_cfg = dataclasses.replace(sigma_schedule_cfg, phase_start_step=algo.global_step)
+            algo._sigma_scheduler = SigmaScheduler(sigma_schedule_cfg, env)
+            logger.info(
+                f"[SigmaScheduler] Attached: {len(sigma_schedule_cfg.entries)} entries, "
+                f"phase_start={sigma_schedule_cfg.phase_start_step}, "
+                f"total_iters={sigma_schedule_cfg.phase_total_iterations}"
+            )
+
         # handle saving config
         algo.learn()
 
-        # teardown wandb before SimApp closes ungracefully (IsaacLab)
+        # Flush any pending upload before wandb teardown to avoid a shutdown race with the recorder.
         if is_main_process and wandb_enabled:
+            _finalize_active_video_recording(env)
             logger.info("Shutting down wandb...")
             wandb.teardown()
 
@@ -311,9 +367,33 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
 
 
 def main() -> None:
+    ablation_flags, remaining_argv = extract_ablation_flags(sys.argv[1:])
+    sys.argv = [sys.argv[0]] + remaining_argv
+
     tyro_cfg = tyro.cli(AnnotatedExperimentConfig, config=TYRO_CONIFG)
+
+    if ablation_flags.has_any():
+        tyro_cfg = apply_ablation_flags(tyro_cfg, ablation_flags)
+        suffix = build_ablation_suffix(ablation_flags)
+        tyro_cfg = dataclasses.replace(
+            tyro_cfg,
+            training=dataclasses.replace(
+                tyro_cfg.training,
+                name=tyro_cfg.training.name + suffix,
+            ),
+        )
+
     print(tyro_cfg.curriculum)
     train(tyro_cfg)
+
+    # Force-kill this process to release GPU resources.
+    # IsaacSim spawns background threads that survive close_simulation_app()
+    # and keep the process alive as a ghost consuming GPU memory.
+    # NOTE: We use os.kill (single process) instead of os.killpg (process group)
+    # to avoid killing parent processes when train_agent is invoked as a
+    # subprocess (e.g. from hyperparam_search.py or a notebook).
+    logger.info("Force-killing process to release GPU resources...")
+    os.kill(os.getpid(), signal.SIGKILL)
 
 
 if __name__ == "__main__":

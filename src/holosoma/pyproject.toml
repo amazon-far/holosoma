@@ -55,6 +55,10 @@ dependencies = [
 # Mark optional-dependencies as dynamic since it needs runtime computation
 dynamic = ["optional-dependencies"]
 
+[project.entry-points."holosoma.bridge"]
+unitree = "holosoma.bridge.unitree:UnitreeSdk2Bridge"
+booster = "holosoma.bridge.booster:BoosterSdk2Bridge"
+
 [tool.setuptools.packages.find]
 where = ["."]
 

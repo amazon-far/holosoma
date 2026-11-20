@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -98,6 +99,9 @@ class Actor(nn.Module):
 
     def get_actions_and_log_probs(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         _, mean, log_std = self(obs)
+        return self._sample_with_log_prob(mean, log_std)
+
+    def _sample_with_log_prob(self, mean: torch.Tensor, log_std: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         std = log_std.exp()
         dist = torch.distributions.Normal(mean, std)
         raw_action = dist.rsample()
@@ -127,11 +131,15 @@ class Actor(nn.Module):
         self, obs: torch.Tensor, dones: torch.Tensor | None = None, deterministic: bool = False
     ) -> torch.Tensor:
         _, mean, log_std = self(obs)
+
+        # Cache the deterministic action mean for downstream consumers
+        if self.use_tanh:
+            self._cached_action_mean = torch.tanh(mean) * self.action_scale + self.action_bias
+        else:
+            self._cached_action_mean = mean
+
         if deterministic:
-            if self.use_tanh:
-                tanh_mean = torch.tanh(mean)
-                return tanh_mean * self.action_scale + self.action_bias
-            return mean
+            return self._cached_action_mean.clone()
 
         std = log_std.exp()
         dist = torch.distributions.Normal(mean, std)

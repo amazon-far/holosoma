@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import model_validator
 from pydantic.dataclasses import dataclass
@@ -387,14 +387,83 @@ class SceneConfig:
     asset_root: str | None = None
     """Optional root directory for relative asset paths."""
 
-    scene_files: list[SceneFileConfig] | None = None  # Renamed from sources
+    scene_files: list[SceneFileConfig] | None = field(default=None)
     """List of scene files (USD/URDF) to load."""
 
-    rigid_objects: list[RigidObjectConfig] | None = None
+    rigid_objects: list[RigidObjectConfig] | None = field(default=None)
     """Standalone rigid objects to instantiate."""
 
     env_spacing: float = 20.0
     """Distance between parallel environments in the grid layout."""
+
+
+@dataclass(frozen=True)
+class HardcodedPushEvent:
+    """One scheduled push event for hardcoded mode."""
+
+    sim_time_s: float
+    """Absolute simulation time (seconds) at which to open the push window."""
+
+    body_name: str
+    """Name of the target body (must be in allowed_bodies)."""
+
+    force_vec: tuple[float, float, float]
+    """World-frame force vector in newtons [fx, fy, fz]."""
+
+    duration_s: float
+    """Duration of the push window in seconds."""
+
+
+@dataclass(frozen=True)
+class ExternalPusherCfg:
+    """Configuration for the MuJoCo EE wrench applier.
+
+    Field names aligned with EEWrenchRandomizerState where applicable:
+    - force_range aligns with EEWrenchRandomizerState.force_range
+    - interval_range_s aligns with EEWrenchRandomizerState.interval_range_s
+    """
+
+    enabled: bool = False
+    """Master enable switch. When false, no push windows open."""
+
+    mode: Literal["hardcoded", "randomized", "disabled"] = "disabled"
+    """Operating mode selection."""
+
+    allowed_bodies: list[str] = field(
+        default_factory=lambda: [
+            "left_wrist_yaw_link",
+            "right_wrist_yaw_link",
+        ]
+    )
+    """EE body names eligible to receive wrenches."""
+
+    schedule: list[HardcodedPushEvent] = field(default_factory=list)
+    """Ordered list of push events for hardcoded mode."""
+
+    interval_range_s: tuple[float, float] = (0.5, 0.5)
+    """Uniform sampling range for inter-push interval (seconds).
+    Aligned with EEWrenchRandomizerState.interval_range_s."""
+
+    force_range: tuple[float, float] = (5.0, 20.0)
+    """Uniform sampling range for force magnitude (newtons).
+    Aligned with EEWrenchRandomizerState.force_range."""
+
+    torque_range_nm: tuple[float, float] = (0.5, 1.5)
+    """Uniform sampling range for torque magnitude (newton-metres).
+    Set to (0, 0) for force-only. Aligned with EEWrenchRandomizerState.torque_range."""
+
+    direction_mode: Literal["axes", "sphere"] = "axes"
+    """Direction sampling strategy."""
+
+    duration_s: float = 5.0
+    """Push window duration for randomized mode (seconds)."""
+
+    rng_seed: int = 42
+    """RNG seed for reproducible randomized pushes."""
+
+    startup_delay_s: float = 5.0
+    """Seconds to wait after sim start before firing any pushes.
+    Gives time for the robot to stabilise on the gantry before disturbances begin."""
 
 
 @dataclass(frozen=True)
@@ -467,6 +536,13 @@ class BridgeConfig:
     use_ros: bool = False
     """Whether to use ROS for communication."""
 
+    # Ground-truth state channel (sim-to-sim localization)
+    state_port: int = 5557
+    """ZMQ port on which the sim publishes the true pelvis pose (see holosoma.utils.sim_state)."""
+
+    state_rate_hz: float = 200.0
+    """Publish rate of the pelvis pose channel [Hz] (sim time)."""
+
 
 @dataclass(frozen=True)
 class SimulatorInitConfig:
@@ -506,8 +582,16 @@ class SimulatorInitConfig:
     reset_manager: ResetManagerConfig = field(default_factory=ResetManagerConfig)
     """Reset event manager configuration."""
 
-    contact_sensor_history_length: int = 3
-    """Number of frames of contact data retained for sensors."""
+    contact_sensor_history_length: int = 4
+    """Number of frames of contact data retained for sensors.
+
+    Must be >= ``sim.control_decimation`` so the contact-force history covers a
+    complete control interval (each physics substep writes one sample). The
+    touchdown-impact peak-force penalty reads the most-recent
+    ``control_decimation`` samples; a shorter history would drop the first
+    substep of the interval and can miss an impact peak. Validated in
+    ``__post_init__``.
+    """
 
     robot_mjcf_filter: MujocoXMLFilterCfg = field(default_factory=MujocoXMLFilterCfg)
     """MuJoCo-specific XML filtering configuration for robot MJCF files."""
@@ -548,6 +632,27 @@ class SimulatorInitConfig:
 
     virtual_gantry: VirtualGantryCfg = field(default_factory=VirtualGantryCfg)
     """Virtual gantry system configuration."""
+
+    external_pusher: ExternalPusherCfg = field(default_factory=ExternalPusherCfg)
+    """External force pusher configuration for MuJoCo inference-time disturbances."""
+
+    @model_validator(mode="after")
+    def validate_contact_history_covers_control_interval(self) -> SimulatorInitConfig:
+        """Ensure contact-force history spans a full control interval.
+
+        The touchdown-impact peak-force penalty reads the most-recent
+        ``control_decimation`` contact samples (one per physics substep). A
+        shorter history would drop the first substep(s) of the interval and can
+        miss an impact peak.
+        """
+        if self.contact_sensor_history_length < self.sim.control_decimation:
+            raise ValueError(
+                "contact_sensor_history_length "
+                f"({self.contact_sensor_history_length}) must be >= "
+                f"sim.control_decimation ({self.sim.control_decimation}) so "
+                "the contact-force history covers a complete control interval."
+            )
+        return self
 
 
 @dataclass(frozen=True)

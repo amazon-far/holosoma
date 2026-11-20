@@ -11,7 +11,12 @@ import tqdm
 from loguru import logger
 
 from holosoma.agents.base_algo.base_algo import BaseAlgo
-from holosoma.agents.fast_sac.fast_sac import Actor, CNNActor, CNNCritic, Critic
+from holosoma.agents.fast_sac.fast_sac import (
+    Actor,
+    CNNActor,
+    CNNCritic,
+    Critic,
+)
 from holosoma.agents.fast_sac.fast_sac_utils import (
     EmpiricalNormalization,
     SimpleReplayBuffer,
@@ -72,9 +77,12 @@ class FastSACEnv:
         critic_obs = torch.cat([obs_dict[k] for k in self._critic_obs_keys], dim=1)
         return actor_obs, critic_obs
 
-    def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
+    def step(self, actions: torch.Tensor, action_mean: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
         # Actions are now already scaled by the actor, so pass them directly to the environment
-        obs_dict, rew_buf, reset_buf, info_dict = self._env.step({"actions": actions})  # type: ignore[attr-defined]
+        actor_state = {"actions": actions}
+        if action_mean is not None:
+            actor_state["action_mean"] = action_mean
+        obs_dict, rew_buf, reset_buf, info_dict = self._env.step(actor_state)  # type: ignore[attr-defined]
         actor_obs = torch.cat([obs_dict[k] for k in self._actor_obs_keys], dim=1)
         critic_obs = torch.cat([obs_dict[k] for k in self._critic_obs_keys], dim=1)
         if "final_observations" in info_dict:
@@ -84,6 +92,7 @@ class FastSACEnv:
         else:
             final_actor_obs = actor_obs
             final_critic_obs = critic_obs
+
         extras = {
             "time_outs": info_dict["time_outs"],
             "observations": {
@@ -103,8 +112,8 @@ class FastSACEnv:
 
     def _compute_action_boundaries(self) -> torch.Tensor:
         """
-        Compute per-joint action scaling factors based on robot configuration.
-        Returns tensor of shape (num_dof,) containing the scaling factor for each joint.
+        Compute per-policy-action scaling factors based on robot configuration.
+        Returns tensor of shape (num_actions,) containing scaling for policy-controlled DOFs.
 
         The scaling factor is the maximum difference between default and joint limits,
         ensuring that action=0 corresponds to default position and action=±1 reaches
@@ -134,12 +143,51 @@ class FastSACEnv:
         # Account for action_scale: the environment applies actions_scaled = actions * action_scale
         # So our scaling factor should be: max_range / action_scale
         action_scaling_factors = max_range / action_scale
+        policy_dof_indices = self._get_policy_dof_indices()
+        policy_scaling_factors = action_scaling_factors[policy_dof_indices]
 
-        logger.info(f"Computed action scaling factors for {len(robot_config.dof_names)} DOFs")
+        logger.info(f"Computed action scaling factors for {policy_scaling_factors.numel()} policy actions")
         logger.info(f"Action scale: {action_scale}")
-        logger.info(f"Scaling: {action_scaling_factors}")
+        logger.info(f"Policy DOF indices: {policy_dof_indices.tolist()}")
+        logger.info(f"Scaling: {policy_scaling_factors}")
 
-        return action_scaling_factors
+        return policy_scaling_factors
+
+    def _get_policy_dof_indices(self) -> torch.Tensor:
+        """Resolve robot DOF indices controlled by policy actions.
+
+        Raises:
+            ValueError: If ``policy_dim != num_dof`` and no action term
+                provides ``policy_dof_indices``, or if the provided indices
+                have a length that does not match ``policy_dim``.
+        """
+        action_manager = getattr(self._env, "action_manager", None)
+        policy_dim = self._env.dim_actions
+        device = self._env.device
+
+        if action_manager is None:
+            return torch.arange(policy_dim, device=device, dtype=torch.long)
+
+        for _, term in action_manager.iter_terms():
+            policy_dof_indices = getattr(term, "policy_dof_indices", None)
+            if policy_dof_indices is None:
+                continue
+            policy_dof_indices = policy_dof_indices.to(device=device, dtype=torch.long)
+            if policy_dof_indices.numel() != policy_dim:
+                raise ValueError(
+                    "Action term policy_dof_indices size must match policy action size: "
+                    f"len(policy_dof_indices)={policy_dof_indices.numel()}, actions_dim={policy_dim}"
+                )
+            return policy_dof_indices
+
+        if policy_dim == self._env.num_dof:
+            return torch.arange(self._env.num_dof, device=device, dtype=torch.long)
+
+        raise ValueError(
+            f"policy_dim ({policy_dim}) differs from num_dof ({self._env.num_dof}) "
+            "but no action term provides policy_dof_indices. "
+            "Reduced-action-space configurations require explicit policy DOF indices."
+        )
 
 
 class FastSACAgent(BaseAlgo):
@@ -190,6 +238,14 @@ class FastSACAgent(BaseAlgo):
         device = self.device
         env = self.env
 
+        if args.use_symmetry_loss and not args.use_symmetry:
+            raise ValueError(
+                "use_symmetry_loss=True requires use_symmetry=True. "
+                "The symmetry regularization loss is only meaningful alongside the "
+                "mirrored data-doubling augmentation. Set use_symmetry=True to enable "
+                "use_symmetry_loss, or set use_symmetry_loss=False. "
+                "use_symmetry_loss is never auto-derived from use_symmetry."
+            )
         algo_obs_dim_dict = self.env.observation_manager.get_obs_dims()
 
         algo_history_length_dict: Dict[str, int] = {}
@@ -246,6 +302,26 @@ class FastSACAgent(BaseAlgo):
             self.obs_normalizer = nn.Identity()
             self.critic_obs_normalizer = nn.Identity()
 
+        if args.obs_normalization:
+            for normalizer, terms, keys, indices, dim in (
+                (self.obs_normalizer, args.fixed_scale_actor_obs_terms, args.actor_obs_keys,
+                 self.actor_obs_indices, actor_obs_dim),
+                (self.critic_obs_normalizer, args.fixed_scale_critic_obs_terms, critic_obs_keys,
+                 self.critic_obs_indices, critic_obs_dim),
+            ):
+                if not terms:
+                    continue
+                slices = self._obs_term_slices(keys, indices)
+                missing = set(terms) - set(slices)
+                if missing:
+                    raise ValueError(f"fixed-scale terms not found in the observation: {sorted(missing)}")
+                mask = torch.zeros(dim, dtype=torch.bool, device=device)
+                for t in terms:
+                    for a, b in slices[t]:
+                        mask[a:b] = True
+                normalizer.fix_dims(mask)
+                logger.info(f"Fixed-scale (not running-normalized) obs terms {list(terms)}: {int(mask.sum())} dims")
+
         # Get action scaling parameters from the environment
         action_scale = env._action_boundaries if args.use_tanh else torch.ones(n_act, device=device)
         action_bias = torch.zeros(n_act, device=device)  # Assuming zero bias for now
@@ -258,9 +334,13 @@ class FastSACAgent(BaseAlgo):
         else:
             actor_mlp_obs_keys = list(actor_obs_keys)
             critic_mlp_obs_keys = list(critic_obs_keys)
-        actor_cls, critic_cls = (CNNActor, CNNCritic) if args.use_cnn_encoder else (Actor, Critic)
 
-        self.actor = actor_cls(
+        if args.use_cnn_encoder:
+            actor_cls, critic_cls = CNNActor, CNNCritic
+        else:
+            actor_cls, critic_cls = Actor, Critic
+
+        actor_kwargs: dict[str, Any] = dict(
             obs_indices=self.actor_obs_indices,
             obs_keys=actor_mlp_obs_keys,
             n_act=n_act,
@@ -276,6 +356,7 @@ class FastSACAgent(BaseAlgo):
             encoder_obs_key=args.encoder_obs_key,
             encoder_obs_shape=args.encoder_obs_shape,
         )
+        self.actor = actor_cls(**actor_kwargs)
         self.qnet = critic_cls(
             obs_indices=self.critic_obs_indices,
             obs_keys=critic_mlp_obs_keys,
@@ -344,8 +425,12 @@ class FastSACAgent(BaseAlgo):
             device=device,
         )
 
-        if args.use_symmetry:
+        if args.use_symmetry or args.use_symmetry_loss:
             # using env._env is not really ideal..
+            # The `or use_symmetry_loss` clause is redundant in practice (the
+            # Requirement 10 validation above guarantees use_symmetry=True
+            # whenever use_symmetry_loss=True) but is kept as harmless
+            # defense-in-depth against future refactors.
             self.symmetry_utils = SymmetryUtils(env._env)
 
         # Synchronize model parameters across GPUs for consistent initialization
@@ -376,6 +461,27 @@ class FastSACAgent(BaseAlgo):
 
         logger.info(f"Synchronized model parameters across {self.gpu_world_size} GPUs")
 
+    def _mean_over_ranks(self, log_dict: dict[str, Any], key: str) -> dict[str, Any]:
+        """``log_dict`` with ``key`` replaced by its mean over all ranks.
+
+        Each rank's metric covers only its own environments, so checkers fed
+        local values can disagree, and a rank that stops alone leaves the others
+        waiting in the next all-reduce. Fed the same mean, every rank's checker
+        makes the same decision on the same iteration, from all environments as
+        on one GPU. Every rank joins the all-reduce even when it lacks the key;
+        the key is kept only if every rank has it.
+        """
+        value = log_dict.get(key)
+        present = value is not None
+        packed = torch.tensor(
+            [float(value) if present else 0.0, 1.0 if present else 0.0], device=self.device, dtype=torch.float64
+        )
+        torch.distributed.all_reduce(packed, op=torch.distributed.ReduceOp.SUM)
+        out = {k: v for k, v in log_dict.items() if k != key}
+        if int(packed[1].item()) == self.gpu_world_size:
+            out[key] = float(packed[0].item()) / self.gpu_world_size
+        return out
+
     def _all_reduce_model_grads(self, model: nn.Module) -> None:
         """Batches and all-reduces gradients across GPUs to reduce NCCL call count.
 
@@ -400,7 +506,7 @@ class FastSACAgent(BaseAlgo):
 
     def _update_main(
         self, data: TensorDict
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         args = self.config
 
         scaler = self.scaler
@@ -439,6 +545,17 @@ class FastSACAgent(BaseAlgo):
             critic_log_probs = F.log_softmax(q_outputs, dim=-1)
             critic_losses = -torch.sum(target_distributions * critic_log_probs, dim=-1)
             qf_loss = critic_losses.mean(dim=1).sum(dim=0)
+
+            # Symmetry critic invariance regularizer (gated solely on
+            # use_symmetry_loss). Computed inside the same autocast block so its
+            # dtype/grad-scaling matches the base critic loss. The raw term is
+            # always computed under the flag (even when the coef is 0.0) so it
+            # can be logged for calibration.
+            if args.use_symmetry_loss:
+                sym_critic_loss = self._compute_symmetry_critic_loss(critic_observations, actions)
+                qf_loss = qf_loss + args.symmetry_critic_coef * sym_critic_loss
+            else:
+                sym_critic_loss = torch.zeros((), device=self.device)
 
         q_optimizer.zero_grad(set_to_none=True)
         scaler.scale(qf_loss).backward()
@@ -481,9 +598,78 @@ class FastSACAgent(BaseAlgo):
             target_value_max.detach(),
             target_value_min.detach(),
             alpha_loss.detach(),
+            sym_critic_loss.detach(),
         )
 
-    def _update_pol(self, data: TensorDict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _compute_symmetry_actor_loss(self, observations: torch.Tensor) -> torch.Tensor:
+        """Actor equivariance regularizer: MSE( actor_mean(M·o), M·actor_mean(o) ).
+
+        Encourages the deterministic policy to be equivariant under the robot's
+        sagittal-plane mirror ``M`` — mirroring the observation and then running
+        the policy should equal running the policy and then mirroring the action.
+
+        Gradients flow through BOTH branches (no detach on the mirrored/target
+        side), matching the PPO reference. The only ``.detach()`` is a defensive
+        one on the observation INPUT used to build the mirror pair: FastSAC's
+        minibatch obs are already detached replay-buffer tensors, so this is a
+        no-op today, but it makes the intent explicit and is robust to future
+        encoder-in-the-loop changes.
+        """
+        assert hasattr(self, "symmetry_utils"), (
+            "use_symmetry_loss requires symmetry_utils to be initialized. "
+            "symmetry_utils is created in setup() when use_symmetry or "
+            "use_symmetry_loss is True; ensure the agent was configured with "
+            "use_symmetry=True (the required prerequisite for use_symmetry_loss)."
+        )
+        # Deterministic mean action = Actor.forward(...)[0] (tanh-squashed, scaled).
+        mean_action = self.actor(observations)[0]
+        mirror_obs = self.symmetry_utils.mirror_xz_plane(observations.detach(), self.env, self.config.actor_obs_keys)
+        mean_action_on_mirror = self.actor(mirror_obs)[0]
+        mirror_of_mean_action = self.symmetry_utils.mirror_action_xz_plane(mean_action)
+        # No detach on the target side: gradients flow through both branches (matches PPO).
+        return F.mse_loss(mean_action_on_mirror, mirror_of_mean_action)
+
+    def _compute_symmetry_critic_loss(
+        self, critic_observations: torch.Tensor, actions: torch.Tensor
+    ) -> torch.Tensor:
+        """Critic invariance regularizer: MSE( value(o, a), value(M·o, M·a) ).
+
+        Encourages the distributional critic's SCALAR value estimate to be
+        invariant under the robot's sagittal-plane mirror ``M`` — mirroring the
+        critic observation and the action should leave the scalar value
+        unchanged. The loss is computed on the scalar ``get_value`` output
+        (expected value over the softmaxed atom distribution), NOT on the raw
+        atom logits, matching the value path already used in ``_update_pol``.
+
+        Gradients flow through BOTH branches (no detach on the mirrored side),
+        matching the PPO reference. The only ``.detach()`` is a defensive one on
+        the observation/action INPUTS used to build the mirror pair: FastSAC's
+        minibatch tensors are already detached replay-buffer tensors, so this is
+        a no-op today, but it makes the intent explicit and is robust to future
+        encoder-in-the-loop changes.
+        """
+        assert hasattr(self, "symmetry_utils"), (
+            "use_symmetry_loss requires symmetry_utils to be initialized. "
+            "symmetry_utils is created in setup() when use_symmetry or "
+            "use_symmetry_loss is True; ensure the agent was configured with "
+            "use_symmetry=True (the required prerequisite for use_symmetry_loss)."
+        )
+        qnet = self.qnet
+        # Scalar value on the original (obs, action) pair. get_value returns a
+        # [num_q_networks, batch] tensor, so the MSE averages across both critics.
+        value = qnet.get_value(F.softmax(qnet(critic_observations, actions), dim=-1))
+        # Mirror the critic obs (critic keys) and the actions to build the pair.
+        mirror_cobs = self.symmetry_utils.mirror_xz_plane(
+            critic_observations.detach(), self.env, self.config.critic_obs_keys
+        )
+        mirror_actions = self.symmetry_utils.mirror_action_xz_plane(actions.detach())
+        value_mirror = qnet.get_value(F.softmax(qnet(mirror_cobs, mirror_actions), dim=-1))
+        # No detach on the mirrored side: gradients flow through both branches (matches PPO).
+        return F.mse_loss(value, value_mirror)
+
+    def _update_pol(
+        self, data: TensorDict
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         actor = self.actor
         qnet = self.qnet
         actor_optimizer = self.actor_optimizer
@@ -507,6 +693,15 @@ class FastSACAgent(BaseAlgo):
             qf_value = q_values.mean(dim=0)
             actor_loss = (self.log_alpha.exp().detach() * log_probs - qf_value).mean()
 
+            # Symmetry actor equivariance regularizer (gated solely on
+            # use_symmetry_loss). Computed inside the same autocast block so its
+            # dtype/grad-scaling matches the base actor loss.
+            if args.use_symmetry_loss:
+                sym_actor_loss = self._compute_symmetry_actor_loss(data["observations"])
+                actor_loss = actor_loss + args.symmetry_actor_coef * sym_actor_loss
+            else:
+                sym_actor_loss = torch.zeros((), device=self.device)
+
         actor_optimizer.zero_grad(set_to_none=True)
         scaler.scale(actor_loss).backward()
 
@@ -529,7 +724,43 @@ class FastSACAgent(BaseAlgo):
             actor_loss.detach(),
             policy_entropy.detach(),
             action_std.detach(),
+            sym_actor_loss.detach(),
         )
+
+    def _obs_term_slices(self, obs_keys, obs_indices) -> dict[str, list[tuple[int, int]]]:
+        """Where each observation term sits in a concatenated observation vector.
+
+        The ObservationManager concatenates a group's enabled terms in sorted
+        order, each term stacked over the group's history (term-major), so a
+        term occupies one contiguous block of ``term_dim * history_length``.
+        """
+        return {
+            name: [(start, start + dim * history) for start, dim, history, _ in blocks]
+            for name, blocks in self._obs_term_layout(obs_keys, obs_indices).items()
+        }
+
+    def _obs_term_layout(self, obs_keys, obs_indices) -> dict[str, list[tuple[int, int, int, str]]]:
+        """Per term: (block start, per-frame dim, history length, group) for each group holding it.
+
+        Within a block, frames are oldest first, so the current frame is the
+        last ``dim`` entries.
+        """
+        obs_manager = self.env.observation_manager
+        out: dict[str, list[tuple[int, int, int, str]]] = {}
+        for key in obs_keys:
+            group_cfg = obs_manager.cfg.groups[key]
+            history = max(int(getattr(group_cfg, "history_length", 1) or 1), 1)
+            offset = obs_indices[key]["start"]
+            for name in sorted(n for n, t in group_cfg.terms.items() if t.enabled):
+                dim = obs_manager._compute_term(key, name, group_cfg.terms[name]).shape[1]
+                out.setdefault(name, []).append((offset, dim, history, key))
+                offset += dim * history
+            if offset != obs_indices[key]["end"]:
+                raise RuntimeError(
+                    f"obs group {key!r}: terms span {offset - obs_indices[key]['start']} dims, "
+                    f"the group is {obs_indices[key]['size']}"
+                )
+        return out
 
     def _sample_and_prepare_batches(
         self, batch_size: int, num_updates: int, normalize_obs, normalize_critic_obs
@@ -620,6 +851,40 @@ class FastSACAgent(BaseAlgo):
 
         return prepared_batches
 
+    def _iter_prepared_batches(
+        self, batch_size: int, num_updates: int, normalize_obs, normalize_critic_obs
+    ):
+        """Yield the ``num_updates`` batches of one learning step.
+
+        With ``sample_chunk_updates`` off (0) this is exactly
+        ``_sample_and_prepare_batches`` -- one draw for all updates. When on,
+        it draws ``sample_chunk_updates`` updates' worth at a time, so only one
+        chunk's block is alive at once. The caller must drop its reference to
+        each batch before advancing, or the previous chunk stays alive through
+        that view while the next one is drawn.
+        """
+        chunk = self.config.sample_chunk_updates
+        prepare = lambda n: self._sample_and_prepare_batches(  # noqa: E731
+            batch_size, n, normalize_obs, normalize_critic_obs
+        )
+        if self.config.use_symmetry:
+            # One update per draw. A draw is mirrored as one block,
+            # [originals | mirrors], and split into updates, so a draw of
+            # several updates would give each update originals only or mirrors
+            # only. Mirrored samples are only as good as the physics' mirror
+            # symmetry, so every update gets a one-update draw: [originals | mirrors].
+            chunk = 1
+        if chunk <= 0 or chunk >= num_updates:
+            yield from prepare(num_updates)
+            return
+        remaining = num_updates
+        while remaining > 0:
+            n = min(chunk, remaining)
+            batches = prepare(n)
+            while batches:
+                yield batches.pop(0)
+            remaining -= n
+
     def load(self, ckpt_path: str | None) -> None:
         if not ckpt_path:
             return
@@ -648,7 +913,9 @@ class FastSACAgent(BaseAlgo):
         args = self.config
         device = self.device
         if args.compile:
-            update_main = torch.compile(self._update_main)
+            # Compiling _update_main destabilizes multi-GPU training when the
+            # compile cache is cold (mainline holosoma, #93).
+            update_main = self._update_main if self.is_multi_gpu else torch.compile(self._update_main)
             update_pol = torch.compile(self._update_pol)
             policy = torch.compile(self.policy)
             normalize_obs = torch.compile(self.obs_normalizer.forward)
@@ -673,6 +940,9 @@ class FastSACAgent(BaseAlgo):
         action_std = torch.tensor(0.0, device=device)
         actor_loss = torch.tensor(0.0, device=device)
         actor_grad_norm = torch.tensor(0.0, device=device)
+        # sym_actor_loss is produced by the policy-frequency actor update; seed
+        # it so logging has a bound value on iterations before the first update.
+        sym_actor_loss = torch.tensor(0.0, device=device)
         pbar = tqdm.tqdm(total=args.num_learning_iterations, initial=self.global_step)
 
         while self.global_step <= args.num_learning_iterations:
@@ -685,7 +955,9 @@ class FastSACAgent(BaseAlgo):
                     norm_obs = normalize_obs(obs, update=False)
                     actions = policy(obs=norm_obs, dones=dones)
 
-                next_obs, rewards, dones, infos = env.step(actions.float())
+                # Pass action mean to env for mean-action penalty terms
+                action_mean = getattr(self.actor, "_cached_action_mean", None)
+                next_obs, rewards, dones, infos = env.step(actions.float(), action_mean=action_mean)
                 truncations = infos["time_outs"]
 
                 # Update episode stats using logging helper
@@ -693,7 +965,8 @@ class FastSACAgent(BaseAlgo):
 
                 next_critic_obs = infos["observations"]["critic"]
 
-                # Compute 'true' next_obs and next_critic_obs for saving
+                # Store the true next observation: on a time-out the env has already
+                # reset, so take the pre-reset final observation instead.
                 true_next_obs = torch.where(
                     truncations[:, None] > 0, infos["observations"]["final"]["actor_obs"], next_obs
                 )
@@ -726,10 +999,15 @@ class FastSACAgent(BaseAlgo):
 
             # NOTE: args.batch_size is the global batch size
             batch_size = max(args.batch_size // env.num_envs // self.gpu_world_size, 1)
-            if self.global_step > args.learning_starts:
+            # Guard: need both (a) enough total training steps and (b) enough
+            # transitions in the current buffer. After a phase transition the
+            # buffer is empty even though global_step is large from the checkpoint.
+            buffer_count = min(rb.ptr, rb.buffer_size)
+            if self.global_step > args.learning_starts and buffer_count > args.learning_starts:
                 with self.logging_helper.record_learn_time():
-                    # Use batched sampling: sample once, normalize once, split into updates
-                    prepared_batches = self._sample_and_prepare_batches(
+                    # Batched sampling: sample, normalize and split into updates,
+                    # all at once or in chunks (sample_chunk_updates).
+                    prepared_batches = self._iter_prepared_batches(
                         batch_size, args.num_updates, normalize_obs, normalize_critic_obs
                     )
                     for i, data in enumerate(prepared_batches):
@@ -741,12 +1019,13 @@ class FastSACAgent(BaseAlgo):
                             qf_max,
                             qf_min,
                             alpha_loss,
+                            sym_critic_loss,
                         ) = update_main(data)
                         if args.num_updates > 1:
                             if i % args.policy_frequency == 1:
-                                actor_grad_norm, actor_loss, policy_entropy, action_std = update_pol(data)
+                                actor_grad_norm, actor_loss, policy_entropy, action_std, sym_actor_loss = update_pol(data)
                         elif self.global_step % args.policy_frequency == 0:
-                            actor_grad_norm, actor_loss, policy_entropy, action_std = update_pol(data)
+                            actor_grad_norm, actor_loss, policy_entropy, action_std, sym_actor_loss = update_pol(data)
 
                         # Accumulate training metrics for smoother logging
                         current_metrics = {
@@ -762,6 +1041,22 @@ class FastSACAgent(BaseAlgo):
                             "policy_entropy": policy_entropy,
                             "action_std": action_std,
                         }
+                        # Symmetry-loss metrics: log raw unweighted terms plus
+                        # their weighted contributions so the coefficients can be
+                        # calibrated empirically. Added only when the flag is on,
+                        # so the logged metric set is unchanged for existing runs.
+                        # sym_actor_loss (like actor_loss/action_std above) is
+                        # produced by the policy-frequency actor update and
+                        # persists across iterations between updates.
+                        if args.use_symmetry_loss:
+                            current_metrics["symmetry_actor_loss"] = sym_actor_loss
+                            current_metrics["symmetry_actor_loss_weighted"] = (
+                                args.symmetry_actor_coef * sym_actor_loss
+                            )
+                            current_metrics["symmetry_critic_loss"] = sym_critic_loss
+                            current_metrics["symmetry_critic_loss_weighted"] = (
+                                args.symmetry_critic_coef * sym_critic_loss
+                            )
                         self.training_metrics.add(current_metrics)
 
                         with torch.no_grad():
@@ -769,6 +1064,11 @@ class FastSACAgent(BaseAlgo):
                             tgt_ps = [p.data for p in qnet_target.parameters()]
                             torch._foreach_mul_(tgt_ps, 1.0 - args.tau)
                             torch._foreach_add_(tgt_ps, src_ps, alpha=args.tau)
+
+                        # Release this batch before the generator draws the next
+                        # chunk: it is a view into its chunk's block, and would
+                        # otherwise keep that whole block alive alongside the new one.
+                        del data
 
                 if self.global_step % args.logging_interval == 0:
                     with torch.no_grad():
@@ -794,6 +1094,23 @@ class FastSACAgent(BaseAlgo):
                         self.save(os.path.join(self.log_dir, f"model_{self.global_step:07d}.pt"))
                         self.export(onnx_file_path=os.path.join(self.log_dir, f"model_{self.global_step:07d}.onnx"))
 
+            # --- Sigma scheduler: update reward params based on progress ---
+            if hasattr(self, "_sigma_scheduler") and self._sigma_scheduler is not None:
+                self._sigma_scheduler.update(self.global_step)
+
+            # --- Early stop: check graduation condition ---
+            if hasattr(self, "_early_stop_checker") and self._early_stop_checker is not None:
+                env_log_dict = getattr(env, "log_dict", {})
+                if self.is_multi_gpu:
+                    env_log_dict = self._mean_over_ranks(env_log_dict, self._early_stop_checker.cfg.metric)
+                if self._early_stop_checker.check(self.global_step, env_log_dict):
+                    # Save checkpoint before exiting
+                    if self.is_main_process:
+                        logger.info(f"[EarlyStop] Saving final checkpoint at step {self.global_step}")
+                        self.save(os.path.join(self.log_dir, f"model_{self.global_step:07d}.pt"))
+                        self.export(onnx_file_path=os.path.join(self.log_dir, f"model_{self.global_step:07d}.onnx"))
+                    break
+
             # Avoid global_step being incremented beyond args.num_learning_iterations, so that the final checkpoint is
             # saved at exactly args.num_learning_iterations. In the `while` condition, we check for self.global_step <=
             # args.num_learning_iterations, so that we have complete logging data at the final step too (assuming
@@ -801,6 +1118,7 @@ class FastSACAgent(BaseAlgo):
             if self.global_step >= args.num_learning_iterations:
                 break
             self.global_step += 1
+
             pbar.update(1)
 
         if self.is_main_process:
@@ -975,8 +1293,11 @@ class FastSACAgent(BaseAlgo):
         # Extract URDF text from the robot config
         urdf_file_path, urdf_str = get_urdf_text_from_robot_config(self.env.robot_config)
 
+        default_dof_pos = self.unwrapped_env.default_dof_pos[0].tolist()
+
         metadata = {
             "dof_names": self.env.robot_config.dof_names,
+            "default_dof_pos": default_dof_pos,
             "kp": kp_list,
             "kd": kd_list,
             "command_ranges": cmd_ranges,
@@ -1000,6 +1321,16 @@ class FastSACAgent(BaseAlgo):
 
     @torch.no_grad()
     def evaluate_policy(self, max_eval_steps: int | None = None):
+        metric_keys = (
+            "ee_pos_error",
+            "ee_rot_error",
+            "ee_pos_error_left",
+            "ee_pos_error_right",
+            "ee_rot_error_left",
+            "ee_rot_error_right",
+        )
+        metric_trajectory: list[list[float]] = []
+
         obs = self.env.reset()
 
         for _ in itertools.islice(itertools.count(), max_eval_steps):
@@ -1009,4 +1340,25 @@ class FastSACAgent(BaseAlgo):
                 normalized_obs = obs
             # Actions are already scaled by the actor
             actions = self.actor(normalized_obs)[0]
-            obs, _, _, _ = self.env.step(actions)
+            obs, _, _, extras = self.env.step(actions)
+
+            to_log = extras.get("to_log", {})
+            step_values: list[float] = []
+            for key in metric_keys:
+                metric_value = float("nan")
+                if key in to_log:
+                    raw_value = to_log[key]
+                    if isinstance(raw_value, torch.Tensor):
+                        if raw_value.numel() > 0:
+                            metric_value = float(raw_value.detach().float().mean().item())
+                    else:
+                        metric_value = float(raw_value)
+
+                    if not math.isfinite(metric_value):
+                        metric_value = float("nan")
+                step_values.append(metric_value)
+            metric_trajectory.append(step_values)
+
+        if len(metric_trajectory) == 0:
+            return torch.empty((0, len(metric_keys)), dtype=torch.float32)
+        return torch.tensor(metric_trajectory, dtype=torch.float32)

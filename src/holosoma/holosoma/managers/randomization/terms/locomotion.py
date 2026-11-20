@@ -39,7 +39,10 @@ def _get_joint_action_term(env: Any) -> JointPositionActionTerm | None:
 
     get_term = getattr(action_manager, "get_term", None)
     if callable(get_term):
-        term = get_term("joint_control")
+        try:
+            term = get_term("joint_control")
+        except KeyError:
+            term = None
         if isinstance(term, JointPositionActionTerm):
             return term
 
@@ -542,13 +545,19 @@ def randomize_dof_state(
     joint_pos_bias_range: Sequence[float],
     joint_vel_range: Sequence[float],
     randomize_dof_pos_bias: bool = False,
+    root_vel_range: Sequence[float] | None = None,
     **_,
 ) -> None:
-    """Randomize DOF positions and velocities."""
+    """Randomize DOF positions and velocities.
+    
+    Optionally randomizes root frame linear and angular velocities when
+    ``root_vel_range`` is provided.
+    """
     env._joint_pos_scale_range = list(joint_pos_scale_range)
     env._joint_pos_bias_range = list(joint_pos_bias_range)
     env._joint_vel_range = list(joint_vel_range)
     env._randomize_dof_pos_bias = bool(randomize_dof_pos_bias)
+    env._root_vel_range = list(root_vel_range) if root_vel_range is not None else None
 
     idx = _ensure_env_ids_tensor(env, env_ids)
     if idx.numel() == 0:
@@ -577,6 +586,15 @@ def randomize_dof_state(
         (idx.shape[0], env.num_dof),
         device=env.device,
     )
+
+    # Randomize root frame velocities (linear + angular)
+    if root_vel_range is not None:
+        env.simulator.robot_root_states[idx, 7:13] = torch_rand_float(
+            root_vel_range[0],
+            root_vel_range[1],
+            (idx.shape[0], 6),
+            device=env.device,
+        )
 
 
 @mujoco_required_field("body_ipos")
@@ -785,6 +803,16 @@ def randomize_mass_startup(
         if env_ids_cpu.numel() == 0:
             return
 
+        # Capture masses BEFORE randomization (needed as defaults for tracker).
+        import torch as _t
+        try:
+            masses_before_t = _t.as_tensor(
+                simulator._robot.root_physx_view.get_masses(),
+                dtype=_t.float32,
+            ).clone()
+        except Exception:
+            masses_before_t = None
+
         if enable_link_mass:
             asset_cfg = SceneEntityCfg("robot", body_names=env.robot_config.randomize_link_body_names)
             asset_cfg.resolve(simulator.scene)  # Required to avoid applying randomization to all bodies
@@ -806,6 +834,7 @@ def randomize_mass_startup(
                 (added_mass_range[0], added_mass_range[1]),
                 operation="add",
             )
+
     elif simulator.simulator_config.mujoco_backend == MujocoBackend.WARP:
         from holosoma.simulator.mujoco.backends.warp_randomization import randomize_field
 
@@ -845,6 +874,49 @@ def randomize_mass_startup(
         raise RandomizerNotSupportedError(
             f"Mass randomization not supported for simulator type '{type(simulator).__name__}'."
         )
+
+    # Record applied mass scales to DynamicsParamsTracker (if registered)
+    if env.randomization_manager is not None:
+        tracker = env.randomization_manager.get_state("dynamics_params_tracker")
+        if tracker is not None and enable_link_mass:
+            # Read back actual body masses from simulator and compute scale
+            # relative to the default masses stored in the tracker.
+            try:
+                if simulator.__class__.__name__ == "IsaacSim":
+                    # IsaacLab: read current masses from the physics engine
+                    current_masses = simulator._robot.root_physx_view.get_masses()  # [num_envs, num_bodies]
+                    current_masses_t = torch.as_tensor(
+                        current_masses, device=env.device, dtype=torch.float32,
+                    ).clone()
+                    if tracker._default_masses is None:
+                        # Use the BEFORE-randomization reading captured above
+                        # as the defaults (captured in masses_before_t).
+                        try:
+                            tracker._default_masses = masses_before_t[0:1].to(env.device)
+                        except NameError:
+                            # Fallback: use current as defaults (incorrect but
+                            # prevents crash)
+                            tracker._default_masses = current_masses_t[0:1].clone()
+                    defaults = tracker._default_masses.expand_as(current_masses_t)
+                    scales = current_masses_t / defaults.clamp(min=1e-8)
+                    tracker.record_mass_scales(idx, scales[idx])
+                elif hasattr(simulator, "gym"):
+                    # IsaacGym: read back per-body masses
+                    gym = simulator.gym
+                    num_bodies = len(simulator._body_list)
+                    scales = torch.ones(idx.shape[0], num_bodies, device=env.device)
+                    for offset, env_id in enumerate(idx.tolist()):
+                        env_ptr = simulator.envs[env_id]
+                        actor = simulator.robot_handles[env_id]
+                        props = gym.get_actor_rigid_body_properties(env_ptr, actor)
+                        for b_idx in range(num_bodies):
+                            if tracker._default_masses is not None:
+                                default_m = tracker._default_masses[0, b_idx].item()
+                                if default_m > 1e-8:
+                                    scales[offset, b_idx] = props[b_idx].mass / default_m
+                    tracker.record_mass_scales(idx, scales)
+            except Exception as exc:
+                logger.debug(f"Could not record mass scales to tracker: {exc}")
 
 
 @mujoco_required_field("geom_friction")
@@ -933,6 +1005,14 @@ def randomize_friction_startup(
         raise RandomizerNotSupportedError(
             f"Unsupported simulator type '{type(simulator).__name__}' for friction randomization."
         )
+
+    # Record applied friction coefficients to DynamicsParamsTracker (if registered)
+    if env.randomization_manager is not None:
+        tracker = env.randomization_manager.get_state("dynamics_params_tracker")
+        if tracker is not None:
+            tracker.record_friction_coeffs(
+                idx, friction_samples_cpu.to(device=env.device),
+            )
 
 
 def randomize_robot_rigid_body_material_startup(

@@ -360,14 +360,14 @@ g1_29dof = RobotConfig(
             "waist_roll_joint": 0.0,
             "waist_pitch_joint": 0.0,
             "left_shoulder_pitch_joint": 0.2,
-            "left_shoulder_roll_joint": 0.2,
+            "left_shoulder_roll_joint": 0.8,
             "left_shoulder_yaw_joint": 0.0,
             "left_elbow_joint": 0.6,
             "left_wrist_roll_joint": 0.0,
             "left_wrist_pitch_joint": 0.0,
             "left_wrist_yaw_joint": 0.0,
             "right_shoulder_pitch_joint": 0.2,
-            "right_shoulder_roll_joint": -0.2,
+            "right_shoulder_roll_joint": -0.8,
             "right_shoulder_yaw_joint": 0.0,
             "right_elbow_joint": 0.6,
             "right_wrist_roll_joint": 0.0,
@@ -1104,8 +1104,249 @@ g1_29dof_w_object = replace(
     ),
 )
 
+g1_29dof_fixed_torso = replace(
+    g1_29dof,
+    dof_obs_size=14,
+    actions_dim=14,
+    dof_names=[
+        "left_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "left_elbow_joint",
+        "left_wrist_roll_joint",
+        "left_wrist_pitch_joint",
+        "left_wrist_yaw_joint",
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_joint",
+        "right_wrist_roll_joint",
+        "right_wrist_pitch_joint",
+        "right_wrist_yaw_joint",
+    ],
+    upper_dof_names=[
+        "left_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "left_elbow_joint",
+        "left_wrist_roll_joint",
+        "left_wrist_pitch_joint",
+        "left_wrist_yaw_joint",
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_joint",
+        "right_wrist_roll_joint",
+        "right_wrist_pitch_joint",
+        "right_wrist_yaw_joint",
+    ],
+    lower_dof_names=[],
+    waist_dof_names=[],
+    waist_yaw_dof_name=None,
+    waist_roll_dof_name=None,
+    waist_pitch_dof_name=None,
+    has_torso=True,
+    has_upper_body_dof=True,
+    left_ankle_dof_names=[],
+    right_ankle_dof_names=[],
+    knee_dof_names=[],
+    hips_dof_names=[],
+    dof_pos_lower_limit_list=[
+        -3.0892, -1.5882, -2.618, -1.0472, -1.972222054, -1.61443, -1.61443,  # left arm
+        -3.0892, -2.2515, -2.618, -1.0472, -1.972222054, -1.61443, -1.61443,  # right arm
+    ],
+    dof_pos_upper_limit_list=[
+        2.6704, 2.2515, 2.618, 2.0944, 1.972222054, 1.61443, 1.61443,  # left arm
+        2.6704, 1.5882, 2.618, 2.0944, 1.972222054, 1.61443, 1.61443,  # right arm
+    ],
+    dof_vel_limit_list=[
+        37.0, 37.0, 37.0, 37.0, 37.0, 22.0, 22.0,  # left arm
+        37.0, 37.0, 37.0, 37.0, 37.0, 22.0, 22.0,  # right arm
+    ],
+    dof_effort_limit_list=[
+        25.0, 25.0, 25.0, 25.0, 25.0, 5.0, 5.0,  # left arm
+        25.0, 25.0, 25.0, 25.0, 25.0, 5.0, 5.0,  # right arm
+    ],
+    dof_armature_list=[
+        0.003609725, 0.003609725, 0.003609725, 0.003609725,  # left arm
+        0.003609725, 0.00425, 0.00425,  # left wrist
+        0.003609725, 0.003609725, 0.003609725, 0.003609725,  # right arm
+        0.003609725, 0.00425, 0.00425,  # right wrist
+    ],
+    dof_joint_friction_list=[0.0] * 14,
+    symmetry_joint_names={
+        "left_shoulder_pitch_joint": "right_shoulder_pitch_joint",
+        "left_shoulder_roll_joint": "right_shoulder_roll_joint",
+        "left_shoulder_yaw_joint": "right_shoulder_yaw_joint",
+        "left_elbow_joint": "right_elbow_joint",
+        "left_wrist_roll_joint": "right_wrist_roll_joint",
+        "left_wrist_pitch_joint": "right_wrist_pitch_joint",
+        "left_wrist_yaw_joint": "right_wrist_yaw_joint",
+        "right_shoulder_pitch_joint": "left_shoulder_pitch_joint",
+        "right_shoulder_roll_joint": "left_shoulder_roll_joint",
+        "right_shoulder_yaw_joint": "left_shoulder_yaw_joint",
+        "right_elbow_joint": "left_elbow_joint",
+        "right_wrist_roll_joint": "left_wrist_roll_joint",
+        "right_wrist_pitch_joint": "left_wrist_pitch_joint",
+        "right_wrist_yaw_joint": "left_wrist_yaw_joint",
+    },
+    flip_sign_joint_names=[
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "left_wrist_roll_joint",
+        "left_wrist_yaw_joint",
+        "right_wrist_roll_joint",
+        "right_wrist_yaw_joint",
+    ],
+    init_state=replace(
+        g1_29dof.init_state,
+        pos=[0.0, 0.0, 0.8],
+        default_joint_angles={
+            "left_shoulder_pitch_joint": 0.2,
+            "left_shoulder_roll_joint": 0.8,
+            "left_shoulder_yaw_joint": 0.0,
+            "left_elbow_joint": 0.6,
+            "left_wrist_roll_joint": 0.0,
+            "left_wrist_pitch_joint": 0.0,
+            "left_wrist_yaw_joint": 0.0,
+            "right_shoulder_pitch_joint": 0.2,
+            "right_shoulder_roll_joint": -0.8,
+            "right_shoulder_yaw_joint": 0.0,
+            "right_elbow_joint": 0.6,
+            "right_wrist_roll_joint": 0.0,
+            "right_wrist_pitch_joint": 0.0,
+            "right_wrist_yaw_joint": 0.0,
+        },
+    ),
+    control=replace(
+        g1_29dof.control,
+        action_scale=0.25,
+        stiffness={
+            "shoulder_pitch": 14.250623098,
+            "shoulder_roll": 14.250623098,
+            "shoulder_yaw": 14.250623098,
+            "elbow": 14.250623098,
+            "wrist_roll": 14.250623098,
+            "wrist_pitch": 16.778327481,
+            "wrist_yaw": 16.778327481,
+        },
+        damping={
+            "shoulder_pitch": 0.907222843,
+            "shoulder_roll": 0.907222843,
+            "shoulder_yaw": 0.907222843,
+            "elbow": 0.907222843,
+            "wrist_roll": 0.907222843,
+            "wrist_pitch": 1.068141502,
+            "wrist_yaw": 1.068141502,
+        },
+    ),
+    asset=replace(
+        g1_29dof.asset,
+        fix_base_link=True,
+        urdf_file="g1/g1_29dof_fixed_torso.urdf",
+        xml_file="g1/g1_29dof_fixed_torso.xml",
+    ),
+)
+
+g1_29dof_fixed_torso_sim2sim = replace(
+    g1_29dof,
+    init_state=replace(
+        g1_29dof.init_state,
+        pos=[0.0, 0.0, 0.8],
+        default_joint_angles={
+            **g1_29dof.init_state.default_joint_angles,
+            "left_shoulder_pitch_joint": 0.2,
+            "left_shoulder_roll_joint": 0.8,
+            "left_shoulder_yaw_joint": 0.0,
+            "left_elbow_joint": 0.6,
+            "left_wrist_roll_joint": 0.0,
+            "left_wrist_pitch_joint": 0.0,
+            "left_wrist_yaw_joint": 0.0,
+            "right_shoulder_pitch_joint": 0.2,
+            "right_shoulder_roll_joint": -0.8,
+            "right_shoulder_yaw_joint": 0.0,
+            "right_elbow_joint": 0.6,
+            "right_wrist_roll_joint": 0.0,
+            "right_wrist_pitch_joint": 0.0,
+            "right_wrist_yaw_joint": 0.0,
+        },
+    ),
+    asset=replace(
+        g1_29dof.asset,
+        fix_base_link=True,
+        urdf_file="g1/g1_29dof_fixed_torso.urdf",
+        xml_file="g1/g1_29dof_fixed_torso_sim2sim.xml",
+    ),
+)
+
+# G1 29-DOF variant with higher damping ratio (zeta=3.0 instead of 2.0)
+# Kp unchanged (same omega_n=2*pi*10), Kd = 2*zeta*I_a*omega_n with zeta=3.0
+g1_29dof_zeta3 = replace(
+    g1_29dof,
+    control=RobotControlConfig(
+        control_type="P",
+        stiffness=g1_29dof.control.stiffness,  # unchanged
+        damping={
+            "hip_yaw": 3.836834648,
+            "hip_roll": 9.463202781,
+            "hip_pitch": 3.836834648,
+            "knee": 9.463202781,
+            "ankle_pitch": 2.721668530,
+            "ankle_roll": 2.721668530,
+            "waist_yaw": 3.836834648,
+            "waist_roll": 2.721668530,
+            "waist_pitch": 2.721668530,
+            "shoulder_pitch": 1.360834265,
+            "shoulder_roll": 1.360834265,
+            "shoulder_yaw": 1.360834265,
+            "elbow": 1.360834265,
+            "wrist_roll": 1.360834265,
+            "wrist_pitch": 1.602212253,
+            "wrist_yaw": 1.602212253,
+        },
+        action_scale=g1_29dof.control.action_scale,
+        action_clip_value=g1_29dof.control.action_clip_value,
+        clip_actions=g1_29dof.control.clip_actions,
+        clip_torques=g1_29dof.control.clip_torques,
+    ),
+)
+
+# G1 29-DOF with SONIC-matched sim physics for faithful sim-to-sim comparison
+# against NVIDIA GEAR-SONIC. Identical to g1_29dof except the MuJoCo model uses
+# SONIC's plant: joint damping=0.05, armature=0.01, frictionloss=0.2, and
+# foot-floor contact friction=0.5 (see data/robots/g1/g1_29dof_sonic.xml, which
+# mirrors gear_sonic_deploy/g1/g1_29dof_old.xml + scene_29dof.xml).
+g1_29dof_sonic = replace(
+    g1_29dof,
+    asset=replace(
+        g1_29dof.asset,
+        xml_file="g1/g1_29dof_sonic.xml",
+    ),
+)
+
+# G1 29-DOF with SONIC physics AND the Unitree Dex3-1 hand payload (real-hardware
+# plant): bare wrist_yaw (rubber-hand mass removed) + Dex3 (0.6965 kg) per side.
+# NOTE: the Dex3 payload is OUT-OF-DISTRIBUTION for the SONIC tracker, which was
+# trained with the light rubber hand (hand mass is not in the paper's domain
+# randomization, Table S4). Use g1-29dof-sonic (rubber hand) to reproduce SONIC's
+# trained/validated behavior, and this variant to reflect the deployed hardware.
+g1_29dof_sonic_dexhand = replace(
+    g1_29dof,
+    asset=replace(
+        g1_29dof.asset,
+        xml_file="g1/g1_29dof_sonic_dexhand.xml",
+    ),
+)
+
 DEFAULTS = {
     "g1_29dof": g1_29dof,
+    "g1_29dof_sonic": g1_29dof_sonic,
+    "g1_29dof_sonic_dexhand": g1_29dof_sonic_dexhand,
+    "g1_29dof_zeta3": g1_29dof_zeta3,
     "t1_29dof_waist_wrist": t1_29dof_waist_wrist,
     "g1_29dof_w_object": g1_29dof_w_object,
+    "g1_29dof_fixed_torso": g1_29dof_fixed_torso,
+    "g1_29dof_fixed_torso_sim2sim": g1_29dof_fixed_torso_sim2sim,
 }

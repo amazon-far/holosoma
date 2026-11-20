@@ -165,6 +165,14 @@ class ExperimentConfig:
 
     eval_overrides: EvalOverridesConfig = EvalOverridesConfig()
 
+    # FK noise injection overrides (set by ablation flags, propagated to controller)
+    fk_noise_enabled: bool = False
+    fk_noise_sigma: float = 0.0
+
+    # Height tracking flag — when True, height targets are randomized across phases.
+    # When False, the pipeline locks height to the nominal value (no randomization).
+    height_tracking: bool = False
+
     def get_nightly_config(self) -> ExperimentConfig:
         if self.nightly is None:
             raise ValueError("nightly config is missing.")

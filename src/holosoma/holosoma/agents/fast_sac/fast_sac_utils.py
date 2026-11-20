@@ -262,6 +262,43 @@ class EmpiricalNormalization(nn.Module):
         self.register_buffer("_var", torch.ones(shape).unsqueeze(0).to(device))
         self.register_buffer("_std", torch.ones(shape).unsqueeze(0).to(device))
         self.register_buffer("count", torch.tensor(0, dtype=torch.long).to(device))
+        # Dimensions held at mean 0 / std 1 instead of running statistics, for
+        # inputs on their own fixed scale (fix_dims). Non-persistent: set from
+        # config at setup, so checkpoints keep their existing keys.
+        self.register_buffer(
+            "_fixed_mask", torch.zeros(shape, dtype=torch.bool).unsqueeze(0).to(device), persistent=False
+        )
+        self.register_buffer("_fixed_mean", torch.zeros(shape).unsqueeze(0).to(device), persistent=False)
+        self.register_buffer("_fixed_var", torch.ones(shape).unsqueeze(0).to(device), persistent=False)
+        self.register_buffer("_fixed_std", torch.ones(shape).unsqueeze(0).to(device), persistent=False)
+
+    def fix_dims(self, mask: torch.Tensor) -> None:
+        """Exempt dimensions from running statistics: they keep mean 0, std 1.
+
+        For inputs that already carry a fixed physical scale and whose
+        distribution changes across the curriculum (zero for whole phases, then
+        not), where a running estimate would mis-scale them for a long time.
+        """
+        ones = torch.ones_like(self._mean)
+        self.pin_dims(mask, torch.zeros_like(self._mean), ones, ones)
+
+    def pin_dims(self, mask: torch.Tensor, mean: torch.Tensor, var: torch.Tensor, std: torch.Tensor) -> None:
+        """Hold dimensions at the given statistics for good.
+
+        Adds to any dims already fixed; ``mean``/``var``/``std`` are
+        full-width, read only where ``mask``.
+        """
+        m = mask.reshape(self._fixed_mask.shape).to(torch.bool)
+        for buf, value in ((self._fixed_mean, mean), (self._fixed_var, var), (self._fixed_std, std)):
+            buf.copy_(torch.where(m, value.reshape(buf.shape).to(buf), buf))
+        self._fixed_mask.copy_(self._fixed_mask | m)
+        self._apply_fixed()
+
+    def _apply_fixed(self) -> None:
+        m = self._fixed_mask
+        self._mean.copy_(torch.where(m, self._fixed_mean, self._mean))
+        self._var.copy_(torch.where(m, self._fixed_var, self._var))
+        self._std.copy_(torch.where(m, self._fixed_std, self._std))
 
     @property
     def mean(self):
@@ -327,6 +364,7 @@ class EmpiricalNormalization(nn.Module):
         self._var.copy_(M2 / new_count)
         self._std.copy_(self._var.sqrt())
         self.count.copy_(new_count)
+        self._apply_fixed()
 
     @torch.jit.unused
     def inverse(self, y):

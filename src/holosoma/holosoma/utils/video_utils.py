@@ -21,6 +21,17 @@ def _is_wandb_available() -> bool:
         return False
 
 
+def _try_log_video_to_wandb(video_path: str) -> None:
+    """Best-effort wandb video upload that stays silent during shutdown races."""
+    if not _is_wandb_available():
+        return
+
+    try:
+        wandb.log({"Training rollout": wandb.Video(video_path, format="mp4")})
+    except Exception as exc:
+        logger.warning(f"[VIDEO] Skipping wandb video upload during shutdown: {exc}")
+
+
 def overlay_text_on_image(image, text, position=(50, 50), font_scale=1.0, color=(255, 255, 255), thickness=2):
     """Overlay text on an image using OpenCV.
 
@@ -208,7 +219,7 @@ def create_video(video_frames, fps, save_dir, output_format="mp4", wandb_logging
 
         # Step 3: Handle wandb upload if requested
         if wandb_logging and _is_wandb_available():
-            wandb.log({"Training rollout": wandb.Video(str(final_video), format="mp4")})
+            _try_log_video_to_wandb(str(final_video))
 
         # Step 4: Cleanup temp files if needed
         if cleanup_files:

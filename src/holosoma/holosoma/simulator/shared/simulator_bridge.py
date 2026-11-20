@@ -16,6 +16,7 @@ from holosoma.bridge import BasicSdk2Bridge, create_sdk2py_bridge
 from holosoma.config_types.simulator import BridgeConfig
 from holosoma.utils.clock import ClockPub
 from holosoma.utils.safe_torch_import import torch
+from holosoma.utils.sim_state import SimStatePub
 
 if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
@@ -54,6 +55,11 @@ class SimulatorBridge:
         # Initialize clock publisher for WBT motion synchronization
         self.clock_pub: ClockPub = ClockPub()
 
+        # Ground-truth pelvis pose for sim-to-sim localization
+        self.state_pub: SimStatePub = SimStatePub(port=bridge_config.state_port)
+        self._state_pub_period = 1.0 / bridge_config.state_rate_hz if bridge_config.state_rate_hz > 0 else None
+        self._last_state_pub_time: float | None = None
+
         if self.bridge_config.interface is None:
             interface = self._auto_detect_interface()
             logger.info(f"Auto-detected bridge interface '{interface}'")
@@ -65,6 +71,8 @@ class SimulatorBridge:
             # Start clock publisher for motion synchronization
             self.clock_pub.start()
             logger.info("Clock publisher initialized for motion synchronization")
+            if self._state_pub_period is not None:
+                self.state_pub.start()
         else:
             # We don't support runtime toggling on/off
             logger.info("Robot bridge disabled")
@@ -144,6 +152,19 @@ class SimulatorBridge:
         # Publish simulation clock for e.g, WBT policies
         sim_time = self.simulator.time()
         self.clock_pub.publish(sim_time)
+
+        # Publish the true pelvis pose at state_rate_hz (sim time)
+        if self.state_pub.enabled and (
+            self._last_state_pub_time is None or sim_time - self._last_state_pub_time >= self._state_pub_period
+        ):
+            self._last_state_pub_time = sim_time
+            quaternion_wxyz, _, _ = self.robot_bridge._get_base_imu_data()
+            root_pos = self.simulator.robot_root_states[0, :3]
+            self.state_pub.publish(
+                sim_time,
+                root_pos.detach().cpu().numpy(),
+                quaternion_wxyz.detach().cpu().numpy(),
+            )
 
     def is_enabled(self) -> bool:
         """Check if the bridge is enabled and functional.

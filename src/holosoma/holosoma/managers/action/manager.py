@@ -56,6 +56,7 @@ class ActionManager:
         # Buffers for actions
         self._action = torch.zeros((self.env.num_envs, self._total_action_dim), device=self.device)
         self._prev_action = torch.zeros_like(self._action)
+        self._prev_prev_action = torch.zeros_like(self._action)
 
     def _initialize_terms(self) -> None:
         """Initialize action terms and resolve their classes."""
@@ -142,6 +143,17 @@ class ActionManager:
         return self._prev_action
 
     @property
+    def prev_prev_action(self) -> torch.Tensor:
+        """The action from two steps ago.
+
+        Returns
+        -------
+        torch.Tensor
+            Action tensor [num_envs, total_action_dim]
+        """
+        return self._prev_prev_action
+
+    @property
     def active_terms(self) -> list[str]:
         """Names of active action terms."""
         return self._term_names
@@ -151,7 +163,7 @@ class ActionManager:
         """Dimensions of each action term."""
         return self._term_dims
 
-    def process_actions(self, actions: torch.Tensor) -> None:
+    def process_actions(self, actions: torch.Tensor, action_mean: torch.Tensor | None = None) -> None:
         """Process raw actions by distributing them to action terms.
 
         This should be called once per environment step.
@@ -160,6 +172,10 @@ class ActionManager:
         ----------
         actions : torch.Tensor
             Raw action tensor [num_envs, total_action_dim]
+        action_mean : torch.Tensor or None, optional
+            Deterministic policy mean [num_envs, total_action_dim].
+            If provided, action terms that track mean action buffers will
+            use this instead of the sampled action.
 
         Raises
         ------
@@ -173,14 +189,19 @@ class ActionManager:
             )
 
         # Store action history
+        self._prev_prev_action[:] = self._prev_action
         self._prev_action[:] = self._action
         self._action[:] = actions.to(self.device)
+
+        # Store action mean if provided
+        self._action_mean = action_mean
 
         # Split actions and process each term
         idx = 0
         for term_name in self._term_names:
             term = self._term_instances[term_name]
             term_actions = actions[:, idx : idx + term.action_dim]
+            term._incoming_action_mean = action_mean[:, idx : idx + term.action_dim] if action_mean is not None else None
             term.process_actions(term_actions)
             idx += term.action_dim
 
@@ -202,9 +223,11 @@ class ActionManager:
         """
         # Reset action history
         if env_ids is None:
+            self._prev_prev_action[:] = 0.0
             self._prev_action[:] = 0.0
             self._action[:] = 0.0
         else:
+            self._prev_prev_action[env_ids] = 0.0
             self._prev_action[env_ids] = 0.0
             self._action[env_ids] = 0.0
 
