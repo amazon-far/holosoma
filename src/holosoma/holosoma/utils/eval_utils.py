@@ -17,8 +17,7 @@ from tqdm import tqdm
 
 # CONFIG_NAME is "holosoma_config.yaml" - the primary configuration file for Holosoma
 # This file contains all settings for training and evaluation of models
-from holosoma.config_types.experiment import EvaluationExperimentConfig, TrainingExperimentConfig
-from holosoma.config_values.simulator import SIMULATOR_REGISTRY
+from holosoma.config_types.experiment import TrainingExperimentConfig
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.file_cache import get_cached_file_path
 from holosoma.utils.logging import LoguruLoggingBridge
@@ -180,23 +179,6 @@ def _experiment_config_from_saved(config_data: dict[str, Any]) -> TrainingExperi
     if unknown:
         logger.warning(f"Ignoring saved config fields this version does not have: {', '.join(unknown)}")
     return TrainingExperimentConfig(**{key: value for key, value in data.items() if key in known})
-
-
-def replace_retired_simulator(eval_cfg: EvaluationExperimentConfig, args: list[str]) -> EvaluationExperimentConfig:
-    """Swap a saved Isaac Gym simulator for the one an ``env.simulator:<name>`` CLI token selects.
-
-    tyro attaches a default that matches no registered preset to the most similar one, so a saved
-    Isaac Gym simulator would take over the ``isaacsim`` slot and ``env.simulator:isaacsim`` would
-    silently keep Isaac Gym. Starting from the selected preset instead makes every override take
-    effect. Without a token the saved simulator is kept, and startup reports it as unsupported.
-    """
-    if eval_cfg.env.simulator.config.name != "isaacgym":
-        return eval_cfg
-    selected = [arg.split(":", 1)[1] for arg in args if arg.startswith(("env.simulator:", "simulator:"))]
-    if not selected or selected[-1] not in SIMULATOR_REGISTRY:
-        return eval_cfg
-    env = dataclasses.replace(eval_cfg.env, simulator=SIMULATOR_REGISTRY[selected[-1]])
-    return dataclasses.replace(eval_cfg, env=env)
 
 
 def _drop_retired_isaacgym_fields(config_data: dict[str, Any]) -> dict[str, Any]:

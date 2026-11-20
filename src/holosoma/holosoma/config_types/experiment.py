@@ -8,6 +8,7 @@ from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import yaml
+from loguru import logger
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
@@ -65,6 +66,15 @@ class ExperimentConfig:
     def __post_init__(self) -> None:
         task_class_path(self.task)
 
+    @classmethod
+    def base(cls, first: Self, exp: TrainingExperimentConfig | None) -> Self:  # noqa: ARG003
+        """The config the command line is applied to: this type's defaults.
+
+        ``first`` is the command line parsed once against the defaults, for the few values a base
+        depends on; ``exp`` is the ``exp:`` preset, if one was given.
+        """
+        return cls()
+
     def env_config(self) -> EnvConfig:
         """The bundle of configs the task class is constructed from."""
         from holosoma.config_types.env import build_env_config
@@ -103,6 +113,16 @@ class SimulationExperimentConfig(ExperimentConfig):
 
     _task_base = "holosoma.envs.simulation_task.SimulationTask"
 
+    @classmethod
+    def base(cls, first: Self, exp: TrainingExperimentConfig | None) -> Self:  # noqa: ARG003
+        """The simulation defaults, or ``exp``'s world on the interactive variant of its simulator."""
+        default = cls()
+        if exp is None:
+            return default
+        env = dataclasses.replace(exp.env, simulator=holosoma.config_values.simulator.interactive(exp.env.simulator))
+        run = dataclasses.replace(default.run, project=exp.run.project, name=exp.run.name)
+        return cls(env=env, run=run)
+
 
 @dataclass(frozen=True, config=_STRICT)
 class TrainingExperimentConfig(ExperimentConfig):
@@ -123,6 +143,11 @@ class TrainingExperimentConfig(ExperimentConfig):
         from holosoma.config_types.env import build_env_config
 
         return build_env_config(task_class_path(self.task), self.env, self.run, self.mdp)
+
+    @classmethod
+    def base(cls, first: Self, exp: TrainingExperimentConfig | None) -> Self:  # noqa: ARG003
+        """The ``exp:`` preset, or this type's defaults without one."""
+        return exp if isinstance(exp, cls) else cls()
 
     def get_nightly_config(self) -> Self:
         """This config with the nightly check's shortened iteration count."""
@@ -146,6 +171,49 @@ class EvaluationExperimentConfig(ExperimentConfig):
     run: RunConfig = RunConfig(num_envs=1, headless=False)
 
     _task_base = "holosoma.envs.policy_task.PolicyTask"
+
+    @classmethod
+    def base(cls, first: Self, exp: TrainingExperimentConfig | None) -> Self:  # noqa: ARG003
+        """The evaluation config for ``first.eval.checkpoint``'s saved training config (see ``from_training``)."""
+        from holosoma.utils.eval_utils import CheckpointConfig, load_saved_experiment_config
+
+        if first.eval.checkpoint is None:
+            raise SystemExit("Evaluation needs --eval.checkpoint=<path or wandb:// URI>.")
+        saved, _ = load_saved_experiment_config(CheckpointConfig(checkpoint=first.eval.checkpoint))
+        return cls.from_training(saved, first)
+
+    @classmethod
+    def from_training(cls, saved: TrainingExperimentConfig, first: Self) -> Self:
+        """``saved``'s environment and MDP with evaluation's defaults, keeping ``first``'s task and eval part.
+
+        One env in the viewer, logger off, a deterministic spawn and no episode time limit; the saved
+        seed and run naming are kept. ``first.task`` must name the class ``saved`` trained. A saved
+        Isaac Gym simulator, which is retired, is replaced by ``first``'s simulator.
+        """
+        import holosoma.config_values.logger
+
+        if task_class_path(first.task) != task_class_path(saved.task):
+            raise SystemExit(
+                f"task {first.task!r} does not match the checkpoint's class {task_class_path(saved.task)!r}."
+            )
+        simulator = saved.env.simulator
+        if simulator.config.name == "isaacgym":
+            logger.warning(
+                f"The checkpoint ran on Isaac Gym, which is retired; using {first.env.simulator.config.name}."
+            )
+            simulator = first.env.simulator
+        terrain = saved.env.terrain
+        spawn = dataclasses.replace(terrain.terrain_term.spawn, randomize_tiles=False, xy_offset_range=0.0)
+        sim = dataclasses.replace(simulator.config.sim, max_episode_length_s=100000.0)
+        env = dataclasses.replace(
+            saved.env,
+            terrain=dataclasses.replace(terrain, terrain_term=dataclasses.replace(terrain.terrain_term, spawn=spawn)),
+            simulator=dataclasses.replace(simulator, config=dataclasses.replace(simulator.config, sim=sim)),
+        )
+        run = dataclasses.replace(
+            saved.run, device=None, num_envs=1, headless=False, logger=holosoma.config_values.logger.disabled
+        )
+        return cls(task=first.task, env=env, mdp=saved.mdp, eval=first.eval, run=run)
 
     def env_config(self) -> EnvConfig:
         from holosoma.config_types.env import build_env_config

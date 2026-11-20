@@ -12,11 +12,9 @@ import torch
 import yaml
 from omegaconf import OmegaConf
 
-from holosoma.config_types.evaluation import EvalConfig
 from holosoma.config_types.experiment import EvaluationExperimentConfig, TrainingExperimentConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
-from holosoma.eval_agent import evaluation_config
 from holosoma.utils.config_registry import parse_config
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.eval_utils import (
@@ -25,9 +23,7 @@ from holosoma.utils.eval_utils import (
     get_all_checkpoint_metadata,
     load_checkpoint,
     load_saved_experiment_config,
-    replace_retired_simulator,
 )
-from holosoma.utils.simulator_config import set_simulator_type
 
 
 @pytest.fixture
@@ -620,23 +616,16 @@ def test_scene_object_physics_drops_only_the_isaacgym_block() -> None:
     assert saved["scene"]["rigid_objects"]["box"]["physics"] == physics  # the caller's dict is not mutated
 
 
-def test_saved_isaacgym_simulator_reports_unsupported_without_override(tmp_path: Path) -> None:
-    saved_cfg = _load_through("checkpoint", _previous_schema("g1_29dof_isaacgym"), tmp_path)
-
-    eval_cfg = replace_retired_simulator(evaluation_config(saved_cfg, EvalConfig()), [])
-
-    with pytest.raises(ValueError, match="Isaac Gym simulator is no longer supported"):
-        set_simulator_type(eval_cfg.env.simulator)
-
-
 @pytest.mark.parametrize("backend", ["isaacsim", "mujoco", "mjwarp"])
-def test_saved_isaacgym_simulator_can_be_overridden_on_the_cli(backend: str, tmp_path: Path) -> None:
-    # Without replace_retired_simulator, tyro attaches the unmatched Isaac Gym default to the
-    # isaacsim slot, so `env.simulator:isaacsim` would come back as Isaac Gym.
+def test_saved_isaacgym_simulator_is_replaced_by_the_selected_one(backend: str, tmp_path: Path) -> None:
     saved_cfg = _load_through("checkpoint", _previous_schema("g1_29dof_isaacgym"), tmp_path)
-    args = [f"env.simulator:{backend}"]
+    args = [f"--task={saved_cfg.task.rpartition('.')[0]}.evaluate", f"env.simulator:{backend}"]
+    first = parse_config(EvaluationExperimentConfig, args=args)
 
-    default = replace_retired_simulator(evaluation_config(saved_cfg, EvalConfig()), args)
+    default = EvaluationExperimentConfig.from_training(saved_cfg, first)
     eval_cfg = parse_config(EvaluationExperimentConfig, default=default, args=args)
 
-    assert eval_cfg.env.simulator == SIMULATOR_REGISTRY[backend]
+    selected = SIMULATOR_REGISTRY[backend]
+    simulator = eval_cfg.env.simulator
+    assert (simulator._target_, simulator.config.mujoco_backend) == (selected._target_, selected.config.mujoco_backend)
+    assert simulator.config.sim.max_episode_length_s == 100000.0

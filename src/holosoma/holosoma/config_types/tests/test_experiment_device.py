@@ -7,10 +7,9 @@ import dataclasses
 import pytest
 
 from holosoma.config_types.evaluation import EvalConfig
-from holosoma.config_types.experiment import TrainingExperimentConfig
+from holosoma.config_types.experiment import EvaluationExperimentConfig, TrainingExperimentConfig
 from holosoma.config_values import experiment
 from holosoma.config_values import simulator as simulator_values
-from holosoma.eval_agent import evaluation_config
 from holosoma.simulator.session import resolve_simulation_device
 
 pytestmark = pytest.mark.no_sim
@@ -32,4 +31,6 @@ def test_classic_mujoco_training_device(device: str | None, expected: str) -> No
 
 
 def test_eval_resolves_its_own_device() -> None:
-    assert evaluation_config(_with_device("cuda:3"), EvalConfig()).run.device is None
+    saved = _with_device("cuda:3")
+    first = EvaluationExperimentConfig(task=f"{saved.task.rpartition('.')[0]}.evaluate", eval=EvalConfig())
+    assert EvaluationExperimentConfig.from_training(saved, first).run.device is None

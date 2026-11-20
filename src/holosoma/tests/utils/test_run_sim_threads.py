@@ -1,4 +1,4 @@
-"""Scope of the classic-MuJoCo CPU thread limit applied by ``holosoma.run_sim``.
+"""Scope of the classic-MuJoCo CPU thread limit applied by ``SimulationTask.simulate``.
 
 The limit is a performance guard with no observable output, so what needs pinning is exactly WHEN
 it fires: only the single-env CPU backend, never another backend, and never over an operator who
@@ -26,11 +26,11 @@ from typing import cast
 import pytest
 
 import holosoma.config_values.simulator
-from holosoma import run_sim
 from holosoma.config_types.experiment import SimulationExperimentConfig
 from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
-from holosoma.run_sim import limit_cpu_math_threads
+from holosoma.envs import simulation_task
+from holosoma.envs.simulation_task import limit_cpu_math_threads
 from holosoma.utils.safe_torch_import import torch
 
 # Set explicitly rather than leaning on the root conftest's fallback: these cases are deselected by
@@ -71,7 +71,7 @@ def test_thread_limit_variables_match_production() -> None:
     # The parametrisation below deliberately spells the names out, which catches the tuple
     # SHRINKING (a case fails rather than vanishing). This catches it GROWING: a new variable with
     # no case would otherwise be unconstrained.
-    assert list(run_sim._THREAD_LIMIT_VARIABLES) == THREAD_LIMIT_VARIABLES
+    assert list(simulation_task._THREAD_LIMIT_VARIABLES) == THREAD_LIMIT_VARIABLES
 
 
 def _in_tree_presets() -> set[str]:
@@ -141,10 +141,10 @@ def test_explicit_environment_limit_wins(requested: list[int], monkeypatch: pyte
     assert requested == []
 
 
-# Calling the guard directly cannot show that run_simulation still calls it, nor where. These
+# Calling the guard directly cannot show that SimulationTask.simulate still calls it, nor where. These
 # children drive the real entry point and read the pool back out of Torch at two points.
 #
-# The config is a REAL SimulationExperimentConfig from the production parser, not a stand-in: run_simulation
+# The config is a REAL SimulationExperimentConfig from the production parser, not a stand-in: simulate
 # resolves an unset device from the config's simulator preset, which is how
 # ``python -m holosoma.run_sim env.simulator:sim-mujoco`` actually runs.
 _CHILD = textwrap.dedent(
@@ -152,7 +152,8 @@ _CHILD = textwrap.dedent(
     import contextlib
     import dataclasses
 
-    import holosoma.run_sim as runner
+    from holosoma.envs.simulation_task import SimulationTask
+    from holosoma.simulator import session
     from holosoma.config_types.experiment import SimulationExperimentConfig
     from holosoma.utils.config_registry import parse_config
     from holosoma.utils.safe_torch_import import torch
@@ -162,18 +163,18 @@ _CHILD = textwrap.dedent(
             print(f"AT_RUN={torch.get_num_threads()}", flush=True)
 
     @contextlib.contextmanager
-    def create_task(_config):
+    def task_session(_env_config, _task_class):
         # Reported here too: the cap has to land before the task is constructed, since that is
         # where the backend allocates its buffers.
         print(f"AT_SETUP={torch.get_num_threads()}", flush=True)
         yield Task()
 
-    SimulationExperimentConfig.create_task = create_task
+    session.task_session = task_session
 
     config = parse_config(SimulationExperimentConfig, args=[f"env.simulator:sim-{PRESET}"])
     if DEVICE is not None:
         config = dataclasses.replace(config, run=dataclasses.replace(config.run, device=DEVICE))
-    runner.run_simulation(config)
+    SimulationTask.simulate(config)
     """
 )
 
@@ -193,8 +194,8 @@ def _child(source: str) -> dict[str, int]:
     return {key: int(value) for key, value in reported.items()}
 
 
-def _pools_after_run_simulation(preset: str, device: str | None) -> dict[str, int]:
-    """The real ``run_simulation``, reporting the pool at env construction and at loop start."""
+def _pools_after_simulate(preset: str, device: str | None) -> dict[str, int]:
+    """The real ``SimulationTask.simulate``, reporting the pool at env construction and at loop start."""
     observed = _child(f"PRESET = {preset!r}\nDEVICE = {device!r}\n{_CHILD}")
     assert set(observed) == {"AT_SETUP", "AT_RUN"}, observed
     return observed
@@ -208,15 +209,15 @@ def untouched_pool() -> int:
     ]
 
 
-# ``None`` is the default invocation: run_simulation resolves it to cpu for the classic backend.
+# ``None`` is the default invocation: simulate resolves it to cpu for the classic backend.
 @pytest.mark.parametrize("device", ["cpu", None])
-def test_run_simulation_applies_the_limit_before_building_the_env(device: str | None) -> None:
-    assert _pools_after_run_simulation(CLASSIC_PRESET, device) == {"AT_SETUP": 1, "AT_RUN": 1}
+def test_simulate_applies_the_limit_before_building_the_env(device: str | None) -> None:
+    assert _pools_after_simulate(CLASSIC_PRESET, device) == {"AT_SETUP": 1, "AT_RUN": 1}
 
 
 # MuJoCo Warp on cpu is rejected at device resolution, before any task exists.
 @pytest.mark.parametrize(("preset", "device"), [("isaacsim", "cpu"), ("isaacsim", None), ("mjwarp", None)])
-def test_run_simulation_leaves_other_backends_alone(preset: str, device: str | None, untouched_pool: int) -> None:
+def test_simulate_leaves_other_backends_alone(preset: str, device: str | None, untouched_pool: int) -> None:
     # Guards the wiring from the other side: a cap applied unconditionally would show up here.
     # Comparing against Torch's own default rather than the literal 1 avoids a spurious failure on
     # a machine with a different core count -- but it only discriminates while that default is
@@ -224,7 +225,7 @@ def test_run_simulation_leaves_other_backends_alone(preset: str, device: str | N
     # With device=None and no CUDA present, IsaacSim resolves to cpu, which is precisely the
     # configuration that must stay uncapped.
     assert untouched_pool > 1, "cannot distinguish capped from uncapped when Torch defaults to 1"
-    assert _pools_after_run_simulation(preset, device) == {
+    assert _pools_after_simulate(preset, device) == {
         "AT_SETUP": untouched_pool,
         "AT_RUN": untouched_pool,
     }
