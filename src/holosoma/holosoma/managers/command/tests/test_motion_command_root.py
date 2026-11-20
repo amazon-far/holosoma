@@ -120,6 +120,10 @@ class _Simulator:
     def get_simulator_type(self) -> SimulatorType:
         return SimulatorType.ISAACSIM
 
+    def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        unused = torch.zeros(len(self.dof_names))
+        return self.dof_pos_limits, unused, unused
+
     def set_actor_root_state_tensor_robots(self) -> None:
         self.root_writes.append(self.robot_root_states.clone())
 

@@ -868,9 +868,9 @@ class MuJoCo(BaseSimulator):
 
         # Canonical DOFs may have different native actuator columns on either backend.
         ctrl_tensor = self.backend.get_ctrl_tensor()
-        assert self._dof_actuator_ids_t is not None
 
         if ctrl_tensor is not None:
+            assert self._dof_actuator_ids_t is not None
             # Fast path: Direct zero-copy write (WarpBackend). ctrl is [num_envs, nu].
             if dof_indices is None:
                 ctrl_tensor[:, self._dof_actuator_ids_t] = torques.to(ctrl_tensor.dtype)

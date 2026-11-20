@@ -472,7 +472,7 @@ class _FakeEnv:
 
     def __init__(self, depth_group: tuple[str, str] | None = None) -> None:
         self.depth_group = depth_group
-        self.robot_config = SimpleNamespace(actions_dim=2)
+        self.robot_config = SimpleNamespace(dof_names=["joint_a", "joint_b"])
         self.command_manager = SimpleNamespace(get_state=lambda _name: None)
         self.observation_manager = _FakeObservationManager(self._obs())
 
