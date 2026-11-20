@@ -35,7 +35,13 @@ def test_welded_child_follows_selected_root_through_placement_and_step():
     config = FullSimConfig(
         simulator=replace(
             mjwarp.config,
-            mujoco_warp=replace(mjwarp.config.mujoco_warp, nconmax_per_env=32, njmax_per_env=64),
+            sim=replace(
+                mjwarp.config.sim,
+                mujoco=replace(
+                    mjwarp.config.sim.mujoco,
+                    warp=replace(mjwarp.config.sim.mujoco.warp, nconmax_per_env=32, njmax_per_env=64),
+                ),
+            ),
         ),
         robot=test_arm_fixed,  # Backend construction consumes only simulator/training settings.
         training=TrainingConfig(num_envs=num_envs, headless=True),
