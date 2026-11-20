@@ -1,0 +1,15 @@
+# G1 velocity tracking with PPO on Isaac Sim. The experiment's task is training.
+#
+#   holosoma --config @holosoma/examples/configs/g1_locomotion_train.yaml
+#
+# Command-line tokens after --config take precedence, e.g. another backend or a smaller run:
+#   ... --config @holosoma/examples/configs/g1_locomotion_train.yaml env.simulator:mjwarp --run.num_envs 1024
+# See docs/config-files.md for the format.
+version: 1
+arguments:
+  # The experiment preset: the whole config the other entries edit.
+  exp: g1-29dof
+  env.simulator: isaacsim
+  overrides:
+    run.seed: 1
+    run.headless: true

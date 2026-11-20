@@ -400,6 +400,7 @@ def train_on_task(tyro_config: TrainingExperimentConfig, env: PolicyTask, setup:
 
     from holosoma.agents.base_algo.base_algo import BaseAlgo
     from holosoma.agents.distillation.checkpoint import infer_num_teachers_from_checkpoint
+    from holosoma.cli import write_run_record
 
     if setup is None:
         setup = _setup_training(tyro_config)
@@ -458,6 +459,7 @@ def train_on_task(tyro_config: TrainingExperimentConfig, env: PolicyTask, setup:
         logger.info(f"Saving config file to {experiment_save_dir}")
         config_path = experiment_save_dir / CONFIG_NAME
         tyro_config.save_config(str(config_path))
+        write_run_record(experiment_save_dir)
         if wandb_enabled:
             wandb.save(str(config_path), base_path=experiment_save_dir)
 
@@ -552,6 +554,7 @@ def _run_evaluation(
     import os
 
     from holosoma.agents.base_algo.base_algo import BaseAlgo
+    from holosoma.cli import write_run_record
     from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
 
     run = tyro_config.run
@@ -560,6 +563,7 @@ def _run_evaluation(
 
     logger.info(f"Saving eval logs to {eval_log_dir}")
     tyro_config.save_config(str(eval_log_dir / CONFIG_NAME))
+    write_run_record(eval_log_dir)
 
     # Inject eval callbacks into algo config
     cb_configs = tyro_config.eval.callbacks.collect_active_callbacks()

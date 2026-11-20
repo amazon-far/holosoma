@@ -209,6 +209,7 @@ def parse_config(
     *,
     args: list[str] | None = None,
     default: Any = None,
+    provenance: dict[str, str] | None = None,
     **tyro_kwargs: Any,
 ) -> Any:
     """Parse a config with plugin, preset-file, and dynamic-dict support.
@@ -220,6 +221,8 @@ def parse_config(
         config: Dataclass type, ``Annotated`` alias, or zero-argument factory.
         args: CLI tokens. ``None`` reads from ``sys.argv``.
         default: Optional base config instance.
+        provenance: CLI tokens mapped to the document key each came from; a usage error naming one of
+            them ends with that key.
         tyro_kwargs: Extra keyword arguments forwarded to ``tyro.cli``.
 
     Returns:
@@ -260,7 +263,40 @@ def parse_config(
         kwargs["default"] = merged_default
     if use_sys_argv:
         sys.argv = [sys.argv[0]] + argv
-    return tyro.cli(config_type, **kwargs)
+    if not provenance:
+        return tyro.cli(config_type, **kwargs)
+    return _cli_with_provenance(config_type, kwargs, provenance)
+
+
+def _cli_with_provenance(config_type: Any, kwargs: dict[str, Any], provenance: dict[str, str]) -> Any:
+    """Run ``tyro.cli``; on a usage error, name the document keys behind the tokens it rejected."""
+    import contextlib
+    import io
+
+    captured = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(captured):
+            result = tyro.cli(config_type, **kwargs)
+    except SystemExit as exc:
+        message = captured.getvalue()
+        sys.stderr.write(message)
+        if exc.code not in (0, None):
+            flat = _normalize_cli_text(message)
+            sources = [
+                f"  {token.partition('=')[0]}  <- {source}"
+                for token, source in provenance.items()
+                if _normalize_cli_text(token.partition("=")[0]) in flat
+            ]
+            if sources:
+                sys.stderr.write("From --config:\n" + "\n".join(sources) + "\n")
+        raise
+    sys.stderr.write(captured.getvalue())
+    return result
+
+
+def _normalize_cli_text(text: str) -> str:
+    """Fold tyro's hyphen/underscore spellings and its box-drawing line wraps for matching."""
+    return "".join(text.replace("_", "-").split()).replace("│", "")
 
 
 def _reject_legacy_mujoco_cli(argv: list[str]) -> None:

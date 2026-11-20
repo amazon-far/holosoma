@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import shlex
 import sys
 import typing
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from holosoma.config_types.experiment import SIMULATE, ExperimentConfig, TrainingExperimentConfig, task_class_path
+
+RUN_RECORD_NAME = "holosoma_run.yaml"
 
 
 def resolve_task(task: str) -> tuple[type, Callable[[Any], None], type[ExperimentConfig]]:
@@ -66,24 +70,67 @@ def explicit_task(argv: list[str]) -> str | None:
     return value
 
 
+_run_record: list[str] = []
+
+
+def write_run_record(directory: str | Path) -> None:
+    """Write the run's command line as ``holosoma_run.yaml`` in ``directory``, if a command line built it."""
+    from holosoma.utils.config_document import write_document
+
+    if _run_record:
+        write_document(Path(directory) / RUN_RECORD_NAME, _run_record)
+
+
 def run(args: list[str] | None = None, default_task: str = SIMULATE) -> None:
     """Parse ``args`` (default ``sys.argv``) into the config ``task`` names and run its task function.
 
-    ``task`` comes from ``--task``, else the ``exp:`` preset, else ``default_task``. The config is
-    parsed twice: once against the preset or the type's defaults to read the values the type's
-    ``base`` depends on, then on top of that base.
+    A ``--config`` document is expanded and old spellings are rewritten first. ``task`` comes from
+    ``--task``, else the ``exp:`` preset, else ``default_task``. The config is parsed twice: once
+    against the preset or the type's defaults to read the values the type's ``base`` depends on,
+    then on top of that base. ``--print-args`` and ``--to-config`` print the equivalent command line
+    or document instead of running.
     """
+    from holosoma.config_values.experiment import EXPERIMENT_REGISTRY
     from holosoma.envs.policy_task import PolicyTask
+    from holosoma.utils.config_document import (
+        ConfigDocumentError,
+        alias_legacy_flags,
+        args_to_document,
+        dump_document,
+        expand_config_args,
+    )
     from holosoma.utils.config_registry import load_plugins, parse_config
     from holosoma.utils.eval_utils import init_eval_logging
     from holosoma.utils.tyro_utils import split_import_file_args
 
     init_eval_logging()
-    import_paths, argv = split_import_file_args(list(sys.argv[1:] if args is None else args))
+    argv = list(sys.argv[1:] if args is None else args)
+    print_args, to_config = "--print-args" in argv, "--to-config" in argv
+    argv = [token for token in argv if token not in ("--print-args", "--to-config")]
+    import_paths, argv = split_import_file_args(argv)
     load_plugins(import_paths)
+    roots = frozenset(f"exp:{name.replace('_', '-')}" for name in EXPERIMENT_REGISTRY)
+    provenance: dict[str, str] = {}
+    try:
+        argv = alias_legacy_flags(expand_config_args(argv, roots, provenance))
+    except ConfigDocumentError as exc:
+        raise SystemExit(str(exc)) from exc
+    provenance = {
+        renamed[0]: source for token, source in provenance.items() if (renamed := alias_legacy_flags([token]))
+    }
+
+    exp_tokens = [token for token in argv if token.startswith("exp:")]
     exp, argv = _pop_experiment(argv)
     explicit = explicit_task(argv)
     task = explicit or (exp.task if exp is not None else default_task)
+    record = [*exp_tokens, *([] if explicit or exp is not None else [f"--task={task}"]), *argv]
+    if print_args:
+        print(shlex.join(["holosoma", *record]))
+        raise SystemExit(0)
+    if to_config:
+        print(dump_document(args_to_document(record)), end="")
+        raise SystemExit(0)
+
     owner, function, config_type = resolve_task(task)
     if explicit is not None and exp is not None and issubclass(owner, PolicyTask):
         if task_class_path(task) != task_class_path(exp.task):
@@ -91,8 +138,9 @@ def run(args: list[str] | None = None, default_task: str = SIMULATE) -> None:
     if explicit is None:
         argv = [f"--task={task}", *argv]
     preset = exp if isinstance(exp, config_type) else None
-    first, _ = parse_config(config_type, default=preset, args=argv, return_unknown_args=True)
-    config = parse_config(config_type, default=config_type.base(first, exp), args=argv)
+    first, _ = parse_config(config_type, default=preset, args=argv, return_unknown_args=True, provenance=provenance)
+    config = parse_config(config_type, default=config_type.base(first, exp), args=argv, provenance=provenance)
+    _run_record[:] = record
     function(config)
 
 
