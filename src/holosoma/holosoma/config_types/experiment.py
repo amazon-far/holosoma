@@ -15,6 +15,7 @@ from pydantic.dataclasses import dataclass
 import holosoma.config_values.algo
 import holosoma.config_values.simulator
 from holosoma.config_types.algo import AlgoConfig
+from holosoma.config_types.command import MotionConfig
 from holosoma.config_types.environment import EnvironmentConfig
 from holosoma.config_types.evaluation import EvalConfig
 from holosoma.config_types.logger import DisabledLoggerConfig
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     from holosoma.envs.base_task.base_task import BaseTask
 
 SIMULATE = "holosoma.envs.simulation_task:SimulationTask.simulate"
+REPLAY = "holosoma.envs.simulation_task:SimulationTask.replay"
 LOCOMOTION_TRAIN = "holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager.train"
 LOCOMOTION_EVALUATE = "holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager.evaluate"
 
@@ -122,6 +124,44 @@ class SimulationExperimentConfig(ExperimentConfig):
         env = dataclasses.replace(exp.env, simulator=holosoma.config_values.simulator.interactive(exp.env.simulator))
         run = dataclasses.replace(default.run, project=exp.run.project, name=exp.run.name)
         return cls(env=env, run=run)
+
+
+@dataclass(frozen=True, config=_STRICT)
+class ReplayExperimentConfig(ExperimentConfig):
+    """Playing a whole-body-tracking motion back on the robot kinematically, in the viewer at real time."""
+
+    task: str = REPLAY
+    motion: MotionConfig | None = None
+    """The motion to play: ``motion_file``, or every clip in ``motion_dir``."""
+
+    run: RunConfig = SimulationExperimentConfig().run
+
+    _task_base = "holosoma.envs.simulation_task.SimulationTask"
+
+    @classmethod
+    def base(cls, first: Self, exp: TrainingExperimentConfig | None) -> Self:  # noqa: ARG003
+        """``exp``'s world with kinematic playback on, and the motion its motion command tracks.
+
+        The experiment's randomization and termination terms are dropped: they act on dynamics and
+        on the policy's managers, and playback is kinematic.
+        """
+        if exp is None:
+            return cls()
+        terms = exp.mdp.command.setup_terms if exp.mdp.command is not None else {}
+        term = terms.get("motion_command")
+        motion = term.params.get("motion_config") if term is not None else None
+        if not isinstance(motion, MotionConfig):
+            raise SystemExit(f"Replay needs an experiment with a motion command; {exp.task!r} has none.")
+        simulator = exp.env.simulator
+        sim = dataclasses.replace(simulator.config.sim, kinematic_playback=True)
+        env = dataclasses.replace(
+            exp.env,
+            simulator=dataclasses.replace(simulator, config=dataclasses.replace(simulator.config, sim=sim)),
+            randomization=None,
+            termination=None,
+        )
+        run = dataclasses.replace(cls().run, project=exp.run.project, name=exp.run.name)
+        return cls(env=env, motion=motion, run=run)
 
 
 @dataclass(frozen=True, config=_STRICT)

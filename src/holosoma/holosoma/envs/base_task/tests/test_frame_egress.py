@@ -313,6 +313,7 @@ class _PlaybackSim(_FakeSim):
         super().__init__(frames=budget_frames, decimation=decimation)
         self.num_envs = 1
         self.num_dof = 2
+        self.dof_names = ["joint0", "joint1"]
         self.sim_device = "cpu"
         self.dof_pos = torch.zeros(1, self.num_dof)
         self.dof_vel = torch.zeros(1, self.num_dof)

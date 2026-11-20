@@ -60,3 +60,18 @@ def test_run_rejects_a_task_class_that_does_not_match_the_experiment() -> None:
     wbt_train = "holosoma.envs.wbt.wbt_manager:WholeBodyTrackingManager.train"
     with pytest.raises(SystemExit, match="does not match the experiment"):
         cli.run(["exp:g1-29dof", f"--task={wbt_train}"])
+
+
+def test_replay_base_plays_the_experiment_motion_kinematically() -> None:
+    from holosoma.config_types.experiment import ReplayExperimentConfig
+    from holosoma.config_values import experiment
+
+    first = ReplayExperimentConfig()
+    base = ReplayExperimentConfig.base(first, experiment.g1_29dof_wbt)
+
+    assert base.motion is not None
+    assert base.motion.motion_file.endswith(".npz")
+    assert base.env.simulator.config.sim.kinematic_playback
+    assert (base.env.randomization, base.env.termination) == (None, None)
+    with pytest.raises(SystemExit, match="motion command"):
+        ReplayExperimentConfig.base(first, experiment.g1_29dof)

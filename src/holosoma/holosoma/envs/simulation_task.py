@@ -10,7 +10,7 @@ import traceback
 import torch
 from loguru import logger
 
-from holosoma.config_types.experiment import ExperimentConfig, SimulationExperimentConfig
+from holosoma.config_types.experiment import ExperimentConfig, ReplayExperimentConfig, SimulationExperimentConfig
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.utils.sim_utils import format_simulation_performance
@@ -105,6 +105,22 @@ class SimulationTask(BaseTask):
             logger.error(f"Error during simulation: {e}")
             traceback.print_exc()
             sys.exit(1)
+
+    @classmethod
+    def replay(cls, config: ReplayExperimentConfig) -> None:
+        """Play ``config.motion`` back on the robot with the motion-playback plugin, then stop."""
+        import dataclasses
+
+        from holosoma.config_types.plugin import MotionPlaybackPluginConfig
+
+        motion = config.motion
+        if motion is None or not (motion.motion_file or motion.motion_dir):
+            raise SystemExit("Replay needs a motion: --motion.motion_file=<npz>, or an exp: preset that tracks one.")
+        files = [f"{motion.motion_dir.rstrip('/')}/*.npz"] if motion.motion_dir else [motion.motion_file]
+        objects = list(config.env.scene.rigid_objects)[:1]
+        playback = MotionPlaybackPluginConfig(motion_files=files, objects=objects)
+        env = dataclasses.replace(config.env, plugin={**config.env.plugin, "motion_playback": playback})
+        cls.simulate(SimulationExperimentConfig(task=config.task, env=env, run=config.run))
 
     def _get_env_origins(self) -> torch.Tensor:
         """Place a single environment at the world origin, so its poses are world coordinates.

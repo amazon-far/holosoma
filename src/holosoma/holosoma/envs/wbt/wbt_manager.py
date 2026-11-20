@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
 
@@ -114,52 +113,3 @@ class WholeBodyTrackingManager(PolicyTask):
     def _draw_debug_vis(self) -> None:
         if self.simulator.get_simulator_type() == SimulatorType.ISAACSIM:
             self._draw_debug_vis_isaacsim()
-
-    def step_visualize_motion(self, actions: torch.Tensor) -> bool:
-        motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
-        dt = 1.0 / float(motion_command.motion.fps)  # type: ignore[has-type]
-        motion_command.step()
-        print("time_steps: ", motion_command.time_steps[0].item())
-        self._draw_debug_vis()
-
-        # set root_states_from_motion_command
-        root_pos = motion_command.root_pos_w.clone()
-        root_ori = motion_command.root_quat_w.clone()  # wxyz
-        root_lin_vel = motion_command.body_lin_vel_w[:, 0].clone()
-        root_ang_vel = motion_command.body_ang_vel_w[:, 0].clone()
-
-        joint_pos = motion_command.joint_pos.clone()
-        joint_vel = motion_command.joint_vel.clone()
-
-        env_ids = torch.arange(self.num_envs, device=self.device)
-        self.simulator.dof_pos[env_ids] = joint_pos
-        self.simulator.dof_vel[env_ids] = joint_vel
-
-        self.simulator.robot_root_states[env_ids, :3] = root_pos
-        self.simulator.robot_root_states[env_ids, 3:7] = root_ori
-        self.simulator.robot_root_states[env_ids, 7:10] = root_lin_vel
-        self.simulator.robot_root_states[env_ids, 10:13] = root_ang_vel
-
-        if motion_command.motion.has_object:  # type: ignore[has-type]
-            # set object root_states from motion command
-            object_pos = motion_command.object_pos_w.clone()
-            object_ori = motion_command.object_quat_w.clone()
-            object_lin_vel = motion_command.object_lin_vel_w.clone()
-
-            object_states = torch.zeros(len(env_ids), 13, device=self.device)
-            object_states[:, :3] = object_pos[:]
-            object_states[:, 3:7] = object_ori[:]
-            object_states[:, 7:10] = object_lin_vel[:]
-            object_states[:, 10:13] = torch.zeros_like(object_lin_vel[:])
-            object_name = motion_command.object_name  # type: ignore[has-type]
-            self.simulator.set_actor_states([object_name], env_ids, object_states)
-
-        self.simulator.forward_kinematics()
-        self.simulator.sim.render()  # type: ignore[attr-defined]
-
-        time.sleep(dt)
-
-        result: bool = (
-            motion_command.time_steps[0].item() >= motion_command.motion.time_step_total - 2  # type: ignore[has-type]
-        )
-        return result

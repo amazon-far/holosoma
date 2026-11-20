@@ -1,29 +1,15 @@
-from __future__ import annotations
+#!/usr/bin/env python3
+"""Replay a whole-body-tracking motion: ``holosoma`` with ``SimulationTask.replay`` as the task."""
 
-from typing import TYPE_CHECKING, cast
+import sys
 
-from holosoma.config_types.experiment import ExperimentConfig
-
-if TYPE_CHECKING:
-    from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
-
-
-def replay(tyro_config: ExperimentConfig) -> None:
-    with tyro_config.create_task() as task:
-        env = cast("WholeBodyTrackingManager", task)
-        done = False
-        while not done:
-            env.simulator.sim.step()  # type: ignore[attr-defined]
-            done = env.step_visualize_motion(None)
+from holosoma.cli import explicit_task, run
+from holosoma.config_types.experiment import REPLAY
 
 
 def main() -> None:
-    from holosoma.config_values.experiment import get_annotated_experiment_config
-    from holosoma.utils.config_registry import parse_config
-
-    # Pass the factory uncalled so parse_config builds it after plugins load.
-    tyro_cfg = parse_config(get_annotated_experiment_config)
-    replay(tyro_cfg)
+    argv = sys.argv[1:]
+    run(argv if explicit_task(argv) else [f"--task={REPLAY}", *argv])
 
 
 if __name__ == "__main__":
