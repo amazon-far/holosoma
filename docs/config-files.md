@@ -66,6 +66,8 @@ The command line applies on top of a starting config that each config type build
 - **Simulate.** The interactive defaults: `sim-mujoco` with the bridge and virtual gantry on, and
   one env in the viewer at real time. With `exp:<preset>`, it is that experiment's world on the
   interactive variant of its simulator.
+  - The experiment's randomization and terminations are dropped, since they act on the policy's
+    managers.
 - **Replay.** The `exp:` preset's world with kinematic playback on, and the motion its motion
   command tracks. It plays once in the viewer at real time, then stops.
   - The experiment's randomization and terminations are dropped, since playback is kinematic.

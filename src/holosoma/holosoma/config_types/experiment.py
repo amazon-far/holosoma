@@ -117,11 +117,16 @@ class SimulationExperimentConfig(ExperimentConfig):
 
     @classmethod
     def base(cls, first: Self, exp: TrainingExperimentConfig | None) -> Self:  # noqa: ARG003
-        """The simulation defaults, or ``exp``'s world on the interactive variant of its simulator."""
+        """The simulation defaults, or ``exp``'s world on the interactive variant of its simulator.
+
+        The experiment's randomization and termination terms are dropped: they act on the policy's
+        managers, which a simulation has none of.
+        """
         default = cls()
         if exp is None:
             return default
-        env = dataclasses.replace(exp.env, simulator=holosoma.config_values.simulator.interactive(exp.env.simulator))
+        simulator = holosoma.config_values.simulator.interactive(exp.env.simulator)
+        env = dataclasses.replace(exp.env, simulator=simulator, randomization=None, termination=None)
         run = dataclasses.replace(default.run, project=exp.run.project, name=exp.run.name)
         return cls(env=env, run=run)
 

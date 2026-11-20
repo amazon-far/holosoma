@@ -75,3 +75,14 @@ def test_replay_base_plays_the_experiment_motion_kinematically() -> None:
     assert (base.env.randomization, base.env.termination) == (None, None)
     with pytest.raises(SystemExit, match="motion command"):
         ReplayExperimentConfig.base(first, experiment.g1_29dof)
+
+
+def test_simulation_base_puts_the_experiment_world_on_its_interactive_simulator() -> None:
+    from holosoma.config_values import experiment
+
+    base = SimulationExperimentConfig.base(SimulationExperimentConfig(), experiment.g1_29dof)
+
+    assert base.env.robot == experiment.g1_29dof.env.robot
+    assert base.env.simulator.config.bridge.enabled and base.env.simulator.config.virtual_gantry.enabled
+    assert (base.env.randomization, base.env.termination) == (None, None)
+    assert (base.run.num_envs, base.run.project) == (1, experiment.g1_29dof.run.project)
