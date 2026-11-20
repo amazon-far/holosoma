@@ -1,6 +1,12 @@
 # syntax=docker/dockerfile:1.7
 # Inference dependencies are installed from metadata at the final source path;
 # Python-only changes add one linked source layer.
+
+# Prebuilt ONNX Runtime for the native core. CI passes the mirror unpacked by
+# scripts/fetch_onnxruntime.sh with --build-context onnxruntime=<dir>; without
+# it this is empty and CMake downloads ONNX Runtime itself.
+FROM scratch AS onnxruntime
+
 FROM ros:humble AS dependencies
 
 ENV ROS_DISTRO=humble
@@ -17,6 +23,10 @@ RUN bash -c "$(curl -fsSL https://raw.githubusercontent.com/ohmybash/oh-my-bash/
 
 # uv resolves the CMake-backed Python package and its build dependencies.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Kept in the image so later editable reinstalls find it too.
+COPY --from=onnxruntime / /opt/onnxruntime/
+ENV ONNXRUNTIME_ROOT=/opt/onnxruntime
 
 # Install editable metadata against a placeholder at the final source path.
 COPY src/holosoma_inference/pyproject.toml src/holosoma_inference/README.md \

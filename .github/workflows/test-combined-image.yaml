@@ -75,9 +75,14 @@ jobs:
           container=$(docker create "$COMBINED_IMAGE")
           trap 'docker rm -f "$container" >/dev/null' EXIT
           docker cp "${container}:/workspace/holosoma/." "$GITHUB_WORKSPACE"
+      - name: Fetch ONNX Runtime
+        run: bash scripts/fetch_onnxruntime.sh "$RUNNER_TEMP/onnxruntime"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build C++ test image
         run: |
-          docker build \
+          docker buildx build --load \
+            --build-context onnxruntime="$RUNNER_TEMP/onnxruntime" \
             -f src/holosoma_inference/holosoma_cpp/docker/Dockerfile.test \
             -t holosoma-cpp-test .
       - name: Run C++ tests

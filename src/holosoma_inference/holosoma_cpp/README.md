@@ -29,6 +29,12 @@ Use `-DONNXRUNTIME_ROOT=/path/to/onnxruntime` for a local ONNX Runtime and
 `-DHOLOSOMA_FETCH_DEPENDENCIES=OFF` to forbid downloads. On macOS only the core library and the
 tests build (Unitree SDK2 ships Linux binaries only).
 
+The ONNX Runtime download comes from GitHub release assets, which have returned 404 since
+2026-11-17. CI uses a mirror instead: `scripts/fetch_onnxruntime.sh DEST` unpacks it (this needs
+read access to the holosoma assets bucket), and `ONNXRUNTIME_ROOT=DEST` points the build at it.
+Without that access, set `ONNXRUNTIME_ROOT` to any ONNX Runtime 1.30.0 SDK with `include/` and
+`lib/`.
+
 ## Run
 
 The binary takes the Python presets and flags (`inference:<preset>`, `--task.*`, `--robot.*`,

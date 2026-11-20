@@ -1,6 +1,12 @@
 # syntax=docker/dockerfile:1.7
 # Combined development image with every Holosoma environment. Dependencies are
 # installed with the native core; Python-only changes reuse this layer.
+
+# Prebuilt ONNX Runtime for the native core. CI passes the mirror unpacked by
+# scripts/fetch_onnxruntime.sh with --build-context onnxruntime=<dir>; without
+# it this is empty and CMake downloads ONNX Runtime itself.
+FROM scratch AS onnxruntime
+
 FROM nvcr.io/nvidia/isaac-sim:5.1.0 AS dependencies
 
 USER root
@@ -29,6 +35,10 @@ RUN curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -
 
 RUN echo ". $CONDA_ROOT/etc/profile.d/conda.sh" >> ~/.bashrc && \
     conda config --set always_yes true
+
+# Kept in the image so later editable reinstalls find it too.
+COPY --from=onnxruntime / /opt/onnxruntime/
+ENV ONNXRUNTIME_ROOT=/opt/onnxruntime
 
 # Install editable package metadata at the final source paths. The runtime
 # stage supplies the implementation without rerunning package installation.

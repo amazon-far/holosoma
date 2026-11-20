@@ -83,6 +83,8 @@ else()
 endif()
 
 # --- ONNX Runtime --------------------------------------------------------------
+# GitHub's release assets have returned 404 since 2026-11-17; CI sets
+# ONNXRUNTIME_ROOT from scripts/fetch_onnxruntime.sh, which pins the same version.
 set(HOLOSOMA_ONNXRUNTIME_VERSION "1.30.0" CACHE STRING "ONNX Runtime release downloaded when none is found")
 find_package(ONNXRuntime QUIET)
 if(NOT ONNXRuntime_FOUND)
