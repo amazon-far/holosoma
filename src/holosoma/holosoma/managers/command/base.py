@@ -39,3 +39,16 @@ class CommandTermBase(ABC):
     @abstractmethod
     def step(self) -> None:
         """Per-step hook called during simulation rollout."""
+
+    resets_robot: bool = False
+    """Whether this term writes the robot's reset state itself, so the task's default reset is skipped."""
+
+    def after_reset(self, env_ids: Tensor) -> None:  # noqa: B027
+        """Hook called after reset writes are synchronized, before observations are computed."""
+
+    def on_evaluate(self) -> None:  # noqa: B027
+        """Hook called once when the task switches to evaluation."""
+
+    def log_metrics(self) -> dict[str, Any]:
+        """Per-frame values to log."""
+        return {}

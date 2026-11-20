@@ -120,10 +120,10 @@ def test_replay_interrupt_closes_environment_before_app(monkeypatch: pytest.Monk
     app = _patch_app_close(monkeypatch, events)
     previous_sigterm = signal.getsignal(signal.SIGTERM)
 
-    def stop_replay(_motion: Any) -> bool:
+    def stop_replay(_env: Any) -> bool:
         raise KeyboardInterrupt
 
-    env.step_visualize_motion = stop_replay  # type: ignore[attr-defined]
+    monkeypatch.setattr(replay_module, "step_visualize_motion", stop_replay)
     config = _patch_session(monkeypatch, env, app)
 
     with pytest.raises(KeyboardInterrupt):

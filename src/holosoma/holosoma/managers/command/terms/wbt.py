@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 from holosoma.config_types.command import MotionConfig, NoiseToInitialPoseConfig
-from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.command.base import CommandTermBase
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.file_cache import cached_open
@@ -536,7 +536,7 @@ def get_filtered_body_names(body_list: list[str], pattern: str) -> list[str]:
 
 
 class MotionCommand(CommandTermBase):
-    def __init__(self, cfg: Any, env: WholeBodyTrackingManager):
+    def __init__(self, cfg: Any, env: PolicyTask):
         super().__init__(cfg, env)
 
         self._env = env
@@ -826,6 +826,16 @@ class MotionCommand(CommandTermBase):
         ### must not decay/fold failure stats into the training sampler).
         if self.motion_cfg.use_adaptive_timesteps_sampler and not self._env.is_evaluating:
             self.adaptive_timesteps_sampler.update_bin_failed_count()
+
+    resets_robot = True
+
+    def after_reset(self, env_ids: torch.Tensor) -> None:
+        # A reset does not step, so refresh the targets the observations and terminations read.
+        self.update_relative_body_targets()
+
+    def log_metrics(self) -> dict[str, Any]:
+        self.update_metrics()
+        return self.metrics
 
     def update_relative_body_targets(self) -> None:
         """Recompute the tracked bodies' target poses for the current motion frame and robot pose.
