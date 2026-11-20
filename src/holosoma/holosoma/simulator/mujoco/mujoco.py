@@ -259,7 +259,7 @@ class MuJoCo(BaseSimulator):
         logger.info("=== Loading assets ===")
 
         # Create scene manager
-        self.scene_manager = MujocoSceneManager(self.simulator_config)  # type: ignore[arg-type]
+        self.scene_manager = MujocoSceneManager(self.simulator_config)
         self._setup_scene()
 
         # Compile once at the end

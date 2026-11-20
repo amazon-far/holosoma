@@ -163,14 +163,6 @@ def native_state(sim, backend):
             sim.backend.qvel_t[:, vel_ids.tolist()].clone(),
             wp.to_torch(sim.backend.mjw_data.xpos)[:, bodies].clone(),
         )
-    if backend == "isaacgym":
-        from isaacgym import gymtorch
-
-        joint_ids = [sim.gym.get_asset_dof_names(sim.robot_asset).index(name) for name in JOINTS]
-        body_ids = [sim.gym.get_asset_rigid_body_names(sim.robot_asset).index(name) for name in BODIES]
-        dofs = gymtorch.wrap_tensor(sim.gym.acquire_dof_state_tensor(sim.sim)).view(sim.num_envs, 3, 2)
-        bodies = gymtorch.wrap_tensor(sim.gym.acquire_rigid_body_state_tensor(sim.sim)).view(sim.num_envs, -1, 13)
-        return dofs[:, joint_ids, 0].clone(), dofs[:, joint_ids, 1].clone(), bodies[:, body_ids, :3].clone()
     robot = sim._robot
     joint_ids = [robot.joint_names.index(name) for name in JOINTS]
     body_ids = [robot.body_names.index(name) for name in BODIES]
