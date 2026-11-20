@@ -1,15 +1,20 @@
 # Running from a config file
 
 The `holosoma` command (also `python -m holosoma`) launches every workflow. The `task:<name>`
-selection (on the command line, or `task: <name>` under a document's `arguments`) selects a workflow task from `TASK_REGISTRY`; every task reads the same config type,
-`HolosomaConfig`, where `env_class` names the environment the task builds and drives:
+selection (on the command line, or `task: <name>` under a document's `arguments`) picks an entry
+from `TASK_REGISTRY`. Every task reads the same config type, `HolosomaConfig`. The task entry
+names the runner class that drives the workflow and the environment base that the config's
+`env_class` must be or subclass:
 
-| `task` | Runs | Environment class | Alias |
-|---|---|---|---|
-| `sim` (default) | the simulation loop, no policy | `SimulationTask` | `run_sim` |
-| `train` | training | `PolicyTask` | `train_agent` |
-| `eval` | checkpoint evaluation | `PolicyTask` | `eval_agent` |
-| `replay` | motion replay | `WholeBodyTrackingManager` | `replay` |
+| `task` | Runs | Runner | Environment base | Alias |
+|---|---|---|---|---|
+| `sim` (default) | the simulation loop, no policy | `SimTask` | `SimulationTask` | `run_sim` |
+| `train` | training | `TrainTask` | `PolicyTask` | `train_agent` |
+| `eval` | checkpoint evaluation | `EvalTask` | `PolicyTask` | `eval_agent` |
+| `replay` | motion replay | `ReplayTask` | `WholeBodyTrackingManager` | `replay` |
+
+`train` and `eval` drive the same kind of environment, so eval can rebuild the one a checkpoint
+was trained in from its saved config.
 
 The aliases (`python -m holosoma.run_sim`, `holosoma.train_agent`, `holosoma.eval_agent`,
 `holosoma.replay`, or the same files run as scripts) are `holosoma` with that task selected and
@@ -98,23 +103,23 @@ reads the same way; each task owns the rest under `task`:
 | `run` | `num_envs`, `headless`, `seed`, `torch_deterministic`, `device`, `time_scale`, `viewer_update_decimation` |
 | `task` (train) | `resume_from`, `teacher_checkpoint`, `multigpu` |
 | `task` (eval) | `checkpoint`, `max_eval_steps`, `export_onnx`, `callbacks` |
+| `task` (sim, replay) | none of their own |
 
 `run` is a selection like any other block. `run:batch` (4096 headless envs, unpaced) is the
-experiments' default and what `train` uses; `run:interactive` (one env in the viewer at real time)
-is the `sim` preset's and `replay` selects it unless the arguments select a `run:`. `eval` defaults
-to `run:interactive` with the checkpoint's `seed` and `torch_deterministic`; selecting a `run:`
-replaces that too.
-`--run.*` flags apply on top of either.
+experiments' default and what `train` uses. `run:interactive` (one env in the viewer at real time)
+is what `sim` starts from, and `replay` selects it unless the arguments select a `run:`. `eval`
+defaults to `run:interactive` with the checkpoint's `seed` and `torch_deterministic`; selecting a
+`run:` replaces that too. `--run.*` flags apply on top of either.
 
 Settings that used to live under `training` still work under their old spelling, with a warning
 naming the new one: `training.{num_envs, headless, seed, torch_deterministic}` and
 top-level `device`, `time_scale` and `viewer_*` → `run.*`; `training.{project, name}` and
-`logger.project` → `project`/`name`; `logger.name` (the W&B run name) → `logger.display_name`; `training.checkpoint` →
-`task.resume_from`; `training.{teacher_checkpoint, multigpu, max_eval_steps, export_onnx}` →
+`logger.project` → `project`/`name`; `logger.name` (the W&B run name) → `logger.display_name`;
+`training.checkpoint` → `task.resume_from`; `training.{teacher_checkpoint, multigpu, max_eval_steps, export_onnx}` →
 `task.*`; `--checkpoint` → `--task.checkpoint`. Checkpoints saved with the old layout load
-unchanged. `eval_overrides.*` is ignored with a warning: eval applies its defaults (the interactive run,
-logger off, deterministic spawn) to the checkpoint's config before the command line, so set
-the field itself instead.
+unchanged. `eval_overrides.*` is ignored with a warning: eval applies its defaults (the
+interactive run, logger off, deterministic spawn) to the checkpoint's config before the command
+line, so set the field itself instead.
 
 ## Rules
 
@@ -123,7 +128,8 @@ the field itself instead.
   not have is rejected.
 - **Experiment.** For `train` and `replay`, `exp: <preset>` is passed first wherever it
   appears. `eval` takes its experiment from the checkpoint (`task.checkpoint`, also accepted
-  as `--checkpoint`), so its documents hold overrides and other selections only.
+  as `--checkpoint`), so its documents hold overrides and other selections only. `sim` starts
+  from its own base config and takes no `exp:`.
 - **Errors.** When the command line parser rejects a value that came from a document, the
   message ends with the file and key it came from.
 - **Tooling.** `--print-args` prints the command line a run expands to and `--to-config` prints
