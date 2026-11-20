@@ -171,7 +171,7 @@ class TerrainLocomotion(TerrainTermBase):
         """Get base heights from the terrain."""
         idx = env_ids if env_ids is not None else slice(None)
         base_positions = quat_apply_yaw(
-            self.env.base_quat[idx].repeat(1, self._num_base_height_points),
+            self.env.simulator.base_quat[idx].repeat(1, self._num_base_height_points),
             self._base_height_points[idx],
             True,
         ) + (self.env.simulator.robot_root_states[idx, :3]).unsqueeze(1)

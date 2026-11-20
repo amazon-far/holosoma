@@ -168,10 +168,6 @@ class PolicyTask(BaseTask):
             commands[:] = torch.as_tensor(command, device=self.device, dtype=commands.dtype).view(1, -1)
 
     @property
-    def base_quat(self) -> torch.Tensor:
-        return self.simulator.base_quat
-
-    @property
     def average_episode_length(self) -> float:
         avg = self._get_average_episode_tracker().get_average()
         return float(avg.detach().cpu().item())

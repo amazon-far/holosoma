@@ -202,7 +202,7 @@ def penalty_close_feet_xy(env: PolicyTask, close_feet_threshold: float = 0.05) -
     right_foot_xy = env.simulator._rigid_body_pos[:, env.feet_indices[1], :2]
 
     # Get base orientation
-    base_forward = quat_apply(env.base_quat, base_forward_vector(env), w_last=True)
+    base_forward = quat_apply(env.simulator.base_quat, base_forward_vector(env), w_last=True)
     base_yaw = torch.atan2(base_forward[:, 1], base_forward[:, 0])
 
     # Calculate perpendicular distance in base-local coordinates

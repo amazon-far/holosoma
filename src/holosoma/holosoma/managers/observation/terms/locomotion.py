@@ -18,10 +18,6 @@ if TYPE_CHECKING:
     from holosoma.managers.command.terms.locomotion import LocomotionGait
 
 
-def _base_quat(env: PolicyTask) -> torch.Tensor:
-    return env.base_quat
-
-
 def gravity_vector(env: PolicyTask, up_axis_idx: int = 2) -> torch.Tensor:
     axis = to_torch(get_axis_params(-1.0, up_axis_idx), device=env.device)
     return axis.unsqueeze(0).expand(env.num_envs, -1)
@@ -35,16 +31,16 @@ def base_forward_vector(env: PolicyTask) -> torch.Tensor:
 def get_base_lin_vel(env: PolicyTask) -> torch.Tensor:
     root_states = env.simulator.robot_root_states
     lin_vel_world = root_states[:, 7:10]
-    return quat_rotate_inverse(_base_quat(env), lin_vel_world, w_last=True)
+    return quat_rotate_inverse(env.simulator.base_quat, lin_vel_world, w_last=True)
 
 
 def get_base_ang_vel(env: PolicyTask) -> torch.Tensor:
     ang_vel_world = env.simulator.robot_root_states[:, 10:13]
-    return quat_rotate_inverse(_base_quat(env), ang_vel_world, w_last=True)
+    return quat_rotate_inverse(env.simulator.base_quat, ang_vel_world, w_last=True)
 
 
 def get_projected_gravity(env: PolicyTask) -> torch.Tensor:
-    return quat_rotate_inverse(_base_quat(env), gravity_vector(env), w_last=True)
+    return quat_rotate_inverse(env.simulator.base_quat, gravity_vector(env), w_last=True)
 
 
 def base_lin_vel(env: PolicyTask) -> torch.Tensor:
