@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import datetime
+import warnings
 from collections.abc import Sequence
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
 from loguru import logger
 
 from holosoma.managers.curriculum.base import CurriculumTermBase
+
+if TYPE_CHECKING:
+    from holosoma.managers.curriculum.manager import CurriculumManager
+
+_LEGACY_CHECKPOINT_REMOVAL_DATE = datetime.date(2027, 3, 1)
 
 
 class AverageEpisodeLengthTracker(CurriculumTermBase):
@@ -398,3 +405,31 @@ def clamp_reward_penalty(env: Any, **_: Any) -> None:
         term_cfg = env.reward_manager.get_term_cfg(name)
         scaled_cfg = replace(term_cfg, weight=original_weights[name] * current_scale)
         env.reward_manager.set_term_cfg(name, scaled_cfg)
+
+
+def convert_legacy_checkpoint_state(curriculum_manager: CurriculumManager, state: dict[str, Any]) -> dict[str, Any]:
+    """Map the pre-``curriculum`` checkpoint layout of locomotion runs onto curriculum term state."""
+
+    def term_name(term_cls: type) -> str | None:
+        return next((name for name, term in curriculum_manager.iter_terms() if isinstance(term, term_cls)), None)
+
+    curriculum: dict[str, dict[str, Any]] = {}
+    tracker_state = state.get("average_episode_tracker")
+    tracker_name = term_name(AverageEpisodeLengthTracker)
+    if tracker_state is not None and tracker_name is not None:
+        curriculum[tracker_name] = tracker_state
+    penalty_scale = state.get("reward_penalty_scale")
+    penalty_name = term_name(PenaltyCurriculum)
+    if penalty_scale is not None and penalty_name is not None:
+        curriculum[penalty_name] = {"current_scale": float(penalty_scale)}
+    if curriculum:
+        message = (
+            "This checkpoint uses the old env-state layout (top-level 'average_episode_tracker' / "
+            "'reward_penalty_scale'), which is deprecated. Re-save it to store curriculum state per term "
+            f"under 'curriculum'. Loading the old layout becomes an error after {_LEGACY_CHECKPOINT_REMOVAL_DATE}."
+        )
+        if datetime.datetime.now(tz=datetime.timezone.utc).date() > _LEGACY_CHECKPOINT_REMOVAL_DATE:
+            raise RuntimeError(message)
+        # FutureWarning: shown by default (DeprecationWarning is filtered outside __main__).
+        warnings.warn(message, FutureWarning, stacklevel=3)
+    return {**state, "curriculum": curriculum}

@@ -6,6 +6,7 @@ compatible with the reward manager system.
 
 from __future__ import annotations
 
+import weakref
 from typing import TYPE_CHECKING, cast
 
 from holosoma.managers.observation.terms.locomotion import (
@@ -15,6 +16,7 @@ from holosoma.managers.observation.terms.locomotion import (
     get_projected_gravity,
     gravity_vector,
 )
+from holosoma.managers.utils import body_indices
 from holosoma.utils.rotations import (
     quat_apply,
     quat_rotate_inverse,
@@ -24,6 +26,16 @@ from holosoma.utils.safe_torch_import import torch
 if TYPE_CHECKING:
     from holosoma.envs.policy_task import PolicyTask
     from holosoma.managers.command.terms.locomotion import LocomotionGait
+
+
+_FEET_INDICES: weakref.WeakKeyDictionary[PolicyTask, torch.Tensor] = weakref.WeakKeyDictionary()
+
+
+def _feet_indices(env: PolicyTask) -> torch.Tensor:
+    """Indices of the robot bodies named by ``robot_config.foot_body_name``, looked up once per task."""
+    if env not in _FEET_INDICES:
+        _FEET_INDICES[env] = body_indices(env, env.robot_config.foot_body_name)
+    return _FEET_INDICES[env]
 
 
 def _expected_foot_height(phi: torch.Tensor, swing_height: float) -> torch.Tensor:
@@ -98,10 +110,11 @@ def penalty_feet_ori(env: PolicyTask) -> torch.Tensor:
     Returns:
         Reward tensor [num_envs]
     """
-    left_quat = env.simulator._rigid_body_rot[:, env.feet_indices[0]]
+    feet = _feet_indices(env)
+    left_quat = env.simulator._rigid_body_rot[:, feet[0]]
     gravity = gravity_vector(env)
     left_gravity = quat_rotate_inverse(left_quat, gravity, w_last=True)
-    right_quat = env.simulator._rigid_body_rot[:, env.feet_indices[1]]
+    right_quat = env.simulator._rigid_body_rot[:, feet[1]]
     right_gravity = quat_rotate_inverse(right_quat, gravity, w_last=True)
     return (
         torch.sum(torch.square(left_gravity[:, :2]), dim=1) ** 0.5
@@ -198,8 +211,9 @@ def penalty_close_feet_xy(env: PolicyTask, close_feet_threshold: float = 0.05) -
     Returns:
         Reward tensor [num_envs]
     """
-    left_foot_xy = env.simulator._rigid_body_pos[:, env.feet_indices[0], :2]
-    right_foot_xy = env.simulator._rigid_body_pos[:, env.feet_indices[1], :2]
+    feet = _feet_indices(env)
+    left_foot_xy = env.simulator._rigid_body_pos[:, feet[0], :2]
+    right_foot_xy = env.simulator._rigid_body_pos[:, feet[1], :2]
 
     # Get base orientation
     base_forward = quat_apply(env.simulator.base_quat, base_forward_vector(env), w_last=True)
@@ -328,11 +342,8 @@ def penalty_stumble(env: PolicyTask) -> torch.Tensor:
     Returns:
         Reward tensor [num_envs]
     """
-    return torch.any(
-        torch.norm(env.simulator.contact_forces[:, env.feet_indices, :2], dim=2)
-        > 4 * torch.abs(env.simulator.contact_forces[:, env.feet_indices, 2]),
-        dim=1,
-    )
+    feet_forces = env.simulator.contact_forces[:, _feet_indices(env)]
+    return torch.any(torch.norm(feet_forces[..., :2], dim=2) > 4 * torch.abs(feet_forces[..., 2]), dim=1)
 
 
 def alive(env: PolicyTask) -> torch.Tensor:

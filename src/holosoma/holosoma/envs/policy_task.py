@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import datetime
-import warnings
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
@@ -14,6 +11,7 @@ from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.managers.action import ActionManager
 from holosoma.managers.command import CommandManager
 from holosoma.managers.curriculum import CurriculumManager
+from holosoma.managers.curriculum.terms.locomotion import convert_legacy_checkpoint_state
 from holosoma.managers.observation import ObservationManager
 from holosoma.managers.reward import RewardManager
 from holosoma.utils.safe_torch_import import torch
@@ -21,8 +19,6 @@ from holosoma.utils.sim_utils import setup_keyboard_listener
 
 if TYPE_CHECKING:
     from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker
-
-_LEGACY_CHECKPOINT_REMOVAL_DATE = datetime.date(2027, 3, 1)
 
 
 class PolicyTask(BaseTask):
@@ -95,7 +91,7 @@ class PolicyTask(BaseTask):
         if not state:
             return
         if "curriculum" not in state:
-            state = self._convert_legacy_checkpoint_state(state)
+            state = convert_legacy_checkpoint_state(self.curriculum_manager, state)
         curriculum_state = state.get("curriculum")
         if not curriculum_state:
             return
@@ -124,36 +120,6 @@ class PolicyTask(BaseTask):
         if torch.distributed.get_rank() != 0:
             self.curriculum_manager.load_state_dict(payload[0])
 
-    def _convert_legacy_checkpoint_state(self, state: dict[str, Any]) -> dict[str, Any]:
-        """Map the pre-``curriculum`` checkpoint layout onto curriculum term state."""
-        from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker, PenaltyCurriculum
-
-        def term_name(term_cls: type) -> str | None:
-            return next(
-                (name for name, term in self.curriculum_manager.iter_terms() if isinstance(term, term_cls)), None
-            )
-
-        curriculum: dict[str, dict[str, Any]] = {}
-        tracker_state = state.get("average_episode_tracker")
-        tracker_name = term_name(AverageEpisodeLengthTracker)
-        if tracker_state is not None and tracker_name is not None:
-            curriculum[tracker_name] = tracker_state
-        penalty_scale = state.get("reward_penalty_scale")
-        penalty_name = term_name(PenaltyCurriculum)
-        if penalty_scale is not None and penalty_name is not None:
-            curriculum[penalty_name] = {"current_scale": float(penalty_scale)}
-        if curriculum:
-            message = (
-                "This checkpoint uses the old env-state layout (top-level 'average_episode_tracker' / "
-                "'reward_penalty_scale'), which is deprecated. Re-save it to store curriculum state per term "
-                f"under 'curriculum'. Loading the old layout becomes an error after {_LEGACY_CHECKPOINT_REMOVAL_DATE}."
-            )
-            if datetime.datetime.now(tz=datetime.timezone.utc).date() > _LEGACY_CHECKPOINT_REMOVAL_DATE:
-                raise RuntimeError(message)
-            # FutureWarning: shown by default (DeprecationWarning is filtered outside __main__).
-            warnings.warn(message, FutureWarning, stacklevel=4)
-        return {**state, "curriculum": curriculum}
-
     def set_is_evaluating(self, command: Any = None) -> None:
         """Switch to evaluation, called by the agent before evaluating a policy.
 
@@ -171,21 +137,6 @@ class PolicyTask(BaseTask):
     def average_episode_length(self) -> float:
         avg = self._get_average_episode_tracker().get_average()
         return float(avg.detach().cpu().item())
-
-    def _setup_robot_body_indices(self) -> None:
-        super()._setup_robot_body_indices()
-        foot_body_names = [s for s in self.body_names if self.robot_config.foot_body_name in s]
-        foot_height_names = [s for s in self.body_names if self.robot_config.foot_height_name in s]
-        self.feet_indices = torch.tensor(
-            [self.simulator.find_rigid_body_indice(name) for name in foot_body_names],
-            dtype=torch.long,
-            device=self.device,
-        )
-        self.feet_height_indices = torch.tensor(
-            [self.simulator.find_rigid_body_indice(name) for name in foot_height_names],
-            dtype=torch.long,
-            device=self.device,
-        )
 
     # ------------------------------------------------------------------
     # Reset hooks
@@ -212,33 +163,11 @@ class PolicyTask(BaseTask):
         self.command_manager.reset(env_ids)
         self.curriculum_manager.reset(env_ids)
 
-    def _reset_buffers_callback(
-        self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
-    ) -> None:
-        super()._reset_buffers_callback(env_ids)
-        if target_buf is not None:
-            self.simulator.dof_pos[env_ids] = target_buf["dof_pos"].to(self.simulator.dof_pos.dtype)
-            self.simulator.dof_vel[env_ids] = target_buf["dof_vel"].to(self.simulator.dof_vel.dtype)
-            self.episode_length_buf[env_ids] = target_buf["episode_length_buf"].to(self.episode_length_buf.dtype)
-            self.reset_buf[env_ids] = target_buf["reset_buf"].to(self.reset_buf.dtype)
-            self.time_out_buf[env_ids] = target_buf["time_out_buf"].to(self.time_out_buf.dtype)
-            self._pending_episode_update_mask[env_ids] = False
-            self._pending_episode_lengths[env_ids] = 0
-
-    def _reset_robot_states_callback(
-        self, env_ids: torch.Tensor, target_states: Mapping[str, torch.Tensor] | None = None
-    ) -> None:
-        """Reset the robot unless a command term resets it; target root positions are relative to env origins."""
+    def _reset_robot_states_callback(self, env_ids: torch.Tensor, target_states: dict[str, Any] | None = None) -> None:
+        """Reset the robot unless a command term resets it."""
         if self.command_manager.resets_robot:
             return
-        if target_states is not None:
-            root_states = target_states["root_states"].clone()
-            root_states[:, :3] += self._get_env_origins()[env_ids]
-            super()._reset_robot_states_callback(
-                env_ids, {"root_states": root_states, "dof_states": target_states["dof_states"]}
-            )
-            return
-        super()._reset_robot_states_callback(env_ids)
+        super()._reset_robot_states_callback(env_ids, target_states)
 
     def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
         self.command_manager.after_reset(env_ids)

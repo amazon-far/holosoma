@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from holosoma.managers.terrain.base import TerrainTermBase
+from holosoma.managers.utils import body_indices
 from holosoma.simulator.shared.terrain import Terrain
 from holosoma.utils import draw, warp_utils
 from holosoma.utils.rotations import quat_apply_yaw
@@ -66,25 +67,12 @@ class TerrainLocomotion(TerrainTermBase):
         )
         self._offset_pos = torch.tensor(list(ATTACHMENT_POS), device=self.device)
 
-        if hasattr(self.env, "feet_height_indices"):
-            # Environment requires feet heights
-            self._compute_feet_heights = True
-            self._feet_heights = torch.zeros(
-                self.num_envs, len(self.env.feet_height_indices), device=self.device, requires_grad=False
-            )
-            self._ray_directions_feet = torch.zeros(
-                self.num_envs, len(self.env.feet_height_indices), 3, device=self.device, requires_grad=False
-            )
-            self._ray_directions_feet[..., :] = torch.tensor([0.0, 0.0, -1.0], device=self.device)
-            self._ray_hits_world_feet = torch.zeros(
-                self.num_envs, len(self.env.feet_height_indices), 3, device=self.device, requires_grad=False
-            )
-        else:
-            # Initialize not-used feet heights tensors with empty tensors
-            self._compute_feet_heights = False
-            self._feet_heights = torch.zeros(0, device=self.device, requires_grad=False)
-            self._ray_directions_feet = torch.zeros(0, 0, 3, device=self.device, requires_grad=False)
-            self._ray_hits_world_feet = torch.zeros(0, 0, 3, device=self.device, requires_grad=False)
+        self._feet_height_indices = body_indices(self.env, self.env.robot_config.foot_height_name)
+        num_feet = len(self._feet_height_indices)
+        self._feet_heights = torch.zeros(self.num_envs, num_feet, device=self.device, requires_grad=False)
+        self._ray_directions_feet = torch.zeros(self.num_envs, num_feet, 3, device=self.device, requires_grad=False)
+        self._ray_directions_feet[..., :] = torch.tensor([0.0, 0.0, -1.0], device=self.device)
+        self._ray_hits_world_feet = torch.zeros(self.num_envs, num_feet, 3, device=self.device, requires_grad=False)
 
     @property
     def env_origins(self) -> torch.Tensor:
@@ -107,7 +95,7 @@ class TerrainLocomotion(TerrainTermBase):
         self._base_heights[idx], self._ray_hits_world_base[idx] = self._get_base_heights(env_ids)
 
     def update_feet_heights(self, env_ids: torch.Tensor | None = None) -> None:
-        if not self._compute_feet_heights:
+        if not len(self._feet_height_indices):
             return
         idx = env_ids if env_ids is not None else slice(None)
         self._feet_heights[idx], self._ray_hits_world_feet[idx] = self._get_feet_heights(env_ids)
@@ -186,7 +174,7 @@ class TerrainLocomotion(TerrainTermBase):
     def _get_feet_heights(self, env_ids: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
         """Get feet heights from the terrain."""
         idx = env_ids if env_ids is not None else slice(None)
-        foot_positions = self.env.simulator._rigid_body_pos[idx, self.env.feet_height_indices, :].clone()
+        foot_positions = self.env.simulator._rigid_body_pos[idx, self._feet_height_indices, :].clone()
         ray_starts_world = foot_positions + self._offset_pos[None, None, ...]
         ray_directions_world = self._ray_directions_feet[idx]
         ray_hits_world = warp_utils.ray_cast(ray_starts_world, ray_directions_world, self.warp_mesh)
@@ -275,7 +263,6 @@ class TerrainLocomotion(TerrainTermBase):
         for j in range(self._num_base_height_points):
             position = self._ray_hits_world_base[env_id, j].detach().cpu().numpy()
             draw.draw_sphere(self.env.simulator, position, 0.02, (1, 0, 0), env_id)
-        if self._compute_feet_heights:
-            for j in range(len(self.env.feet_height_indices)):
-                position = self._ray_hits_world_feet[env_id, j].detach().cpu().numpy()
-                draw.draw_sphere(self.env.simulator, position, 0.02, (0, 1, 0), env_id)
+        for j in range(len(self._feet_height_indices)):
+            position = self._ray_hits_world_feet[env_id, j].detach().cpu().numpy()
+            draw.draw_sphere(self.env.simulator, position, 0.02, (0, 1, 0), env_id)
