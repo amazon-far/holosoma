@@ -127,20 +127,15 @@ def _run_eval_session(
 
 
 def _eval_config(saved: HolosomaConfig) -> HolosomaConfig:
-    """``saved`` with evaluation's defaults: the interactive run (keeping the saved seed), logger off,
-    deterministic spawn, no time limit.
+    """The checkpoint's experiment with evaluation's run and logger.
 
-    The command line is parsed on top, so any of these can still be overridden.
+    The experiment gets a deterministic spawn and no time limit; the run is interactive with the
+    saved seed; the logger is off. The command line is parsed on top, so any of these can be
+    overridden.
     """
     spawn = dataclasses.replace(saved.terrain.terrain_term.spawn, randomize_tiles=False, xy_offset_range=0.0)
-    run = dataclasses.replace(
-        holosoma.config_values.run.interactive,
-        seed=saved.run.seed,
-        torch_deterministic=saved.run.torch_deterministic,
-    )
-    return dataclasses.replace(
+    experiment = dataclasses.replace(
         saved,
-        run=run,
         terrain=dataclasses.replace(
             saved.terrain, terrain_term=dataclasses.replace(saved.terrain.terrain_term, spawn=spawn)
         ),
@@ -151,8 +146,13 @@ def _eval_config(saved: HolosomaConfig) -> HolosomaConfig:
                 sim=dataclasses.replace(saved.simulator.config.sim, max_episode_length_s=100000.0),
             ),
         ),
-        logger=holosoma.config_values.logger.disabled,
     )
+    run = dataclasses.replace(
+        holosoma.config_values.run.interactive,
+        seed=saved.run.seed,
+        torch_deterministic=saved.run.torch_deterministic,
+    )
+    return HolosomaConfig.from_experiment(experiment, run=run, logger=holosoma.config_values.logger.disabled)
 
 
 _LEGACY_CALLBACK_PREFIXES = ("--recording.", "--push.", "--payload.")

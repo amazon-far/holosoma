@@ -11,12 +11,13 @@ pytest.importorskip("mujoco")
 
 pytestmark = pytest.mark.mujoco_classic
 
+from holosoma.config_types.experiment import HolosomaConfig  # noqa: E402
 from holosoma.config_values import experiment  # noqa: E402
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY  # noqa: E402
 
 
 def test_full_reset_keeps_the_setup_joint_position_bias():
-    preset = experiment.g1_29dof
+    preset = HolosomaConfig.from_experiment(experiment.g1_29dof)
     terms = dict(preset.randomization.setup_terms)
     bias_term = terms["setup_dof_pos_bias"]
     terms["setup_dof_pos_bias"] = dataclasses.replace(bias_term, params={**bias_term.params, "enabled": True})

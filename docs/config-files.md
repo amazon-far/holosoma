@@ -92,14 +92,21 @@ arguments:
   simulator: isaacsim
 ```
 
-## Run and task settings
+## Experiment, task and run
 
-`project` and `name` file the run (its log directory and W&B project); `run` holds what every task
-reads the same way; each task owns the rest under `task`:
+`HolosomaConfig` is an `ExperimentConfig` plus what this invocation does with it:
+
+- **Experiment** (`ExperimentConfig`, chosen with `exp:`): what is run. That is the environment
+  class, robot, simulator, terrain, scene, sensors, plugins, managers and `algo`, and the
+  `project` and `name` the run is filed under. Eval restores it from the checkpoint.
+- **Task** (`task:`): what is done with it, plus that task's own fields.
+- **Run** (`run:`): how it executes. `logger:` sits next to it.
+
+Every field keeps its flat path (`--robot…`, `--task.checkpoint`, `--run.seed`):
 
 | Block | Fields |
 |---|---|
-| top level | `project`, `name` |
+| top level (experiment) | `project`, `name` |
 | `run` | `num_envs`, `headless`, `seed`, `torch_deterministic`, `device`, `time_scale`, `viewer_update_decimation` |
 | `task` (train) | `resume_from`, `teacher_checkpoint`, `multigpu` |
 | `task` (eval) | `checkpoint`, `max_eval_steps`, `export_onnx`, `callbacks` |

@@ -19,6 +19,7 @@ from typing import cast
 if sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
 
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_values import experiment
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
 from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
@@ -35,7 +36,7 @@ def main() -> int:
     parser.add_argument("--result-file", type=Path)
     args = parser.parse_args()
 
-    preset = experiment.g1_29dof_wbt
+    preset = HolosomaConfig.from_experiment(experiment.g1_29dof_wbt)
     tyro_config = dataclasses.replace(
         preset,
         simulator=SIMULATOR_REGISTRY[args.simulator],

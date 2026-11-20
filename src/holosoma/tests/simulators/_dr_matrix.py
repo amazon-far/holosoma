@@ -25,6 +25,7 @@ from typing import Protocol, cast
 
 import torch
 
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.managers.randomization.terms import locomotion as L
 from holosoma.managers.randomization.terms import objects as O
 from holosoma.simulator.shared.object_registry import ObjectType
@@ -78,7 +79,7 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
     from tests.simulators._scene_presets import free_and_static
 
     seeding(seed)
-    base = experiment.g1_29dof
+    base = HolosomaConfig.from_experiment(experiment.g1_29dof)
     cfg = dataclasses.replace(
         base,
         simulator=simulator_cfg,

@@ -2,7 +2,7 @@ from typing import Annotated
 
 import tyro
 
-from holosoma.config_types.experiment import HolosomaConfig
+from holosoma.config_types.experiment import ExperimentConfig, HolosomaConfig
 from holosoma.config_values import run, simulator, task
 from holosoma.config_values.loco.g1.experiment import g1_29dof, g1_29dof_fast_sac
 from holosoma.config_values.loco.t1.experiment import t1_29dof, t1_29dof_fast_sac
@@ -14,7 +14,7 @@ from holosoma.config_values.wbt.g1.experiment import (
 )
 from holosoma.utils.config_registry import ConfigRegistry
 
-EXPERIMENT_REGISTRY = ConfigRegistry(HolosomaConfig, group="holosoma.config.experiment")
+EXPERIMENT_REGISTRY = ConfigRegistry(ExperimentConfig, group="holosoma.config.experiment")
 
 EXPERIMENT_REGISTRY.add("g1_29dof", g1_29dof)
 EXPERIMENT_REGISTRY.add("g1_29dof_fast_sac", g1_29dof_fast_sac)
@@ -35,13 +35,18 @@ sim = HolosomaConfig(
 bridge and gantry on, in the viewer at real time."""
 
 
+def _as_holosoma_config(experiment: ExperimentConfig) -> HolosomaConfig:
+    """``experiment`` with the default task, run and logger; a full config is kept as registered."""
+    return experiment if isinstance(experiment, HolosomaConfig) else HolosomaConfig.from_experiment(experiment)
+
+
 def get_annotated_experiment_config() -> type:
-    """Return the ``exp:`` subcommand type."""
+    """Return the ``exp:`` subcommand type: each experiment preset as a full ``HolosomaConfig``."""
     return Annotated[  # type: ignore[return-value]  # Annotated[...] alias; mypy models it as object
         HolosomaConfig,
         tyro.conf.arg(
             constructor=tyro.extras.subcommand_type_from_defaults(
-                {f"exp:{k.replace('_', '-')}": v for k, v in EXPERIMENT_REGISTRY.items()}
+                {f"exp:{k.replace('_', '-')}": _as_holosoma_config(v) for k, v in EXPERIMENT_REGISTRY.items()}
             )
         ),
     ]

@@ -13,6 +13,7 @@ import pytest
 import holosoma.tasks.eval as eval_agent
 import holosoma.tasks.replay as replay_module
 import holosoma.tasks.train as train_agent
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_types.run import RunConfig
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.simulator import session
@@ -236,6 +237,6 @@ def test_create_task_rejects_an_env_class_the_task_cannot_drive_before_building_
     monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.MUJOCO)
     monkeypatch.setattr(session, "get_class", lambda _target: _Rejected)
 
-    config = dataclasses.replace(experiment.g1_29dof, task=TASK_REGISTRY[task])
+    config = dataclasses.replace(HolosomaConfig.from_experiment(experiment.g1_29dof), task=TASK_REGISTRY[task])
     with pytest.raises(TypeError, match=f"not a {required} subclass"), config.create_task():
         pass

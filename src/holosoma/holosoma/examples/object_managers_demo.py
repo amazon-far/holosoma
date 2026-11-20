@@ -102,13 +102,14 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> HolosomaC
     The demo never calls a randomization term directly — it sets config knobs and lets the
     managers drive, then reads the results back.
     """
+    from holosoma.config_types.experiment import HolosomaConfig
     from holosoma.config_types.observation import ObsGroupCfg, ObsTermCfg
     from holosoma.config_types.randomization import RandomizationTermCfg
     from holosoma.config_values import experiment as experiment_values
     from holosoma.config_values import scene as scene_values
     from holosoma.config_values import simulator as simulator_values
 
-    base = experiment_values.g1_29dof
+    base = HolosomaConfig.from_experiment(experiment_values.g1_29dof)
     sim_cfg = getattr(simulator_values, _BACKENDS[backend][0])
     assert base.observation is not None, "g1_29dof preset must define an ObservationManager"
     assert base.randomization is not None, "g1_29dof preset must define a RandomizationManager"

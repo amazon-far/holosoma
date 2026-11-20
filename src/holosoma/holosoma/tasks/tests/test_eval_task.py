@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from holosoma.config_types.experiment import HolosomaConfig
+from holosoma.config_types.run import RunConfig
 from holosoma.config_values import experiment
 from holosoma.tasks import eval as eval_task
 from holosoma.utils.safe_torch_import import torch
@@ -17,7 +19,7 @@ def test_eval_starts_from_the_checkpoint_config_with_overrides_on_top(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str
 ) -> None:
     monkeypatch.setattr(eval_task, "init_eval_logging", lambda: None)
-    saved = dataclasses.replace(experiment.g1_29dof, run=dataclasses.replace(experiment.g1_29dof.run, seed=11))
+    saved = dataclasses.replace(HolosomaConfig.from_experiment(experiment.g1_29dof), run=RunConfig(seed=11))
     checkpoint = tmp_path / "model.pt"
     torch.save({"experiment_config": saved.to_serializable_dict()}, checkpoint)
 

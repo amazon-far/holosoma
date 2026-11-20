@@ -14,6 +14,7 @@ from omegaconf import OmegaConf
 
 from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
+from holosoma.config_types.run import RunConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
 from holosoma.tasks.eval import _eval_config
 from holosoma.utils.config_registry import parse_config
@@ -641,7 +642,7 @@ def test_saved_config_with_the_old_training_block_loads(tmp_path: Path) -> None:
     from holosoma.config_values import experiment
 
     current = replace(
-        experiment.g1_29dof, project="p", run=replace(experiment.g1_29dof.run, num_envs=7, time_scale=0.5)
+        HolosomaConfig.from_experiment(experiment.g1_29dof), project="p", run=RunConfig(num_envs=7, time_scale=0.5)
     )
     data = current.to_serializable_dict()
     run = data.pop("run")

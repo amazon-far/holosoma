@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from holosoma.config_types.experiment import HolosomaConfig, NightlyConfig
+from holosoma.config_types.experiment import ExperimentConfig, NightlyConfig
 from holosoma.config_values import (
     action,
     algo,
@@ -15,7 +15,7 @@ from holosoma.config_values import (
     terrain,
 )
 
-g1_29dof = HolosomaConfig(
+g1_29dof = ExperimentConfig(
     env_class="holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager",
     project="hv-g1-manager",
     name="g1_29dof_manager",
@@ -36,7 +36,7 @@ g1_29dof = HolosomaConfig(
     ),
 )
 
-g1_29dof_fast_sac = HolosomaConfig(
+g1_29dof_fast_sac = ExperimentConfig(
     env_class="holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager",
     project="hv-g1-manager",
     name="g1_29dof_fast_sac_manager",

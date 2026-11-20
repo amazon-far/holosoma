@@ -7,13 +7,14 @@ import dataclasses
 import pytest
 
 from holosoma.config_types.env import get_tyro_env_config
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_values import experiment
 from holosoma.config_values import simulator as simulator_values
 from holosoma.simulator.session import resolve_simulation_device
 
 pytestmark = pytest.mark.no_sim
 
-_CLASSIC = dataclasses.replace(experiment.g1_29dof, simulator=simulator_values.mujoco)
+_CLASSIC = dataclasses.replace(HolosomaConfig.from_experiment(experiment.g1_29dof), simulator=simulator_values.mujoco)
 
 
 @pytest.mark.parametrize(("device", "expected"), [(None, "cpu"), ("cuda:0", "cuda:0")])

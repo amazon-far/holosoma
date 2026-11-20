@@ -47,6 +47,8 @@ from holosoma.config_types.terrain import TerrainManagerCfg
 from holosoma.utils.config_registry import UseRegistry
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from holosoma.envs.base_task.base_task import BaseTask
 
 
@@ -62,18 +64,13 @@ class NightlyConfig:
 
 # Unknown fields are rejected, so code still passing a moved or removed field fails loudly.
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class HolosomaConfig:
-    """Top-level configuration for every workflow; ``task`` selects the workflow."""
+class ExperimentConfig:
+    """What is run: the environment, robot, simulator and learner, selected as ``exp:<preset>``.
 
-    task: Annotated[TaskConfigType, UseRegistry(holosoma.config_values.task.TASK_REGISTRY)] = (
-        holosoma.config_values.task.train
-    )
-    """Workflow to run (``task:<name>``); ``env_class`` is the environment it builds."""
+    Evaluation restores this part from a checkpoint.
+    """
 
     env_class: str = "holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager"
-
-    run: Annotated[RunConfig, UseRegistry(holosoma.config_values.run.RUN_REGISTRY)] = holosoma.config_values.run.batch
-    """How the run executes (``run:<profile>``): environment count, viewer, seed, device, pacing."""
 
     project: str = "default_project"
     """Project the run is filed under: its log and checkpoint directory and its W&B project."""
@@ -128,12 +125,9 @@ class HolosomaConfig:
     robot: Annotated[RobotConfig, UseRegistry(holosoma.config_values.robot.ROBOT_REGISTRY)] = (
         holosoma.config_values.robot.g1_29dof
     )
-    logger: Annotated[LoggerConfig, UseRegistry(holosoma.config_values.logger.LOGGER_REGISTRY)] = (
-        holosoma.config_values.logger.disabled
-    )
     nightly: NightlyConfig | None = None
 
-    def get_nightly_config(self) -> HolosomaConfig:
+    def get_nightly_config(self) -> Self:
         if self.nightly is None:
             raise ValueError("nightly config is missing.")
 
@@ -147,6 +141,29 @@ class HolosomaConfig:
                 ),
             ),
         )
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class HolosomaConfig(ExperimentConfig):
+    """Top-level configuration for every workflow: an experiment, the task run on it, and how it runs."""
+
+    task: Annotated[TaskConfigType, UseRegistry(holosoma.config_values.task.TASK_REGISTRY)] = (
+        holosoma.config_values.task.train
+    )
+    """Workflow to run (``task:<name>``); ``env_class`` is the environment it builds."""
+
+    run: Annotated[RunConfig, UseRegistry(holosoma.config_values.run.RUN_REGISTRY)] = holosoma.config_values.run.batch
+    """How the run executes (``run:<profile>``): environment count, viewer, seed, device, pacing."""
+
+    logger: Annotated[LoggerConfig, UseRegistry(holosoma.config_values.logger.LOGGER_REGISTRY)] = (
+        holosoma.config_values.logger.disabled
+    )
+
+    @classmethod
+    def from_experiment(cls, experiment: ExperimentConfig, **invocation: Any) -> HolosomaConfig:
+        """``experiment``'s fields with ``invocation`` (``task``, ``run``, ``logger``) set; defaults elsewhere."""
+        fields = {field.name: getattr(experiment, field.name) for field in dataclasses.fields(ExperimentConfig)}
+        return cls(**fields, **invocation)
 
     def create_task(self) -> AbstractContextManager[BaseTask]:
         """Return a context that builds the configured environment and owns its resources.
@@ -168,7 +185,3 @@ class HolosomaConfig:
         # Directly using yaml.safe_dump does not handle string enums properly,
         # so round-trip through JSON to coerce typing objects into primitives.
         return cast("dict[str, Any]", json.loads(json.dumps(dataclasses.asdict(self))))
-
-
-ExperimentConfig = HolosomaConfig
-"""Deprecated name for ``HolosomaConfig``."""
