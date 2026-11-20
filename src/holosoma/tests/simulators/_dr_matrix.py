@@ -83,9 +83,7 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
         base,
         simulator=simulator_cfg,
         scene=free_and_static if scene_cfg is None else scene_cfg,
-        training=dataclasses.replace(
-            base.training, num_envs=num_envs, headless=True, seed=seed, torch_deterministic=False
-        ),
+        run=dataclasses.replace(base.run, num_envs=num_envs, headless=True, seed=seed, torch_deterministic=False),
     )
     with cfg.create_task() as env:
         assert env.device == device, f"task resolved device {env.device!r}, expected {device!r}"
@@ -298,7 +296,7 @@ def run_robot_dr(env, reader: ModelReader) -> list[str]:
 def run_push_dr(env) -> None:
     """Run the push DR terms and assert a push imparts root velocity (backend-agnostic read).
 
-    Covers BOTH the reset-stage ``randomize_push_schedule`` (+ a direct ``_push_robots``) AND the
+    Covers BOTH the reset-stage ``randomize_push_schedule`` (+ a direct push) AND the
     step-stage ``apply_pushes`` (the schedule -> due-envs -> push flow that runs every step in
     training), so the registered push term — not just the manager helper — is exercised.
     """
@@ -307,7 +305,7 @@ def run_push_dr(env) -> None:
         env, idx, sampler=_sampler(env), push_interval_s=[1.0, 1.0], max_push_vel=[5.0, 5.0], enabled=True
     )
     vel_before = env.simulator.robot_root_states[:, 7:9].clone()
-    env._push_robots(idx)
+    env.randomization_manager.get_state("push_randomizer_state").push(idx)
     vel_after = env.simulator.robot_root_states[:, 7:9]
     assert (vel_after - vel_before).abs().max() > 1e-3, "push did not change root velocity"
 

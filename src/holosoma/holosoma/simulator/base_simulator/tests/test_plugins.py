@@ -7,9 +7,9 @@ from typing import Any, cast
 
 import pytest
 
-from holosoma.config_types.experiment import TrainingConfig
 from holosoma.config_types.logger import DisabledLoggerConfig
 from holosoma.config_types.plugin import NoOpPluginConfig, PluginConfig
+from holosoma.config_types.run import RunConfig
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 
@@ -92,7 +92,7 @@ class _InitializedFakeSim(BaseSimulator):
             ),
         )
         config = SimpleNamespace(
-            training=TrainingConfig(num_envs=1),
+            run=RunConfig(num_envs=1),
             simulator=sim_cfg,
             scene=SimpleNamespace(),
             sensors={},
@@ -118,7 +118,7 @@ def test_base_simulator_renders_sensors_before_constructed_consumer_plugin() -> 
 def test_empty_sensor_registry_is_available_from_real_base_initialization() -> None:
     sim = _InitializedFakeSim()
     assert sim.get_sensor_names() == []
-    assert sim.sensor_manager.num_envs == sim.training_config.num_envs
+    assert sim.sensor_manager.num_envs == sim.run_config.num_envs
     with pytest.raises(KeyError, match="No sensor named 'missing'"):
         sim.sensor_manager.get_mount_pose("missing")
     with pytest.raises(NotImplementedError, match="no camera 'missing'"):

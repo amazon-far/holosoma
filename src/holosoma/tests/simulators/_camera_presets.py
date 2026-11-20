@@ -3,7 +3,7 @@
 Scene presets are registered into the production ``scene:`` CLI menu at test time (so
 ``scene:camera-target`` resolves on the lazy tyro path). Sensor presets are plain camera dicts
 (``dict[str, CameraSensorConfig]``, keyed by sensor name) injected directly into the parsed config
-by the harness — they exercise camera *behavior*, not the per-key ``--sensor`` CLI (covered
+by the harness — they exercise camera *behavior*, not the per-key ``sensor`` CLI (covered
 elsewhere), and a multi-camera rig can't be named by a single CLI token.
 
 Geometry: robot base frame is +X forward, +Z up. An identity mount orientation looks down the
@@ -350,7 +350,7 @@ def register() -> None:
 
 
 def as_mjwarp(config):
-    """Switch a MuJoCo ``RunSimConfig`` to the Warp backend (GPU, multi-env capable)."""
+    """Switch a MuJoCo ``SimulationExperimentConfig`` to the Warp backend (GPU, multi-env capable)."""
     import dataclasses
 
     from holosoma.config_types.simulator import MujocoBackend

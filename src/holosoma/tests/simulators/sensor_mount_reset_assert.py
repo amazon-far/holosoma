@@ -29,9 +29,7 @@ def main() -> int:
     config = dataclasses.replace(
         config,
         scene=_camera_presets.panel_target,
-        device="cuda:0",
-        time_scale=0.0,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=True),
+        run=dataclasses.replace(config.run, device="cuda:0", time_scale=0.0, num_envs=args.num_envs, headless=True),
     )
     with config.create_task() as task:
         import carb

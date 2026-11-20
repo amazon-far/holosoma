@@ -3,7 +3,7 @@
 ``behavior_assert`` / ``static_move_assert`` / ``subset_write_assert`` / ``scene_spawn_assert`` each
 build a sim, step it, and check physical outcomes. The truly common pieces — the sim-time -> step
 count conversion, the per-step advance (+ optional render), and the bridge/gantry-disabled
-``RunSimConfig`` build — live here so they are defined once. The scenario-specific ``main`` flows
+``SimulationExperimentConfig`` build — live here so they are defined once. The scenario-specific ``main`` flows
 (which scenes, which asserts) stay in each harness; only the duplicated plumbing is shared.
 """
 
@@ -19,7 +19,7 @@ from typing import Any, NoReturn
 
 import tyro
 
-from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_types.experiment import SimulationExperimentConfig
 
 
 def run_and_hard_exit(main: Callable[[], int]) -> NoReturn:
@@ -67,18 +67,17 @@ def step(sim: Any, n: int, *, render: bool = False) -> None:
             sim.render()
 
 
-def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[Any, str, Any]:
+def launch_simulator(config: SimulationExperimentConfig, device: str | None = None) -> tuple[Any, str, Any]:
     """Construct the configured simulator without running its setup lifecycle.
 
     Harnesses drive ``setup -> setup_terrain -> load_assets -> create_envs -> prepare_sim``
-    themselves so they can act between stages; tasks use ``RunSimConfig.create_task()`` instead.
+    themselves so they can act between stages; tasks use ``SimulationExperimentConfig.create_task()`` instead.
 
     Returns
     -------
     tuple
         ``(simulator, device, simulation_app)``; ``simulation_app`` is None outside IsaacSim.
     """
-    from holosoma.config_types.env import get_run_sim_env_config
     from holosoma.config_types.full_sim import FullSimConfig
     from holosoma.managers.terrain.manager import TerrainManager
     from holosoma.utils.helpers import get_class
@@ -88,25 +87,26 @@ def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[A
 
     if device is None:
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    env_config = get_run_sim_env_config(config)
+    env_config = config.env_config()
     setup_simulator_imports(env_config)
     simulation_app = None
     if get_simulator_type() == SimulatorType.ISAACSIM:
         simulation_app = setup_isaaclab_launcher(env_config, device)
 
+    env = config
     full_config = FullSimConfig(
-        simulator=config.simulator.config,
-        robot=config.robot,
-        scene=config.scene,
-        sensors=dict(config.sensor),
-        training=config.training,
-        logger=config.logger,
-        plugin=config.plugin,
+        simulator=env.simulator.config,
+        robot=env.robot,
+        scene=env.scene,
+        sensors=dict(env.sensor),
+        run=config.run,
+        logger=config.run.logger,
+        plugin=env.plugin,
     )
     # Without a task, TerrainManager construction needs only num_envs and device from its env.
-    terrain_env = SimpleNamespace(num_envs=config.training.num_envs, device=device)
-    terrain_manager = TerrainManager(config.terrain, env=terrain_env, device=device)
-    simulator = get_class(config.simulator._target_)(full_config, terrain_manager, device)
+    terrain_env = SimpleNamespace(num_envs=config.run.num_envs, device=device)
+    terrain_manager = TerrainManager(env.terrain, env=terrain_env, device=device)
+    simulator = get_class(env.simulator._target_)(full_config, terrain_manager, device)
     return simulator, device, simulation_app
 
 
@@ -120,8 +120,8 @@ def build_run_sim_config(
     record_dir: str | None = None,
     video_camera: Any = None,
     show_command_overlay: bool = True,
-) -> RunSimConfig:
-    """Parse a ``RunSimConfig`` as the CLI would, with the bridge + virtual gantry disabled.
+) -> SimulationExperimentConfig:
+    """Parse a ``SimulationExperimentConfig`` as the CLI would, with the bridge + virtual gantry disabled.
 
     The bridge binds a ZMQ clock publisher that lingers between rapid subprocess runs, and the gantry
     applies a robot-only force tensor that errors once a scene adds bodies — neither is relevant to a
@@ -129,15 +129,15 @@ def build_run_sim_config(
 
     ``sensors`` is a mounted-camera dict (``{name: CameraSensorConfig}``) injected directly onto the
     parsed config's ``sensor`` field — the harness builds rigs in Python rather than through the
-    per-key ``--sensor`` CLI (a multi-camera rig can't be named by one token). When ``record_dir`` is
+    per-key ``sensor`` CLI (a multi-camera rig can't be named by one token). When ``record_dir`` is
     set, enable video recording every episode to that dir (mp4, no wandb). ``video_camera`` overrides
     the camera config (e.g. an object-framing camera); ``show_command_overlay`` toggles the
     robot-command text overlay (off for object scenarios where it is irrelevant).
     """
     from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 
-    argv = [f"simulator:{simulator}", f"robot:{robot}", f"terrain:{terrain}", f"scene:{scene}"]
-    config = tyro.cli(RunSimConfig, args=argv)
+    argv = [f"simulator:{simulator}-sim2sim", f"robot:{robot}", f"terrain:{terrain}", f"scene:{scene}"]
+    config = tyro.cli(SimulationExperimentConfig, args=argv)
     if sensors is not None:
         config = dataclasses.replace(config, sensor=dict(sensors))
     sim_cfg = dataclasses.replace(
@@ -161,6 +161,9 @@ def build_run_sim_config(
         }
         if video_camera is not None:
             video_kwargs["camera"] = video_camera
-        video = dataclasses.replace(config.logger.video, **video_kwargs)
-        config = dataclasses.replace(config, logger=dataclasses.replace(config.logger, video=video))
+        logger = config.run.logger
+        video = dataclasses.replace(logger.video, **video_kwargs)
+        config = dataclasses.replace(
+            config, run=dataclasses.replace(config.run, logger=dataclasses.replace(logger, video=video))
+        )
     return config

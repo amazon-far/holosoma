@@ -24,16 +24,16 @@ source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
     simulator:isaacsim \
-    logger:wandb \
-    --training.seed 1
+    run.logger:wandb \
+    --run.seed 1
 
 # T1 with PPO on IsaacSim
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof \
     simulator:isaacsim \
-    logger:wandb \
-    --training.seed 1
+    run.logger:wandb \
+    --run.seed 1
 ```
 
 Once checkpoints are saved, you can evaluate policies using [In-Training Evaluation](#in-training-evaluation) (same simulator as training) or cross-simulator evaluation in MuJoCo (see [holosoma_inference](../holosoma_inference/README.md)).
@@ -48,14 +48,14 @@ source scripts/source_mujoco_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
     simulator:mjwarp \
-    logger:wandb
+    run.logger:wandb
 
 # G1 with PPO
 source scripts/source_mujoco_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof \
     simulator:mjwarp \
-    logger:wandb \
+    run.logger:wandb \
     --terrain.terrain-term.scale-factor=0.5  # required to avoid training instabilities
 
 # T1 with FastSAC -- see the T1 note below
@@ -63,14 +63,14 @@ source scripts/source_mujoco_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof-fast-sac \
     simulator:mjwarp \
-    logger:wandb
+    run.logger:wandb
 
 # T1 with PPO -- see the T1 note below
 source scripts/source_mujoco_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof \
     simulator:mjwarp \
-    logger:wandb \
+    run.logger:wandb \
     --terrain.terrain-term.scale-factor=0.5  # required to avoid training instabilities
 
 ```
@@ -94,27 +94,27 @@ Train robots to track full-body motion sequences.
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-wbt-fast-sac \
-    logger:wandb
+    run.logger:wandb
 
 # G1 with PPO
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-wbt \
-    logger:wandb
+    run.logger:wandb
 
 # Custom motion file
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-wbt \
-    logger:wandb \
+    run.logger:wandb \
     --command.setup_terms.motion_command.params.motion_config.motion_file="holosoma/data/motions/g1_29dof/whole_body_tracking/<your file>.npz"
 
 # Visualize the motion file in isaacsim before training
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/replay.py \
     exp:g1-29dof-wbt \
-    --training.headless=False \
-    --training.num_envs=1
+    --run.headless=False \
+    --run.num_envs=1
 ```
 
 Once checkpoints are saved, you can evaluate policies using [In-Training Evaluation](#in-training-evaluation) (same simulator as training) or cross-simulator evaluation in MuJoCo (see [holosoma_inference](../holosoma_inference/README.md)).
@@ -130,13 +130,13 @@ For evaluating policies with the exact same configuration used during training (
 ```bash
 # Evaluate checkpoint from Wandb
 python src/holosoma/holosoma/eval_agent.py \
-    --checkpoint=wandb://<ENTITY>/<PROJECT>/<RUN_ID>/<CHECKPOINT_NAME>
-# e.g., --checkpoint=wandb://username/fastsac-t1-locomotion/abcdefgh/model_0010000.pt
+    --eval.checkpoint=wandb://<ENTITY>/<PROJECT>/<RUN_ID>/<CHECKPOINT_NAME>
+# e.g., --eval.checkpoint=wandb://username/fastsac-t1-locomotion/abcdefgh/model_0010000.pt
 
 # Evaluate local checkpoint
 python src/holosoma/holosoma/eval_agent.py \
-    --checkpoint=<CHECKPOINT_PATH>
-# e.g., --checkpoint=/home/username/checkpoints/fastsac-t1-locomotion/model_0010000.pt
+    --eval.checkpoint=<CHECKPOINT_PATH>
+# e.g., --eval.checkpoint=/home/username/checkpoints/fastsac-t1-locomotion/model_0010000.pt
 ```
 
 This evaluation mode:
@@ -169,11 +169,11 @@ source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof \
     simulator:isaacsim \
-    --training.seed 1 \
+    --run.seed 1 \
     --algo.config.use-symmetry=False \
-    logger:wandb \
-    --logger.project locomotion-g1-29dof-ppo \
-    --logger.name ppo-without-symmetry-seed1
+    run.logger:wandb \
+    --run.project locomotion-g1-29dof-ppo \
+    --run.logger.display_name ppo-without-symmetry-seed1
 ```
 
 ### Video Recording
@@ -183,13 +183,13 @@ Video recording is **enabled by default** when using `logger:wandb`. Videos are 
 **Configuration:**
 ```bash
 # Disable video recording
---logger.video.enabled False
+--run.logger.video.enabled False
 
 # Adjust recording interval (episodes)
---logger.video.interval 10
+--run.logger.video.interval 10
 
 # Change resolution
---logger.video.width 640 --logger.video.height 360
+--run.logger.video.width 640 --run.logger.video.height 360
 ```
 
 **Troubleshooting Headless Environments:**
@@ -217,7 +217,7 @@ source scripts/source_isaacsim_setup.sh
 torchrun --nproc_per_node=4 src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof-fast-sac \
     simulator:isaacsim \
-    --training.num-envs 16384  # global/total number of environments
+    --run.num_envs 16384  # global/total number of environments
 ```
 
 ### Custom Reward Weights

@@ -14,10 +14,10 @@ from os import getenv
 from pathlib import Path
 from typing import Any
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import TrainingExperimentConfig
 from holosoma.config_types.simulator import MujocoBackend
 from holosoma.config_values.experiment import get_annotated_experiment_config
-from holosoma.train_agent import split_envs_across_ranks, train_on_task
+from holosoma.envs.policy_task import split_envs_across_ranks, train_on_task
 from holosoma.utils.config_registry import parse_config
 
 REPO_ROOT = Path(__file__).parent.parent.parent.absolute()
@@ -54,7 +54,7 @@ PERF_BASELINE_MIN_RUNS = 5
 PERF_WARN_SIGMA = 2.0
 
 
-def simulator_tag(config: ExperimentConfig) -> str:
+def simulator_tag(config: TrainingExperimentConfig) -> str:
     """Simulator name to tag a run with, distinguishing the two MuJoCo backends.
 
     Both report `mujoco`, but they are different engines -- one CPU and single-env, the
@@ -206,7 +206,7 @@ def check_throughput_regression(cell_tags: list[str]) -> None:
         print(f"Throughput check failed, ignoring: {e}")
 
 
-def validate_wandb_metrics(config: ExperimentConfig):
+def validate_wandb_metrics(config: TrainingExperimentConfig):
     # lazy import to avoid conflicts with Isaac
     import wandb
 
@@ -217,10 +217,10 @@ def validate_wandb_metrics(config: ExperimentConfig):
     df_hist = run.history()
 
     failures: list[str] = []
-    assert config.nightly is not None  # for type checking
-    assert config.nightly.metrics is not None
+    assert config.algo.nightly is not None  # for type checking
+    assert config.algo.nightly.metrics is not None
 
-    for k, v in config.nightly.metrics.items():
+    for k, v in config.algo.nightly.metrics.items():
         v_min = float(v[0])
         v_max = float(v[1])
         v_last_100 = df_hist[k][-100:].mean()
@@ -243,7 +243,7 @@ def main():
     config = parse_config(get_annotated_experiment_config)
 
     # Check if multigpu is requested and we're not already in a distributed process
-    if config.training.multigpu and "RANK" not in os.environ:
+    if config.algo.multigpu and "RANK" not in os.environ:
         # The Isaac Sim environment does not install the torchrun console script,
         # but its bundled PyTorch still provides the equivalent module entry point.
         env = os.environ.copy()
@@ -263,16 +263,16 @@ def main():
 
         sys.exit(result.returncode)
 
-    config = dataclasses.replace(config, training=dataclasses.replace(config.training, seed=42))
+    config = dataclasses.replace(config, run=dataclasses.replace(config.run, seed=42))
     # Get experiment name from config instead of hydra runtime choices
-    exp = config.training.name or config.logger.name
+    exp = config.run.name
     # Sanitize experiment name for wandb project name (cannot contain /,\,#,?,%,:)
     sanitized_exp = (
         exp.replace("/", "-").replace("\\", "-").replace("#", "-").replace("?", "-").replace("%", "-").replace(":", "-")
     )
 
     # Add multigpu suffix if enabled
-    multigpu_suffix = "-multigpu" if config.training.multigpu else ""
+    multigpu_suffix = "-multigpu" if config.algo.multigpu else ""
 
     config = config.get_nightly_config()
 
@@ -286,7 +286,7 @@ def main():
     if GITHUB_RUN_ID:
         run_tags.append(f"gha-run-id-{GITHUB_RUN_ID}")
 
-    if config.training.multigpu:
+    if config.algo.multigpu:
         run_tags.append("multigpu")
         run_tags.append(f"gpus-{MULTIGPU_NUM_GPUS}")
     else:
@@ -298,22 +298,21 @@ def main():
     cell_tags = [
         sanitized_exp,
         simulator,
-        f"gpus-{MULTIGPU_NUM_GPUS}" if config.training.multigpu else "gpus-1",
+        f"gpus-{MULTIGPU_NUM_GPUS}" if config.algo.multigpu else "gpus-1",
     ]
 
     # Also the wandb run id, so it has to identify the matrix cell: one experiment runs on
     # several simulators at the same GPU count, and cells start within a second of each other.
     nightly_name = f"nightly-{sanitized_exp}-{simulator}{multigpu_suffix}-{now_timestamp()}"
 
+    logger = dataclasses.replace(
+        config.run.logger,
+        display_name=nightly_name,
+        id=nightly_name,  # set id to name so url is readable
+        tags=tuple(run_tags),
+    )
     config = dataclasses.replace(
-        config,
-        logger=dataclasses.replace(
-            config.logger,
-            project="nightly-holosoma-runs",
-            name=nightly_name,
-            id=nightly_name,  # set id to name so url is readable
-            tags=tuple(run_tags),
-        ),
+        config, run=dataclasses.replace(config.run, project="nightly-holosoma-runs", logger=logger)
     )
 
     config = split_envs_across_ranks(config)

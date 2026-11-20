@@ -127,8 +127,7 @@ class _LoopTask(SimulationTask):
         self.config = cast(
             "EnvConfig",
             SimpleNamespace(
-                viewer_update_decimation=viewer_update_decimation,
-                time_scale=0.0,
+                run=SimpleNamespace(viewer_update_decimation=viewer_update_decimation, time_scale=0.0),
                 robot=SimpleNamespace(asset=SimpleNamespace(robot_type="test")),
                 simulator=SimpleNamespace(
                     _target_="test.Simulator",
@@ -314,6 +313,7 @@ class _PlaybackSim(_FakeSim):
         super().__init__(frames=budget_frames, decimation=decimation)
         self.num_envs = 1
         self.num_dof = 2
+        self.dof_names = ["joint0", "joint1"]
         self.sim_device = "cpu"
         self.dof_pos = torch.zeros(1, self.num_dof)
         self.dof_vel = torch.zeros(1, self.num_dof)

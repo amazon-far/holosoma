@@ -106,9 +106,9 @@ jobs:
                 --editable /workspace/holosoma/src/holosoma
               python -m wandb login
               python tests/nightly/nightly.py exp:${{ matrix.experiment }} \
-                logger:wandb --logger.video.enabled=False \
+                run.logger:wandb --run.logger.video.enabled=False \
                 simulator:${{ matrix.sim_preset || matrix.simulator }} \
-                --training.multigpu=${{ matrix.multigpu }} ${{ matrix.extra_args }}
+                --algo.multigpu=${{ matrix.multigpu }} ${{ matrix.extra_args }}
             """
 
 

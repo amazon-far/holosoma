@@ -8,6 +8,34 @@ from pydantic.dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class NightlyConfig:
+    """Shortened training run and pass criteria for the nightly training checks."""
+
+    iterations: int
+    metrics: dict[str, list[float | str]]
+
+
+@dataclass(frozen=True)
+class AlgoRunOptions:
+    """Training options every algorithm wrapper carries, keyword-only after the wrapper's own fields."""
+
+    resume_from: str | None = field(default=None, kw_only=True)
+    """Checkpoint to resume training from: restores the full algorithm state (for distillation this
+    includes student, critic, optimizer and storage)."""
+
+    teacher_checkpoint: str | None = field(default=None, kw_only=True)
+    """Optional comma-separated teacher-only checkpoints, loaded into the student-teacher policy's
+    teacher branch after setup. Orthogonal to ``resume_from``: only populates the frozen teacher
+    MLP from a trained PPO-actor checkpoint."""
+
+    multigpu: bool = field(default=False, kw_only=True)
+    """Train across every GPU on the machine (used by launchers that start the distributed run)."""
+
+    nightly: NightlyConfig | None = field(default=None, kw_only=True)
+    """Nightly-check settings; None for experiments without a nightly check."""
+
+
+@dataclass(frozen=True)
 class OptimizerConfig:
     """Configuration for optimizer settings."""
 
@@ -331,7 +359,7 @@ class FastSACConfig:
 
 
 @dataclass(frozen=True)
-class PPOAlgoConfig:
+class PPOAlgoConfig(AlgoRunOptions):
     """Configuration for algorithm wrapper."""
 
     _target_: str
@@ -345,7 +373,7 @@ class PPOAlgoConfig:
 
 
 @dataclass(frozen=True)
-class FastSACAlgoConfig:
+class FastSACAlgoConfig(AlgoRunOptions):
     """Configuration for algorithm wrapper."""
 
     _target_: str
@@ -497,7 +525,7 @@ class DistillationPPOConfig:
 
 
 @dataclass(frozen=True)
-class DistillationPPOAlgoConfig:
+class DistillationPPOAlgoConfig(AlgoRunOptions):
     """Wrapper paralleling :class:`PPOAlgoConfig`."""
 
     _target_: str
@@ -561,7 +589,7 @@ class DistillationConfig:
 
 
 @dataclass(frozen=True)
-class DistillationAlgoConfig:
+class DistillationAlgoConfig(AlgoRunOptions):
     """Wrapper paralleling :class:`DistillationPPOAlgoConfig`."""
 
     _target_: str

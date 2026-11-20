@@ -1,9 +1,13 @@
+import dataclasses
+
 from holosoma.config_types.simulator import (
+    BridgeConfig,
     MujocoBackend,
     PhysxConfig,
     SimEngineConfig,
     SimulatorConfig,
     SimulatorInitConfig,
+    VirtualGantryCfg,
 )
 from holosoma.utils.config_registry import ConfigRegistry
 
@@ -81,6 +85,35 @@ mjwarp = SIMULATOR_REGISTRY.add(
         ),
     ),
 )
+
+
+def sim2sim(preset: SimulatorConfig) -> SimulatorConfig:
+    """``preset`` with the robot bridge and virtual gantry on, at the backend's sim-to-sim physics rate.
+
+    The rates are 200 Hz for Isaac Sim, 2000 Hz for classic MuJoCo and 400 Hz for MuJoCo Warp.
+    """
+    if preset.config.name == "isaacsim":
+        fps = 200
+    elif getattr(preset.config, "mujoco_backend", None) == MujocoBackend.WARP:
+        fps = 400
+    else:
+        fps = 2000
+    return dataclasses.replace(
+        preset,
+        config=dataclasses.replace(
+            preset.config,
+            bridge=BridgeConfig(enabled=True),
+            virtual_gantry=VirtualGantryCfg(enabled=True),
+            sim=dataclasses.replace(preset.config.sim, fps=fps),
+        ),
+    )
+
+
+# Sim-to-sim: an external controller drives the robot over the bridge, and the virtual
+# gantry holds it until released.
+isaacsim_sim2sim = SIMULATOR_REGISTRY.add("isaacsim-sim2sim", sim2sim(isaacsim))
+mujoco_sim2sim = SIMULATOR_REGISTRY.add("mujoco-sim2sim", sim2sim(mujoco))
+mjwarp_sim2sim = SIMULATOR_REGISTRY.add("mjwarp-sim2sim", sim2sim(mjwarp))
 
 from holosoma.utils.config_registry import (  # noqa: E402
     deprecated_defaults_alias as _deprecated_defaults_alias,

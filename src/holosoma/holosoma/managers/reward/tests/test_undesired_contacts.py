@@ -21,7 +21,7 @@ from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
-    from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
+    from holosoma.envs.policy_task import PolicyTask
 
 pytestmark = pytest.mark.no_sim
 
@@ -64,7 +64,7 @@ def _term(env: _Env, pattern: str, threshold: float = 1.0) -> UndesiredContacts:
 
 def _counts(term: UndesiredContacts, env: _Env) -> list[int]:
     """Per-env count of selected bodies in contact. The term reads ``self.env``, not the argument."""
-    return [int(count) for count in term(cast("WholeBodyTrackingManager", env)).tolist()]
+    return [int(count) for count in term(cast("PolicyTask", env)).tolist()]
 
 
 def _frame(num_envs: int = 1, **body_force: float) -> torch.Tensor:

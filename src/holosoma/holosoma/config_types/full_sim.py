@@ -4,10 +4,10 @@ from dataclasses import field
 
 from pydantic.dataclasses import dataclass
 
-from holosoma.config_types.experiment import TrainingConfig
 from holosoma.config_types.logger import LoggerConfig
 from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_types.robot import RobotConfig
+from holosoma.config_types.run import RunConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import SensorConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
@@ -19,7 +19,7 @@ class FullSimConfig:
 
     simulator: SimulatorInitConfig
     robot: RobotConfig
-    training: TrainingConfig
+    run: RunConfig
     logger: LoggerConfig
     """Logger configuration for video recording and output directories."""
 

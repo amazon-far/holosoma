@@ -93,7 +93,7 @@ class MuJoCo(BaseSimulator):
         self.robot_config = tyro_config.robot
 
         # Save num_envs on init() rather than create_envs() so other modules can rely on it
-        self.num_envs = self.training_config.num_envs
+        self.num_envs = self.run_config.num_envs
 
         # MuJoCo-specific attributes
         self.root_model: mujoco.MjModel | None = None
@@ -332,7 +332,7 @@ class MuJoCo(BaseSimulator):
             # This also means robot self_collisions are ignored because we're not in control
             # of the terrain/floor/ground, etc. In this case, the robot MJCF XML needs to handle
             # for collisions (or not).
-            self.scene_manager.add_terrain(terrain_state, self.training_config.num_envs)
+            self.scene_manager.add_terrain(terrain_state, self.run_config.num_envs)
             self.scene_manager.apply_render()
             light_setup.build_lights(self.scene_manager.world_spec, self.scene_config.lights)
             self.scene_manager.add_materials()

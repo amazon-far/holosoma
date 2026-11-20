@@ -112,7 +112,7 @@ class _FakeSimulator:
         self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name="sensors.render")
         self.sensor_config = sensors_config
         self.sensor_manager = _FakeSensorManager()
-        self.training_config = _FakeTrainingConfig(num_envs)
+        self.run_config = _FakeTrainingConfig(num_envs)
         self.headless = True
         self.simulator_config = _FakeSimulatorConfig()
         self._frames = frames  # (camera, modality) -> [N, H, W, C] numpy

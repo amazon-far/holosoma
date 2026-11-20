@@ -115,12 +115,19 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
         randomization=object(),
         command=object(),
         curriculum=object(),
-        training=SimpleNamespace(num_envs=1, seed=0, headless=False, torch_deterministic=False),
-        logger=object(),
+        run=SimpleNamespace(
+            num_envs=1,
+            seed=0,
+            headless=False,
+            torch_deterministic=False,
+            device="cpu",
+            logger=object(),
+            project="project",
+            name="run",
+        ),
         scene=object(),
         sensors={},
         plugin={},
-        device="cpu",
     )
 
     monkeypatch.setattr(base_task_module, "get_class", lambda _target: _Simulator)
@@ -129,7 +136,7 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
     monkeypatch.setattr(base_task_module, "RandomizationManager", create_first_manager)
     monkeypatch.setattr(BaseTask, "_load_assets", load_assets)
     monkeypatch.setattr(BaseTask, "_create_envs", create_envs)
-    monkeypatch.setattr(BaseTask, "_setup_robot_body_indices", lambda _task: events.append("body_indices"))
+    monkeypatch.setattr(PolicyTask, "_setup_robot_body_indices", lambda _task: events.append("body_indices"))
     monkeypatch.setattr(base_task_module, "get_timestamp", lambda: "timestamp")
     monkeypatch.setattr(base_task_module, "get_experiment_dir", lambda *_args, **_kwargs: ".")
 

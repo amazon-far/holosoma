@@ -209,6 +209,7 @@ def parse_config(
     *,
     args: list[str] | None = None,
     default: Any = None,
+    provenance: dict[str, str] | None = None,
     **tyro_kwargs: Any,
 ) -> Any:
     """Parse a config with plugin, preset-file, and dynamic-dict support.
@@ -220,6 +221,8 @@ def parse_config(
         config: Dataclass type, ``Annotated`` alias, or zero-argument factory.
         args: CLI tokens. ``None`` reads from ``sys.argv``.
         default: Optional base config instance.
+        provenance: CLI tokens mapped to the document key each came from; a usage error naming one of
+            them ends with that key.
         tyro_kwargs: Extra keyword arguments forwarded to ``tyro.cli``.
 
     Returns:
@@ -260,14 +263,46 @@ def parse_config(
         kwargs["default"] = merged_default
     if use_sys_argv:
         sys.argv = [sys.argv[0]] + argv
-    return tyro.cli(config_type, **kwargs)
+    if not provenance:
+        return tyro.cli(config_type, **kwargs)
+    return _cli_with_provenance(config_type, kwargs, provenance)
+
+
+def _cli_with_provenance(config_type: Any, kwargs: dict[str, Any], provenance: dict[str, str]) -> Any:
+    """Run ``tyro.cli``; on a usage error, name the document keys behind the tokens it rejected."""
+    import contextlib
+    import io
+
+    captured = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(captured):
+            result = tyro.cli(config_type, **kwargs)
+    except SystemExit as exc:
+        message = captured.getvalue()
+        sys.stderr.write(message)
+        if exc.code not in (0, None):
+            flat = _normalize_cli_text(message)
+            sources = [
+                f"  {token.partition('=')[0]}  <- {source}"
+                for token, source in provenance.items()
+                if _normalize_cli_text(token.partition("=")[0]) in flat
+            ]
+            if sources:
+                sys.stderr.write("From --config:\n" + "\n".join(sources) + "\n")
+        raise
+    sys.stderr.write(captured.getvalue())
+    return result
+
+
+def _normalize_cli_text(text: str) -> str:
+    """Fold tyro's hyphen/underscore spellings and its box-drawing line wraps for matching."""
+    return "".join(text.replace("_", "-").split()).replace("│", "")
 
 
 def _reject_legacy_mujoco_cli(argv: list[str]) -> None:
     """Explain relocated CLI fields before Tyro reports an unknown argument."""
-    aliases = (
-        "--simulator.config.mujoco-warp.",
-        "--simulator.config.mujoco_warp.",
+    aliases = tuple(
+        f"--{root}simulator.config.{spelling}." for root in ("", "env.") for spelling in ("mujoco-warp", "mujoco_warp")
     )
     canonical = "--simulator.config.sim.mujoco.warp."
     if any(token.startswith(aliases) for token in argv):
@@ -321,7 +356,7 @@ def _merge_dynamic_default(config_type: Any, default: Any, dynamic_defaults: dic
     from holosoma.utils.tyro_utils import _strip_annotated
 
     if default is not None:
-        return dataclasses.replace(default, **dynamic_defaults)
+        return _replace_paths(default, dynamic_defaults)
 
     # Root subcommand selected on the CLI: seed from ITS preset. A bare base() here
     # would silently override every field of the selected preset (tyro applies the
@@ -329,7 +364,7 @@ def _merge_dynamic_default(config_type: Any, default: Any, dynamic_defaults: dic
     # sensor.head:g1-head` into a default config with one sensor.
     selected = _root_subcommand_default(config_type, argv)
     if selected is not None:
-        return dataclasses.replace(selected, **dynamic_defaults)
+        return _replace_paths(selected, dynamic_defaults)
 
     base = _strip_annotated(config_type)
     try:
@@ -340,4 +375,13 @@ def _merge_dynamic_default(config_type: Any, default: Any, dynamic_defaults: dic
             f"{getattr(base, '__name__', base)!r}: it has required fields, so no base instance can "
             f"be built. Pass an explicit default= to parse_config."
         ) from exc
-    return dataclasses.replace(instance, **dynamic_defaults)
+    return _replace_paths(instance, dynamic_defaults)
+
+
+def _replace_paths(config: Any, values: dict[str, Any]) -> Any:
+    """``config`` with each dotted-path field in ``values`` replaced."""
+    for path, value in values.items():
+        head, _, rest = path.partition(".")
+        replacement = _replace_paths(getattr(config, head), {rest: value}) if rest else value
+        config = dataclasses.replace(config, **{head: replacement})
+    return config

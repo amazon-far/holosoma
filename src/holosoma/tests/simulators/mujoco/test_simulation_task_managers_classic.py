@@ -1,4 +1,4 @@
-"""Termination and randomization terms configured on RunSimConfig run on SimulationTask (MuJoCo Classic)."""
+"""Termination and randomization terms on a SimulationExperimentConfig run on SimulationTask (MuJoCo Classic)."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ pytest.importorskip("mujoco")
 
 pytestmark = pytest.mark.mujoco_classic
 
+from holosoma.config_types.experiment import SimulationExperimentConfig  # noqa: E402
 from holosoma.config_types.randomization import RandomizationManagerCfg, RandomizationTermCfg  # noqa: E402
-from holosoma.config_types.run_sim import RunSimConfig  # noqa: E402
 from holosoma.config_values import termination  # noqa: E402
 from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
 
@@ -20,7 +20,7 @@ EPISODE_S = 0.1
 
 
 def test_a_timeout_term_ends_and_restarts_the_episode():
-    base = RunSimConfig()
+    base = SimulationExperimentConfig()
     sim_cfg = base.simulator.config
     config = dataclasses.replace(
         base,
@@ -29,8 +29,7 @@ def test_a_timeout_term_ends_and_restarts_the_episode():
             config=dataclasses.replace(sim_cfg, sim=dataclasses.replace(sim_cfg.sim, max_episode_length_s=EPISODE_S)),
         ),
         termination=termination.TERMINATION_REGISTRY.get("g1_29dof"),
-        training=dataclasses.replace(base.training, headless=True),
-        time_scale=0.0,
+        run=dataclasses.replace(base.run, headless=True, time_scale=0.0),
     )
 
     with config.create_task() as task:
@@ -45,7 +44,7 @@ def test_a_timeout_term_ends_and_restarts_the_episode():
 
 
 def test_a_reset_randomization_term_sets_the_joint_state():
-    base = RunSimConfig()
+    base = SimulationExperimentConfig()
     scale_twice = RandomizationTermCfg(
         func="holosoma.managers.randomization.terms.locomotion:randomize_dof_state",
         params={
@@ -58,8 +57,7 @@ def test_a_reset_randomization_term_sets_the_joint_state():
     config = dataclasses.replace(
         base,
         randomization=RandomizationManagerCfg(reset_terms={"randomize_dof_state": scale_twice}),
-        training=dataclasses.replace(base.training, headless=True),
-        time_scale=0.0,
+        run=dataclasses.replace(base.run, headless=True, time_scale=0.0),
     )
 
     with config.create_task() as task:

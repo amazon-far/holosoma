@@ -10,11 +10,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import holosoma.replay as replay_module
-from holosoma import eval_agent, train_agent
+from holosoma.config_types.run import RunConfig
+from holosoma.envs import policy_task
 from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.simulator import session
-from holosoma.utils import experiment_paths
+from holosoma.utils import eval_utils, experiment_paths
 from holosoma.utils.simulator_config import SimulatorType
 from holosoma.utils.tests._simulation_error_child import EnvConfigStub
 
@@ -57,7 +58,7 @@ def _patch_session(monkeypatch: pytest.MonkeyPatch, env: _Environment, app: obje
         assert signal.getsignal(signal.SIGTERM) is not previous_sigterm
         return app
 
-    class _Task(BaseTask):
+    class _Task(PolicyTask):
         def __new__(cls, _config: object) -> Any:
             return env
 
@@ -66,8 +67,11 @@ def _patch_session(monkeypatch: pytest.MonkeyPatch, env: _Environment, app: obje
     monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.ISAACSIM)
     monkeypatch.setattr(session, "setup_isaaclab_launcher", launch)
     monkeypatch.setattr(session, "get_class", lambda _target: _Task)
-    env_config = EnvConfigStub(env_class="test.Task", training=SimpleNamespace(headless=True))
-    return SimpleNamespace(create_task=lambda: session.task_session(env_config, BaseTask))  # type: ignore[arg-type]
+    env_config = EnvConfigStub(env_class="test.Task", run=RunConfig(headless=True))
+    return SimpleNamespace(
+        create_task=lambda: session.task_session(env_config, BaseTask),  # type: ignore[arg-type]
+        env_config=lambda: env_config,
+    )
 
 
 def test_eval_interrupt_closes_environment_before_app(
@@ -97,37 +101,19 @@ def test_eval_interrupt_closes_environment_before_app(
             raise KeyboardInterrupt
 
     config = _patch_session(monkeypatch, env, app)
-    config.logger = object()
-    config.training = SimpleNamespace(export_onnx=False, max_eval_steps=5)
+    config.run = SimpleNamespace(logger=object(), project="project", name="run")
+    callbacks = SimpleNamespace(collect_active_callbacks=list)
+    config.eval = SimpleNamespace(export_onnx=False, max_eval_steps=5, checkpoint="model.pt", callbacks=callbacks)
     config.algo = SimpleNamespace(_target_="test.Algo", config=object())
     config.save_config = MagicMock()
-    checkpoint_cfg = SimpleNamespace(checkpoint="model.pt")
 
-    monkeypatch.setattr(eval_agent, "get_experiment_dir", lambda *_args, **_kwargs: tmp_path)
-    monkeypatch.setattr(eval_agent, "load_checkpoint", lambda *_args: tmp_path / "model.pt")
-    monkeypatch.setattr(eval_agent, "get_class", lambda _target: _Algo)
-
-    with pytest.raises(KeyboardInterrupt):
-        eval_agent.run_eval_with_tyro(config, checkpoint_cfg, config, None)  # type: ignore[arg-type]
-
-    assert events == ["env.close", "app.close"]
-    assert signal.getsignal(signal.SIGTERM) is previous_sigterm
-
-
-def test_replay_interrupt_closes_environment_before_app(monkeypatch: pytest.MonkeyPatch) -> None:
-    events: list[str] = []
-    env = _Environment(events)
-    app = _patch_app_close(monkeypatch, events)
-    previous_sigterm = signal.getsignal(signal.SIGTERM)
-
-    def stop_replay(_motion: Any) -> bool:
-        raise KeyboardInterrupt
-
-    env.step_visualize_motion = stop_replay  # type: ignore[attr-defined]
-    config = _patch_session(monkeypatch, env, app)
+    monkeypatch.setattr(eval_utils, "load_saved_experiment_config", lambda _checkpoint: (config, None))
+    monkeypatch.setattr(experiment_paths, "get_experiment_dir", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(policy_task, "load_checkpoint", lambda *_args: tmp_path / "model.pt")
+    monkeypatch.setattr(policy_task, "get_class", lambda _target: _Algo)
 
     with pytest.raises(KeyboardInterrupt):
-        replay_module.replay(config)  # type: ignore[arg-type]
+        policy_task.PolicyTask.evaluate(config)  # type: ignore[arg-type]
 
     assert events == ["env.close", "app.close"]
     assert signal.getsignal(signal.SIGTERM) is previous_sigterm
@@ -158,28 +144,21 @@ def test_training_interrupt_closes_environment_before_app(
             raise KeyboardInterrupt
 
     config = _patch_session(monkeypatch, env, app)
-    config.logger = SimpleNamespace(type="local")
-    config.training = SimpleNamespace(
-        project=None,
-        name=None,
-        checkpoint=None,
-        teacher_checkpoint=None,
-        num_envs=1,
-    )
+    config.run = SimpleNamespace(logger=SimpleNamespace(type="local"), project="project", name="run", num_envs=1)
     config.robot = SimpleNamespace(asset=SimpleNamespace(robot_type="test"))
-    config.algo = SimpleNamespace(_target_="test.Algo", config=object())
+    config.algo = SimpleNamespace(_target_="test.Algo", config=object(), resume_from=None, teacher_checkpoint=None)
     config.save_config = MagicMock()
     monkeypatch.setitem(sys.modules, "wandb", types.ModuleType("wandb"))
     monkeypatch.delenv("WORLD_SIZE", raising=False)
 
-    monkeypatch.setattr(train_agent, "configure_multi_gpu", lambda: None)
-    monkeypatch.setattr(train_agent, "configure_logging", lambda **_kwargs: None)
-    monkeypatch.setattr(train_agent, "get_class", lambda _target: _Algo)
+    monkeypatch.setattr(policy_task, "_configure_multi_gpu", lambda: None)
+    monkeypatch.setattr(policy_task, "_configure_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(policy_task, "get_class", lambda _target: _Algo)
     monkeypatch.setattr(experiment_paths, "get_timestamp", lambda: "timestamp")
     monkeypatch.setattr(experiment_paths, "get_experiment_dir", lambda *_args, **_kwargs: tmp_path)
 
     with pytest.raises(KeyboardInterrupt):
-        train_agent.train(config)  # type: ignore[arg-type]
+        policy_task.PolicyTask.train(config)  # type: ignore[arg-type]
 
     expected_events = ["env.close"] if environment_close_fails else ["env.close", "app.close"]
     assert events == expected_events
@@ -218,7 +197,7 @@ def test_experiment_create_task_rejects_a_non_policy_task_before_building_it(
 
     class _Rejected(SimulationTask):
         def __new__(cls, _config: object) -> Any:
-            raise AssertionError("a rejected env_class must not be constructed")
+            raise AssertionError("a rejected task must not be constructed")
 
     monkeypatch.setattr(session, "setup_simulator_imports", lambda _config: None)
     monkeypatch.setattr(session, "resolve_simulation_device", lambda *_args: "cpu")

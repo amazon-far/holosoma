@@ -79,7 +79,7 @@ class IMujocoBackend(abc.ABC):
         self.data = data
         self.config = config
         self.device = device
-        self.num_envs = config.training.num_envs
+        self.num_envs = config.run.num_envs
         # A step computes body kinematics before it integrates, leaving body state one step behind.
         self._kinematics_pending = False
 

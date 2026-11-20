@@ -30,7 +30,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 import tyro
 
-from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_types.experiment import SimulationExperimentConfig
 from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 from tests.simulators import _robot_presets
 from tests.simulators._sim_harness import launch_simulator, step
@@ -52,23 +52,29 @@ TORQUE_STEPS = 5
 
 def _build(simulator: str, num_envs: int):
     _robot_presets.register()
-    argv = [f"simulator:{simulator}", f"robot:{ROBOT}", "terrain:terrain_locomotion_plane", "scene:empty"]
-    config = tyro.cli(RunSimConfig, args=argv)
+    argv = [
+        f"simulator:{simulator}-sim2sim",
+        f"robot:{ROBOT}",
+        "terrain:terrain_locomotion_plane",
+        "scene:empty",
+    ]
+    config = tyro.cli(SimulationExperimentConfig, args=argv)
     sim_cfg = dataclasses.replace(
         config.simulator,
         config=dataclasses.replace(
-            config.simulator.config, bridge=BridgeConfig(enabled=False), virtual_gantry=VirtualGantryCfg(enabled=False)
+            config.simulator.config,
+            bridge=BridgeConfig(enabled=False),
+            virtual_gantry=VirtualGantryCfg(enabled=False),
         ),
     )
     config = dataclasses.replace(
         config,
         simulator=sim_cfg,
-        device=("cpu" if simulator == "mujoco" else "cuda:0"),
-        training=dataclasses.replace(config.training, num_envs=num_envs),
+        run=dataclasses.replace(config.run, device=("cpu" if simulator == "mujoco" else "cuda:0"), num_envs=num_envs),
     )
     import torch
 
-    s, device, _ = launch_simulator(config, device=config.device)
+    s, device, _ = launch_simulator(config, device=config.run.device)
     s.set_headless(True)
     s.setup()
     s.setup_terrain()

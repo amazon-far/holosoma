@@ -113,7 +113,7 @@ def main() -> int:
         config = _camera_presets.as_mjwarp(config)
     device = "cpu" if args.simulator == "mujoco" else "cuda:0"
     config = dataclasses.replace(
-        config, device=device, training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=True)
+        config, run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs, headless=True)
     )
     sim, device, _app = launch_simulator(config, device=device)
     manager = sim.sensor_manager

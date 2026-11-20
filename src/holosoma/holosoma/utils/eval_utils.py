@@ -17,8 +17,7 @@ from tqdm import tqdm
 
 # CONFIG_NAME is "holosoma_config.yaml" - the primary configuration file for Holosoma
 # This file contains all settings for training and evaluation of models
-from holosoma.config_types.experiment import ExperimentConfig
-from holosoma.config_values.simulator import SIMULATOR_REGISTRY
+from holosoma.config_types.experiment import TrainingExperimentConfig
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.file_cache import get_cached_file_path
 from holosoma.utils.logging import LoguruLoggingBridge
@@ -66,13 +65,13 @@ class CheckpointConfig:
     """Path to a local checkpoint file, or W&B URI in the format `wandb://<entity>/<project>/<run_id>[/<checkpoint_name>]`."""
 
 
-def load_saved_experiment_config(checkpoint_cfg: CheckpointConfig) -> tuple[ExperimentConfig, str | None]:
+def load_saved_experiment_config(checkpoint_cfg: CheckpointConfig) -> tuple[TrainingExperimentConfig, str | None]:
     """Load checkpoint configuration from either W&B run or local checkpoint.
 
     Returns
     -------
-    (ExperimentConfig, str | None)
-        Loaded experiment config and the originating wandb run path, if available.
+    (TrainingExperimentConfig, str | None)
+        Loaded training config and the originating wandb run path, if available.
     """
 
     checkpoint = checkpoint_cfg.checkpoint
@@ -99,17 +98,84 @@ def load_saved_experiment_config(checkpoint_cfg: CheckpointConfig) -> tuple[Expe
         return _experiment_config_from_saved(yaml.safe_load(f)), wandb_run_path
 
 
-def _load_config_from_checkpoint(checkpoint_path: Path) -> tuple[ExperimentConfig, str | None]:
-    """Attempt to load the serialized ExperimentConfig from a checkpoint file."""
+def _load_config_from_checkpoint(checkpoint_path: Path) -> tuple[TrainingExperimentConfig, str | None]:
+    """Load the training config saved in a checkpoint file."""
 
     checkpoint_contents = torch.load(checkpoint_path, map_location="cpu")
     config_data = checkpoint_contents["experiment_config"]
     return _experiment_config_from_saved(config_data), checkpoint_contents.get("wandb_run_path")
 
 
-def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConfig:
-    """Transition historical saved fields; CLI/YAML inputs keep the current schema."""
-    data = _drop_retired_isaacgym_fields(config_data)
+_RUN_FIELDS_FROM_TRAINING = ("num_envs", "headless", "seed", "torch_deterministic", "project", "name")
+_RUN_FIELDS_FROM_ROOT = ("device", "time_scale", "viewer_update_decimation", "viewer_dt")
+
+# Saved flat-layout configs without an ``env_class`` ran on the locomotion manager, the old default.
+LOCOMOTION_TRAIN_CLASS = "holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager"
+
+_LOCOMOTION_CLASS = "holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager"
+_WBT_CLASS = "holosoma.envs.wbt.wbt_manager:WholeBodyTrackingManager"
+_POLICY_TASK_CLASS = "holosoma.envs.policy_task:PolicyTask"
+
+# ``module:Class`` prefixes of saved ``task`` paths whose class has moved, mapped to where it lives now.
+_MOVED_TASK_CLASSES: dict[str, str] = {_LOCOMOTION_CLASS: _POLICY_TASK_CLASS, _WBT_CLASS: _POLICY_TASK_CLASS}
+
+
+def _fold_task_subclass(data: dict[str, Any], task_class: str) -> dict[str, Any]:
+    """Add the terms that replace the locomotion and WBT task classes' behaviour to a config saved with one."""
+    randomization = data.get("randomization")
+    if not isinstance(randomization, dict):
+        return data
+    if task_class == _LOCOMOTION_CLASS:
+        reset_terms = randomization.get("reset_terms") or {}
+        if "randomize_spawn" not in reset_terms:
+            spawn = {"func": "holosoma.managers.randomization.terms.locomotion:randomize_spawn", "params": {}}
+            randomization["reset_terms"] = {"randomize_spawn": spawn, **reset_terms}
+    elif task_class == _WBT_CLASS:
+        for terms in randomization.values():
+            for term in (terms or {}).values() if isinstance(terms, dict) else ():
+                if isinstance(term, dict) and str(term.get("func", "")).endswith(":PushRandomizerState"):
+                    term["params"] = {**(term.get("params") or {}), "additive": True}
+    return data
+
+
+def _from_env_class_layout(data: dict[str, Any]) -> dict[str, Any]:
+    """Map a config saved before ``task`` (with ``env_class`` and ``training``) onto ``task``, ``run`` and ``algo``."""
+    training = dict(data.pop("training", {}) or {})
+    run = {key: training[key] for key in _RUN_FIELDS_FROM_TRAINING if key in training}
+    run.update({key: data.pop(key) for key in _RUN_FIELDS_FROM_ROOT if key in data})
+    saved_logger = data.pop("logger", None)
+    if isinstance(saved_logger, dict):
+        saved_logger = dict(saved_logger)
+        project = saved_logger.pop("project", None)
+        if project and not run.get("project"):
+            run["project"] = project
+        if "name" in saved_logger:
+            saved_logger["display_name"] = saved_logger.pop("name")
+        run["logger"] = saved_logger
+    algo = dict(data.pop("algo", {}) or {})
+    if training.get("checkpoint") is not None:
+        algo["resume_from"] = training["checkpoint"]
+    for key in ("teacher_checkpoint", "multigpu"):
+        if key in training:
+            algo[key] = training[key]
+    if data.get("nightly") is not None:
+        algo["nightly"] = data.pop("nightly")
+    data.pop("nightly", None)
+    data.pop("eval_overrides", None)
+    module, _, cls = str(data.pop("env_class", LOCOMOTION_TRAIN_CLASS)).rpartition(".")
+    migrated = {**data, "task": f"{module}:{cls}.train", "run": run}
+    return {**migrated, "algo": algo} if algo else migrated
+
+
+def _experiment_config_from_saved(config_data: dict[str, Any]) -> TrainingExperimentConfig:
+    """Load a saved training config, transitioning historical layouts and fields."""
+    data = copy.deepcopy(config_data)
+    if "task" not in data:
+        data = _from_env_class_layout(data)
+    task_class, _, function = data["task"].rpartition(".")
+    data = _fold_task_subclass(data, task_class)
+    data["task"] = f"{_MOVED_TASK_CLASSES.get(task_class, task_class)}.{function}"
+    data = _drop_retired_isaacgym_fields(data)
     simulator = data.get("simulator", {}).get("config", {})
     if "mujoco_warp" in simulator:
         native = simulator["sim"].setdefault("mujoco", {})
@@ -126,23 +192,12 @@ def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConf
         if "gravity" in extra and extra["gravity"] != gravity:
             raise ValueError("Saved config has conflicting sim.mujoco.gravity and sim.mujoco.extra.gravity")
         extra["gravity"] = gravity
-    return ExperimentConfig(**data)
-
-
-def replace_retired_simulator(eval_cfg: ExperimentConfig, args: list[str]) -> ExperimentConfig:
-    """Swap a saved Isaac Gym simulator for the one a ``simulator:<name>`` CLI token selects.
-
-    tyro attaches a default that matches no registered preset to the most similar one, so a saved
-    Isaac Gym simulator would take over the ``isaacsim`` slot and ``simulator:isaacsim`` would
-    silently keep Isaac Gym. Starting from the selected preset instead makes every override take
-    effect. Without a token the saved simulator is kept, and startup reports it as unsupported.
-    """
-    if eval_cfg.simulator.config.name != "isaacgym":
-        return eval_cfg
-    selected = [arg.split(":", 1)[1] for arg in args if arg.startswith("simulator:")]
-    if not selected or selected[-1] not in SIMULATOR_REGISTRY:
-        return eval_cfg
-    return dataclasses.replace(eval_cfg, simulator=SIMULATOR_REGISTRY[selected[-1]])
+    # The config types reject unknown fields; a saved file may carry fields this version dropped.
+    known = {field.name for field in dataclasses.fields(TrainingExperimentConfig)}
+    unknown = sorted(set(data) - known)
+    if unknown:
+        logger.warning(f"Ignoring saved config fields this version does not have: {', '.join(unknown)}")
+    return TrainingExperimentConfig(**{key: value for key, value in data.items() if key in known})
 
 
 def _drop_retired_isaacgym_fields(config_data: dict[str, Any]) -> dict[str, Any]:

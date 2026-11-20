@@ -16,7 +16,7 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_values.logger import LOGGER_REGISTRY
 from holosoma.config_values.robot import g1_29dof
-from holosoma.config_values.run_sim import RUN_SIM_REGISTRY
+from holosoma.config_values.simulator import mjwarp_sim2sim, mujoco_sim2sim
 from holosoma.utils import config_registry as registry
 from holosoma.utils import path as path_utils
 from holosoma.utils.config_registry import ConfigRegistry, UseRegistry
@@ -24,6 +24,11 @@ from holosoma.utils.config_registry import ConfigRegistry, UseRegistry
 # Ensure all real config_values registries are discovered before any test runs, so
 # registry_for_value_type / parse_config see the full menu set regardless of test order.
 registry.load_plugins()
+
+# A second registry over SimulatorConfig, whose presets share names with SIMULATOR_REGISTRY's.
+_INTERACTIVE_SIMULATORS = ConfigRegistry(SimulatorConfig)
+_INTERACTIVE_SIMULATORS.add("mujoco", mujoco_sim2sim)
+_INTERACTIVE_SIMULATORS.add("mjwarp", mjwarp_sim2sim)
 
 
 class _FakeEP:
@@ -268,15 +273,15 @@ def test_registry_from_annotated_unmarked_is_none() -> None:
 
 
 def test_registry_from_annotated_disambiguates_shared_type() -> None:
-    # SimulatorConfig backs BOTH the simulator and run_sim registries; the marker picks one
-    # explicitly, so there is no ambiguity to resolve by type.
+    # SimulatorConfig backs BOTH the simulator registry and _INTERACTIVE_SIMULATORS; the marker
+    # picks one explicitly, so there is no ambiguity to resolve by type.
     from typing import Annotated
 
-    from holosoma.config_values.run_sim import RUN_SIM_REGISTRY
     from holosoma.config_values.simulator import SIMULATOR_REGISTRY
     from holosoma.utils.config_registry import UseRegistry, registry_from_annotated
 
-    assert registry_from_annotated(Annotated[SimulatorConfig, UseRegistry(RUN_SIM_REGISTRY)]) is RUN_SIM_REGISTRY
+    marked = Annotated[SimulatorConfig, UseRegistry(_INTERACTIVE_SIMULATORS)]
+    assert registry_from_annotated(marked) is _INTERACTIVE_SIMULATORS
     assert registry_from_annotated(Annotated[SimulatorConfig, UseRegistry(SIMULATOR_REGISTRY)]) is SIMULATOR_REGISTRY
 
 
@@ -287,7 +292,7 @@ def test_registry_from_annotated_disambiguates_shared_type() -> None:
 # scope (not inside a test) so the string annotations resolve when tyro re-evaluates them under
 # ``from __future__ import annotations``.
 _LoggerField: TypeAlias = Annotated[LoggerConfig, UseRegistry(LOGGER_REGISTRY)]
-_RunSimField: TypeAlias = Annotated[SimulatorConfig, UseRegistry(RUN_SIM_REGISTRY)]
+_InteractiveSimField: TypeAlias = Annotated[SimulatorConfig, UseRegistry(_INTERACTIVE_SIMULATORS)]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -298,7 +303,7 @@ class _SynthConfig:
 
 @dataclasses.dataclass(frozen=True)
 class _SimsConfig:
-    sims: dict[str, _RunSimField] = dataclasses.field(default_factory=dict)
+    sims: dict[str, _InteractiveSimField] = dataclasses.field(default_factory=dict)
 
 
 def test_parse_no_declarations() -> None:
@@ -368,13 +373,12 @@ def test_parse_root_subcommand_preset_survives_dynamic_dict_tokens() -> None:
 
 
 def test_parse_dynamic_dict_shared_type_disambiguated_by_marker() -> None:
-    # SimulatorConfig backs both SIMULATOR_REGISTRY and RUN_SIM_REGISTRY. The _SimsConfig field
-    # is marked with RUN_SIM_REGISTRY, so it resolves to exactly that registry — the marker
-    # removes what used to be an unresolvable-by-type ambiguity. run_sim presets have the bridge
-    # enabled; base simulator presets do not, so the resolved variant is observable.
+    # SimulatorConfig backs both SIMULATOR_REGISTRY and _INTERACTIVE_SIMULATORS. The _SimsConfig
+    # field is marked with _INTERACTIVE_SIMULATORS, so it resolves to exactly that registry. Its
+    # presets have the bridge enabled; the same-named simulator presets do not, so the resolved
+    # variant is observable.
     cfg = registry.parse_config(_SimsConfig, args=["sims.a:mujoco", "sims.b:mjwarp"])
     assert set(cfg.sims) == {"a", "b"}
-    # run_sim preset -> bridge enabled (distinguishes it from the base simulator registry).
     assert cfg.sims["a"].config.bridge.enabled is True
     assert cfg.sims["b"].config.mujoco_backend.value == "warp"
 

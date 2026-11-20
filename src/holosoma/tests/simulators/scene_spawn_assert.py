@@ -34,6 +34,7 @@ import sys
 if sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
 
+from holosoma.config_types.experiment import SimulationExperimentConfig
 from holosoma.config_types.light import (
     DEFAULT_LIGHT_KEY,
     DefaultLightConfig,
@@ -43,7 +44,6 @@ from holosoma.config_types.light import (
     RectLightConfig,
     SphereLightConfig,
 )
-from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.simulator import IsaacSimRenderConfig
 from holosoma.simulator.shared.object_registry import ObjectType
 from tests.simulators import _scene_presets
@@ -54,8 +54,10 @@ _DEFAULT_SUN_INTENSITY = 1000.0
 _DEFAULT_SUN_COLOR = (1.0, 1.0, 1.0)
 
 
-def _build_run_sim_config(simulator: str, scene: str, robot: str, terrain: str, record_dir: str | None) -> RunSimConfig:
-    """Bridge/gantry-disabled RunSimConfig with optional (default-camera) video — see _sim_harness."""
+def _build_run_sim_config(
+    simulator: str, scene: str, robot: str, terrain: str, record_dir: str | None
+) -> SimulationExperimentConfig:
+    """Bridge/gantry-disabled SimulationExperimentConfig with optional (default-camera) video — see _sim_harness."""
     return build_run_sim_config(simulator, scene, robot, terrain, record_dir=record_dir)
 
 
@@ -213,14 +215,13 @@ def main() -> int:
             scene=dataclasses.replace(config.scene, lights=rig),
         )
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
-    # num_envs must be set on the training config too: backends size their per-env state
-    # tensors (Warp qpos/qvel, IsaacSim buffers) from training_config.num_envs at
+    # num_envs must be set on the run config too: backends size their per-env state
+    # tensors (Warp qpos/qvel, IsaacSim buffers) from run_config.num_envs at
     # setup()/load_assets(), before create_envs(n,...) runs. Passing n only to create_envs
     # leaves the tensors sized for 1 env and indexing env 1..n-1 is out of bounds.
     config = dataclasses.replace(
         config,
-        device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs),
     )
 
     sim, device, _app = launch_simulator(config, device=device)

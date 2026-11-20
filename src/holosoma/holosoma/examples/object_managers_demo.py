@@ -66,8 +66,8 @@ import dataclasses
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from holosoma.config_types.experiment import ExperimentConfig
-    from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
+    from holosoma.config_types.experiment import TrainingExperimentConfig
+    from holosoma.envs.policy_task import PolicyTask
     from holosoma.simulator.mujoco.backends import WarpBackend
     from holosoma.simulator.mujoco.mujoco import MuJoCo
     from holosoma.utils.safe_torch_import import torch
@@ -88,8 +88,8 @@ _OBJ_OBS_TERMS = "holosoma.managers.observation.terms.objects"
 _OBJ_RAND = "holosoma.managers.randomization.terms.objects"
 
 
-def _experiment_config(backend: str, num_envs: int, headless: bool) -> ExperimentConfig:
-    """Build the ExperimentConfig for the demo: the g1_29dof locomotion preset, retargeted to the
+def _experiment_config(backend: str, num_envs: int, headless: bool) -> TrainingExperimentConfig:
+    """Build the training config for the demo: the g1_29dof locomotion preset, retargeted to the
     chosen backend + the object-managers demo scene, with the object managers wired in PURELY via
     config — the env then runs them through its real manager stack, exactly as training does:
 
@@ -180,12 +180,16 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> Experimen
         base,
         simulator=sim_cfg,
         scene=scene_values.object_managers_demo,
-        observation=observation,
         randomization=randomization,
-        training=dataclasses.replace(
-            base.training, num_envs=num_envs, headless=headless, seed=0, torch_deterministic=False
+        observation=observation,
+        run=dataclasses.replace(
+            base.run,
+            num_envs=num_envs,
+            headless=headless,
+            seed=0,
+            torch_deterministic=False,
+            device=_BACKENDS[backend][1],
         ),
-        device=_BACKENDS[backend][1],
     )
 
 
@@ -210,7 +214,7 @@ def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
     cfg = _experiment_config(backend, num_envs, headless)
 
     with cfg.create_task() as task:
-        env = cast("LeggedRobotLocomotionManager", task)
+        env = cast("PolicyTask", task)
         sim = env.simulator
         env_ids = torch.arange(env.num_envs, device=env.device)
 
@@ -304,7 +308,7 @@ def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
         return 0
 
 
-def _report_object_dr(env: LeggedRobotLocomotionManager, free_names: list[str], *, is_mujoco: bool) -> bool:
+def _report_object_dr(env: PolicyTask, free_names: list[str], *, is_mujoco: bool) -> bool:
     """Read back the physics state the RandomizationManager's startup DR already produced.
 
     Reads (does NOT apply) each free body's mass + sliding friction. On MuJoCo, reads from the

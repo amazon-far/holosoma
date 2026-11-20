@@ -93,8 +93,7 @@ def _build(simulator: str):
     device = "cpu" if simulator == "mujoco" else "cuda:0"
     config = dataclasses.replace(
         config,
-        device=device,
-        training=dataclasses.replace(config.training, num_envs=1, headless=True),
+        run=dataclasses.replace(config.run, device=device, num_envs=1, headless=True),
     )
 
     import torch

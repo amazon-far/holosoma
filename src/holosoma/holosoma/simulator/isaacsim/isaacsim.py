@@ -123,7 +123,7 @@ class IsaacSim(BaseSimulator):
         )
 
         scene_config: InteractiveSceneCfg = InteractiveSceneCfg(
-            num_envs=self.training_config.num_envs,
+            num_envs=self.run_config.num_envs,
             env_spacing=self.scene_config.env_spacing,
             replicate_physics=self.scene_config.replicate_physics,
         )
@@ -167,7 +167,7 @@ class IsaacSim(BaseSimulator):
             sensor_setup.sync_camera_fabric_transforms(self)
 
         self.default_coms = self._robot.root_physx_view.get_coms().clone()
-        self.base_com_bias = torch.zeros((self.training_config.num_envs, 3), dtype=torch.float, device="cpu")
+        self.base_com_bias = torch.zeros((self.run_config.num_envs, 3), dtype=torch.float, device="cpu")
 
         self.events_cfg = EventCfg()
 
@@ -812,7 +812,7 @@ class IsaacSim(BaseSimulator):
 
         # Initialize commands tensor if not already done
         if not hasattr(self, "commands"):
-            self.commands = torch.zeros((self.training_config.num_envs, 12), device=self.sim_device)
+            self.commands = torch.zeros((self.run_config.num_envs, 12), device=self.sim_device)
 
         # Set up viewer input (owns the carb.input subscription for its lifetime)
         if self.viewport_camera_controller is not None:

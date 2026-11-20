@@ -24,7 +24,7 @@ def test_full_reset_keeps_the_setup_joint_position_bias():
         preset,
         simulator=SIMULATOR_REGISTRY["mujoco"],
         randomization=dataclasses.replace(preset.randomization, setup_terms=terms),
-        training=dataclasses.replace(preset.training, num_envs=1, headless=True),
+        run=dataclasses.replace(preset.run, num_envs=1, headless=True),
     )
 
     with config.create_task() as env:

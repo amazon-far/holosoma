@@ -68,7 +68,7 @@ SKIP_EXIT_CODE = 77
 # renders each step and supplies an object-framing camera.
 # --------------------------------------------------------------------------------------------
 def _build_run_sim_config(simulator, scene, robot, terrain, record_dir):
-    """Bridge/gantry-disabled RunSimConfig; when recording, frame the camera on the scene OBJECTS."""
+    """Bridge/gantry-disabled SimulationExperimentConfig; when recording, frame the camera on the scene OBJECTS."""
     cam = None
     if record_dir is not None:
         # Object-framing camera: the default cartesian offset/smoothing is tuned for a ~1.7 m robot;
@@ -1432,8 +1432,7 @@ def main() -> int:
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
         config,
-        device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs),
     )
 
     # Apply the scenario's link_physics onto the one-link robot's asset, so the robot link carries the

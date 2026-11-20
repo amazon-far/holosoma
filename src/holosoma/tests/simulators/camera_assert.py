@@ -101,8 +101,7 @@ def main() -> int:
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
         config,
-        device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        run=dataclasses.replace(config.run, device=device, num_envs=args.num_envs),
     )
 
     if args.check_recorder:

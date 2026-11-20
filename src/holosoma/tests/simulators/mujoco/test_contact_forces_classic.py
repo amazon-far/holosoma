@@ -37,7 +37,7 @@ def test_tilted_contact_force_is_reported_in_world_coordinates():
     mujoco.mj_forward(model, data)
     assert data.ncon > 0
 
-    config = types.SimpleNamespace(training=types.SimpleNamespace(num_envs=1))
+    config = types.SimpleNamespace(run=types.SimpleNamespace(num_envs=1))
     backend = ClassicBackend(model, data, config, "cpu")
     ball_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "ball")
     force = backend.compute_contact_forces()[0, ball_id].numpy()
@@ -73,7 +73,7 @@ def _settled_backend(tilt: float = 0.0):
     for _ in range(SETTLE_STEPS):
         mujoco.mj_step(model, data)
     # compute_contact_forces reaches only model/data/device, so the stub config satisfies it.
-    config = cast("FullSimConfig", types.SimpleNamespace(training=types.SimpleNamespace(num_envs=1)))
+    config = cast("FullSimConfig", types.SimpleNamespace(run=types.SimpleNamespace(num_envs=1)))
     return model, data, ClassicBackend(model, data, config, "cpu")
 
 
