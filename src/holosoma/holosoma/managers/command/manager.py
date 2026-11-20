@@ -173,6 +173,29 @@ class CommandManager:
                 func = self._step_funcs[term_name]
                 func(self.env, **term_cfg.params)
 
+    def _instances(self) -> list[CommandTermBase]:
+        return list(dict.fromkeys(entry["instance"] for entry in self._class_entries))
+
+    @property
+    def resets_robot(self) -> bool:
+        """Whether a term writes the robot's reset state itself."""
+        return any(term.resets_robot for term in self._instances())
+
+    def after_reset(self, env_ids: Tensor) -> None:
+        for term in self._instances():
+            term.after_reset(env_ids)
+
+    def on_evaluate(self) -> None:
+        for term in self._instances():
+            term.on_evaluate()
+
+    def log_metrics(self) -> dict[str, Any]:
+        """The terms' per-frame values to log, merged."""
+        merged: dict[str, Any] = {}
+        for term in self._instances():
+            merged.update(term.log_metrics())
+        return merged
+
     def get_state(self, term_name: str) -> CommandTermBase | None:
         """Retrieve a stateful command term by name.
 

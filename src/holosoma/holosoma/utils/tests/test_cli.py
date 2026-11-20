@@ -6,13 +6,14 @@ import pytest
 
 from holosoma import cli
 from holosoma.config_types.experiment import (
-    LOCOMOTION_EVALUATE,
-    LOCOMOTION_TRAIN,
+    EVALUATE,
     SIMULATE,
+    TRAIN,
     EvaluationExperimentConfig,
     SimulationExperimentConfig,
     TrainingExperimentConfig,
 )
+from holosoma.envs.policy_task import PolicyTask
 
 pytestmark = pytest.mark.no_sim
 
@@ -31,8 +32,8 @@ class _RecordingTask:
     ("task", "config_type"),
     [
         (SIMULATE, SimulationExperimentConfig),
-        (LOCOMOTION_TRAIN, TrainingExperimentConfig),
-        (LOCOMOTION_EVALUATE, EvaluationExperimentConfig),
+        (TRAIN, TrainingExperimentConfig),
+        (EVALUATE, EvaluationExperimentConfig),
     ],
 )
 def test_resolve_task_reads_the_config_type_from_the_annotation(task: str, config_type: type) -> None:
@@ -41,9 +42,7 @@ def test_resolve_task_reads_the_config_type_from_the_annotation(task: str, confi
 
 def test_resolve_task_rejects_a_method_that_is_not_a_task_function() -> None:
     with pytest.raises(SystemExit, match="not a runnable task function"):
-        cli.resolve_task(
-            "holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager.load_checkpoint_state"
-        )
+        cli.resolve_task("holosoma.envs.policy_task:PolicyTask.load_checkpoint_state")
 
 
 def test_run_builds_the_named_config_and_calls_its_function() -> None:
@@ -56,10 +55,14 @@ def test_run_builds_the_named_config_and_calls_its_function() -> None:
     assert (config.task, config.simulator.config.sim.fps, config.run.num_envs) == (task, 400, 3)
 
 
+class _OtherPolicyTask(PolicyTask):
+    """A policy task class other than the one the experiment presets name."""
+
+
 def test_run_rejects_a_task_class_that_does_not_match_the_experiment() -> None:
-    wbt_train = "holosoma.envs.wbt.wbt_manager:WholeBodyTrackingManager.train"
+    other_train = f"{__name__}:_OtherPolicyTask.train"
     with pytest.raises(SystemExit, match="does not match the experiment"):
-        cli.run(["exp:g1-29dof", f"--task={wbt_train}"])
+        cli.run(["exp:g1-29dof", f"--task={other_train}"])
 
 
 def test_replay_base_plays_the_experiment_motion_kinematically() -> None:
@@ -86,3 +89,9 @@ def test_simulation_base_puts_the_experiment_world_on_its_sim2sim_simulator() ->
     assert base.simulator.config.bridge.enabled and base.simulator.config.virtual_gantry.enabled
     assert (base.randomization, base.termination) == (None, None)
     assert (base.run.num_envs, base.run.project) == (1, experiment.g1_29dof.run.project)
+
+
+def test_task_aliases_expand_to_the_full_task_path(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        cli.run(["--task=evaluate", "--print-args"])
+    assert f"--task={EVALUATE}" in capsys.readouterr().out

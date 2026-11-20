@@ -11,7 +11,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from holosoma.config_types.experiment import SIMULATE, ExperimentConfig, TrainingExperimentConfig, task_class_path
+from holosoma.config_types.experiment import (
+    SIMULATE,
+    TASK_ALIASES,
+    ExperimentConfig,
+    TrainingExperimentConfig,
+    task_class_path,
+)
 
 RUN_RECORD_NAME = "holosoma_run.yaml"
 
@@ -22,6 +28,8 @@ def resolve_task(task: str) -> tuple[type, Callable[[Any], None], type[Experimen
     The function must be a classmethod whose single parameter is annotated with an ``ExperimentConfig``
     subclass; that annotation is the config type the command line builds.
     """
+    if ":" not in task:
+        raise SystemExit(f"Unknown task {task!r}: use {', '.join(TASK_ALIASES)} or module:Class.function.")
     module_name, _, attribute = task.partition(":")
     class_name, _, function_name = attribute.rpartition(".")
     try:
@@ -57,6 +65,22 @@ def _pop_experiment(argv: list[str]) -> tuple[TrainingExperimentConfig | None, l
         choices = ", ".join(f"exp:{key.replace('_', '-')}" for key in EXPERIMENT_REGISTRY)
         raise SystemExit(f"Unknown experiment {tokens[0]!r}; choose from {choices}.")
     return EXPERIMENT_REGISTRY[name], [token for token in argv if token != tokens[0]]
+
+
+def expand_task_aliases(argv: list[str]) -> list[str]:
+    """``argv`` with each built-in ``--task`` alias replaced by the full ``module:Class.function``."""
+    expanded: list[str] = []
+    args = iter(argv)
+    for arg in args:
+        if arg.startswith("--task="):
+            value = arg.partition("=")[2]
+            expanded.append(f"--task={TASK_ALIASES.get(value, value)}")
+        elif arg == "--task":
+            value = next(args, "")
+            expanded.extend(["--task", TASK_ALIASES.get(value, value)])
+        else:
+            expanded.append(arg)
+    return expanded
 
 
 def explicit_task(argv: list[str]) -> str | None:
@@ -112,11 +136,13 @@ def run(args: list[str] | None = None, default_task: str = SIMULATE) -> None:
     roots = frozenset(f"exp:{name.replace('_', '-')}" for name in EXPERIMENT_REGISTRY)
     provenance: dict[str, str] = {}
     try:
-        argv = alias_legacy_flags(expand_config_args(argv, roots, provenance))
+        argv = expand_task_aliases(alias_legacy_flags(expand_config_args(argv, roots, provenance)))
     except ConfigDocumentError as exc:
         raise SystemExit(str(exc)) from exc
     provenance = {
-        renamed[0]: source for token, source in provenance.items() if (renamed := alias_legacy_flags([token]))
+        renamed[0]: source
+        for token, source in provenance.items()
+        if (renamed := expand_task_aliases(alias_legacy_flags([token])))
     }
 
     exp_tokens = [token for token in argv if token.startswith("exp:")]

@@ -67,7 +67,7 @@ from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from holosoma.config_types.experiment import TrainingExperimentConfig
-    from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
+    from holosoma.envs.policy_task import PolicyTask
     from holosoma.simulator.mujoco.backends import WarpBackend
     from holosoma.simulator.mujoco.mujoco import MuJoCo
     from holosoma.utils.safe_torch_import import torch
@@ -214,7 +214,7 @@ def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
     cfg = _experiment_config(backend, num_envs, headless)
 
     with cfg.create_task() as task:
-        env = cast("LeggedRobotLocomotionManager", task)
+        env = cast("PolicyTask", task)
         sim = env.simulator
         env_ids = torch.arange(env.num_envs, device=env.device)
 
@@ -308,7 +308,7 @@ def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
         return 0
 
 
-def _report_object_dr(env: LeggedRobotLocomotionManager, free_names: list[str], *, is_mujoco: bool) -> bool:
+def _report_object_dr(env: PolicyTask, free_names: list[str], *, is_mujoco: bool) -> bool:
     """Read back the physics state the RandomizationManager's startup DR already produced.
 
     Reads (does NOT apply) each free body's mass + sliding friction. On MuJoCo, reads from the

@@ -112,8 +112,30 @@ _RUN_FIELDS_FROM_ROOT = ("device", "time_scale", "viewer_update_decimation", "vi
 # Saved flat-layout configs without an ``env_class`` ran on the locomotion manager, the old default.
 LOCOMOTION_TRAIN_CLASS = "holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager"
 
+_LOCOMOTION_CLASS = "holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager"
+_WBT_CLASS = "holosoma.envs.wbt.wbt_manager:WholeBodyTrackingManager"
+_POLICY_TASK_CLASS = "holosoma.envs.policy_task:PolicyTask"
+
 # ``module:Class`` prefixes of saved ``task`` paths whose class has moved, mapped to where it lives now.
-_MOVED_TASK_CLASSES: dict[str, str] = {}
+_MOVED_TASK_CLASSES: dict[str, str] = {_LOCOMOTION_CLASS: _POLICY_TASK_CLASS, _WBT_CLASS: _POLICY_TASK_CLASS}
+
+
+def _fold_task_subclass(data: dict[str, Any], task_class: str) -> dict[str, Any]:
+    """Add the terms that replace the locomotion and WBT task classes' behaviour to a config saved with one."""
+    randomization = data.get("randomization")
+    if not isinstance(randomization, dict):
+        return data
+    if task_class == _LOCOMOTION_CLASS:
+        reset_terms = randomization.get("reset_terms") or {}
+        if "randomize_spawn" not in reset_terms:
+            spawn = {"func": "holosoma.managers.randomization.terms.locomotion:randomize_spawn", "params": {}}
+            randomization["reset_terms"] = {"randomize_spawn": spawn, **reset_terms}
+    elif task_class == _WBT_CLASS:
+        for terms in randomization.values():
+            for term in (terms or {}).values() if isinstance(terms, dict) else ():
+                if isinstance(term, dict) and str(term.get("func", "")).endswith(":PushRandomizerState"):
+                    term["params"] = {**(term.get("params") or {}), "additive": True}
+    return data
 
 
 def _from_env_class_layout(data: dict[str, Any]) -> dict[str, Any]:
@@ -151,6 +173,7 @@ def _experiment_config_from_saved(config_data: dict[str, Any]) -> TrainingExperi
     if "task" not in data:
         data = _from_env_class_layout(data)
     task_class, _, function = data["task"].rpartition(".")
+    data = _fold_task_subclass(data, task_class)
     data["task"] = f"{_MOVED_TASK_CLASSES.get(task_class, task_class)}.{function}"
     data = _drop_retired_isaacgym_fields(data)
     simulator = data.get("simulator", {}).get("config", {})

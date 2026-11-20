@@ -157,13 +157,13 @@ A config's `task` field names what runs, as `module:Class.function`.
 - **What the function must be:** a classmethod on a task class (a `BaseTask` subclass) that takes one finished config. Its parameter annotation names the config type the command line builds:
 
   ```python
-  class MyLocomotionTask(LeggedRobotLocomotionManager):
+  class MyLocomotionTask(PolicyTask):
       @classmethod
       def train(cls, config: TrainingExperimentConfig) -> None:
           ...  # e.g. patch or extend, then super().train(config)
   ```
 - **Selecting it:** `holosoma --task=my_pkg.tasks:MyLocomotionTask.train exp:g1-29dof`, or set `task` in an experiment preset so `exp:<name>` selects it.
-- **Inherited functions:** an `PolicyTask` subclass already has `train` and `evaluate`, and a `SimulationTask` subclass has `simulate` and `replay`.
+- **Inherited functions:** a `PolicyTask` subclass already has `train` and `evaluate`, and a `SimulationTask` subclass has `simulate` and `replay`.
 - **What the CLI checks:** that the path names such a classmethod, and that an explicit `task` names the same class as the `exp:` preset.
 
 ## Plugins — custom per-step behavior

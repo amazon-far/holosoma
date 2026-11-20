@@ -14,10 +14,10 @@ from holosoma.managers.reward.base import RewardTermBase
 from holosoma.utils.rotations import quat_error_magnitude
 
 if TYPE_CHECKING:
-    from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
+    from holosoma.envs.policy_task import PolicyTask
 
 
-def _get_motion_command_and_assert_type(env: WholeBodyTrackingManager) -> MotionCommand:
+def _get_motion_command_and_assert_type(env: PolicyTask) -> MotionCommand:
     motion_command = env.command_manager.get_state("motion_command")
     assert motion_command is not None, "motion_command not found in command manager"
     assert isinstance(motion_command, MotionCommand), f"Expected MotionCommand, got {type(motion_command)}"
@@ -29,7 +29,7 @@ def _get_motion_command_and_assert_type(env: WholeBodyTrackingManager) -> Motion
 #########################################################################################################
 
 
-def penalty_action_rate(env: WholeBodyTrackingManager) -> torch.Tensor:
+def penalty_action_rate(env: PolicyTask) -> torch.Tensor:
     """Penalize changes in actions between steps.
 
     Args:
@@ -43,7 +43,7 @@ def penalty_action_rate(env: WholeBodyTrackingManager) -> torch.Tensor:
     return torch.sum(torch.square(prev_actions - actions), dim=1)
 
 
-def limits_dof_pos(env: WholeBodyTrackingManager, soft_dof_pos_limit: float = 0.95) -> torch.Tensor:
+def limits_dof_pos(env: PolicyTask, soft_dof_pos_limit: float = 0.95) -> torch.Tensor:
     """Penalize joint positions too close to limits.
 
     Args:
@@ -73,37 +73,37 @@ def limits_dof_pos(env: WholeBodyTrackingManager, soft_dof_pos_limit: float = 0.
 # ================================================================================================
 
 
-def motion_global_ref_position_error_exp(env: WholeBodyTrackingManager, sigma: float) -> torch.Tensor:
+def motion_global_ref_position_error_exp(env: PolicyTask, sigma: float) -> torch.Tensor:
     motion_command = _get_motion_command_and_assert_type(env)
     error = torch.sum(torch.square(motion_command.ref_pos_w - motion_command.robot_ref_pos_w), dim=-1)
     return torch.exp(-error / sigma**2)
 
 
-def motion_global_ref_orientation_error_exp(env: WholeBodyTrackingManager, sigma: float) -> torch.Tensor:
+def motion_global_ref_orientation_error_exp(env: PolicyTask, sigma: float) -> torch.Tensor:
     motion_command = _get_motion_command_and_assert_type(env)
     error = quat_error_magnitude(motion_command.ref_quat_w, motion_command.robot_ref_quat_w) ** 2
     return torch.exp(-error / sigma**2)
 
 
-def motion_relative_body_position_error_exp(env: WholeBodyTrackingManager, sigma: float) -> torch.Tensor:
+def motion_relative_body_position_error_exp(env: PolicyTask, sigma: float) -> torch.Tensor:
     motion_command = _get_motion_command_and_assert_type(env)
     error = torch.sum(torch.square(motion_command.body_pos_relative_w - motion_command.robot_body_pos_w), dim=-1)
     return torch.exp(-error.mean(-1) / sigma**2)
 
 
-def motion_relative_body_orientation_error_exp(env: WholeBodyTrackingManager, sigma: float) -> torch.Tensor:
+def motion_relative_body_orientation_error_exp(env: PolicyTask, sigma: float) -> torch.Tensor:
     motion_command = _get_motion_command_and_assert_type(env)
     error = quat_error_magnitude(motion_command.body_quat_relative_w, motion_command.robot_body_quat_w) ** 2
     return torch.exp(-error.mean(-1) / sigma**2)
 
 
-def motion_global_body_lin_vel(env: WholeBodyTrackingManager, sigma: float) -> torch.Tensor:
+def motion_global_body_lin_vel(env: PolicyTask, sigma: float) -> torch.Tensor:
     motion_command = _get_motion_command_and_assert_type(env)
     error = torch.sum(torch.square(motion_command.body_lin_vel_w - motion_command.robot_body_lin_vel_w), dim=-1)
     return torch.exp(-error.mean(-1) / sigma**2)
 
 
-def motion_global_body_ang_vel(env: WholeBodyTrackingManager, sigma: float) -> torch.Tensor:
+def motion_global_body_ang_vel(env: PolicyTask, sigma: float) -> torch.Tensor:
     motion_command = _get_motion_command_and_assert_type(env)
     error = torch.sum(torch.square(motion_command.body_ang_vel_w - motion_command.robot_body_ang_vel_w), dim=-1)
     return torch.exp(-error.mean(-1) / sigma**2)
@@ -114,13 +114,13 @@ def motion_global_body_ang_vel(env: WholeBodyTrackingManager, sigma: float) -> t
 # ================================================================================================
 
 
-def object_global_ref_position_error_exp(env: WholeBodyTrackingManager, sigma: float) -> torch.Tensor:
+def object_global_ref_position_error_exp(env: PolicyTask, sigma: float) -> torch.Tensor:
     motion_command = _get_motion_command_and_assert_type(env)
     error = torch.sum(torch.square(motion_command.object_pos_w - motion_command.simulator_object_pos_w), dim=-1)
     return torch.exp(-error / sigma**2)
 
 
-def object_global_ref_orientation_error_exp(env: WholeBodyTrackingManager, sigma: float) -> torch.Tensor:
+def object_global_ref_orientation_error_exp(env: PolicyTask, sigma: float) -> torch.Tensor:
     motion_command = _get_motion_command_and_assert_type(env)
     error = quat_error_magnitude(motion_command.object_quat_w, motion_command.simulator_object_quat_w) ** 2
     return torch.exp(-error / sigma**2)
@@ -132,7 +132,7 @@ def object_global_ref_orientation_error_exp(env: WholeBodyTrackingManager, sigma
 
 
 class UndesiredContacts(RewardTermBase):
-    def __init__(self, cfg: RewardTermCfg, env: WholeBodyTrackingManager):
+    def __init__(self, cfg: RewardTermCfg, env: PolicyTask):
         super().__init__(cfg, env)
         self.env = env
         pattern = cfg.params.get("undesired_contacts_body_names", "")
@@ -152,7 +152,7 @@ class UndesiredContacts(RewardTermBase):
         )
         self.threshold = cfg.params.get("threshold", 1.0)
 
-    def __call__(self, env: WholeBodyTrackingManager, **kwargs: Any) -> torch.Tensor:
+    def __call__(self, env: PolicyTask, **kwargs: Any) -> torch.Tensor:
         # (num_envs, decimation, num_bodies, 3) — every substep of the control step just finished
         net_contact_forces = self.env.simulator.contact_recorder.recorded_forces
         is_contact = (

@@ -19,7 +19,7 @@ from holosoma.config_values import (
 )
 
 g1_29dof_wbt = TrainingExperimentConfig(
-    task="holosoma.envs.wbt.wbt_manager:WholeBodyTrackingManager.train",
+    task="holosoma.envs.policy_task:PolicyTask.train",
     simulator=replace(
         simulator.isaacsim,
         config=replace(
@@ -81,7 +81,7 @@ g1_29dof_wbt = TrainingExperimentConfig(
 )
 
 g1_29dof_wbt_fast_sac = TrainingExperimentConfig(
-    task="holosoma.envs.wbt.wbt_manager:WholeBodyTrackingManager.train",
+    task="holosoma.envs.policy_task:PolicyTask.train",
     simulator=replace(
         simulator.isaacsim,
         config=replace(

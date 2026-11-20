@@ -21,7 +21,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 from holosoma.config_values import experiment
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
-from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.command.terms.wbt import MotionCommand
 from holosoma.utils.safe_torch_import import torch
 from tests.simulators._sim_harness import run_and_hard_exit
@@ -44,7 +44,7 @@ def main() -> int:
 
     failures: list[str] = []
     with tyro_config.create_task() as task:
-        env = cast("WholeBodyTrackingManager", task)
+        env = cast("PolicyTask", task)
         motion = cast("MotionCommand", env.command_manager.get_state("motion_command"))
         env.reset_envs_idx()
         if not bool(motion.body_pos_relative_w.abs().amax() > 0.0):

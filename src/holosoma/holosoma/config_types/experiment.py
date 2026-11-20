@@ -33,8 +33,11 @@ if TYPE_CHECKING:
 
 SIMULATE = "holosoma.envs.simulation_task:SimulationTask.simulate"
 REPLAY = "holosoma.envs.simulation_task:SimulationTask.replay"
-LOCOMOTION_TRAIN = "holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager.train"
-LOCOMOTION_EVALUATE = "holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager.evaluate"
+TRAIN = "holosoma.envs.policy_task:PolicyTask.train"
+EVALUATE = "holosoma.envs.policy_task:PolicyTask.evaluate"
+
+TASK_ALIASES = {"simulate": SIMULATE, "replay": REPLAY, "train": TRAIN, "evaluate": EVALUATE}
+"""Short ``--task`` values for the built-in workflows; configs always hold the full path."""
 
 
 def task_class_path(task: str) -> str:
@@ -183,7 +186,7 @@ class ReplayExperimentConfig(ExperimentConfig):
 class TrainingExperimentConfig(MDPConfig, ExperimentConfig):
     """Training a policy on an MDP with an algorithm."""
 
-    task: str = LOCOMOTION_TRAIN
+    task: str = TRAIN
 
     algo: Annotated[AlgoConfig, UseRegistry(holosoma.config_values.algo.ALGO_REGISTRY)] = (
         holosoma.config_values.algo.ppo
@@ -214,7 +217,7 @@ class TrainingExperimentConfig(MDPConfig, ExperimentConfig):
 class EvaluationExperimentConfig(MDPConfig, ExperimentConfig):
     """Evaluating a trained checkpoint on the MDP it was trained on."""
 
-    task: str = LOCOMOTION_EVALUATE
+    task: str = EVALUATE
 
     eval: EvalConfig = EvalConfig()
     """What to evaluate and what to do while evaluating it."""

@@ -11,16 +11,15 @@
 ```bash
 holosoma                                                           # simulate: one G1 on MuJoCo, in the viewer
 holosoma exp:g1-29dof simulator:mjwarp --run.num_envs 1024     # train the g1-29dof experiment
-holosoma --task=holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager.evaluate \
-    --eval.checkpoint=<CHECKPOINT_PATH>                            # evaluate a checkpoint
-holosoma --task=holosoma.envs.simulation_task:SimulationTask.replay exp:g1-29dof-wbt   # replay its motion
+holosoma --task=evaluate --eval.checkpoint=<CHECKPOINT_PATH>      # evaluate a checkpoint
+holosoma --task=replay exp:g1-29dof-wbt                             # replay its motion
 holosoma --config run.yaml                                         # run a document
 ```
 
 The older scripts set their workflow for you and accept the same arguments:
 - `python -m holosoma.run_sim` (simulate);
 - `holosoma.train_agent` (train);
-- `holosoma.eval_agent` (evaluate the class the checkpoint was trained with);
+- `holosoma.eval_agent` (evaluate);
 - `holosoma.replay` (replay).
 
 ## What runs: `task`
@@ -28,16 +27,20 @@ The older scripts set their workflow for you and accept the same arguments:
 Every config has a `task` field naming a task class and the classmethod that runs the config, as
 `module:Class.function`. The class is the environment the workflow builds:
 
-| Workflow | `task` | Config type | Holds |
-|---|---|---|---|
-| simulate | `holosoma.envs.simulation_task:SimulationTask.simulate` (the default) | `SimulationExperimentConfig` | world, `run` |
-| replay | `holosoma.envs.simulation_task:SimulationTask.replay` | `ReplayExperimentConfig` | world, `motion`, `run` |
-| train | `…:LeggedRobotLocomotionManager.train`, `…:WholeBodyTrackingManager.train` | `TrainingExperimentConfig` | world, MDP, `algo`, `run` |
-| evaluate | the same classes' `evaluate` | `EvaluationExperimentConfig` | world, MDP, `eval`, `run` |
+| Workflow | Alias | `task` | Config type | Holds |
+|---|---|---|---|---|
+| simulate | `simulate` (the default) | `holosoma.envs.simulation_task:SimulationTask.simulate` | `SimulationExperimentConfig` | world, `run` |
+| replay | `replay` | `holosoma.envs.simulation_task:SimulationTask.replay` | `ReplayExperimentConfig` | world, `motion`, `run` |
+| train | `train` | `holosoma.envs.policy_task:PolicyTask.train` | `TrainingExperimentConfig` | world, MDP, `algo`, `run` |
+| evaluate | `evaluate` | `holosoma.envs.policy_task:PolicyTask.evaluate` | `EvaluationExperimentConfig` | world, MDP, `eval`, `run` |
+
+`--task` (or a document's `overrides.task`) accepts the alias or the full path; configs and
+`holosoma_run.yaml` record the full path. Locomotion and whole-body tracking are both `PolicyTask`:
+what differs between them is the MDP and randomization terms the experiment selects.
 
 `task` comes from, in order:
 1. `--task` on the command line, or a document's `overrides.task`;
-2. the `exp:` preset's `task` (experiment presets train);
+2. the `exp:` preset's `task` (experiment presets name `PolicyTask.train`);
 3. the default, `SimulationTask.simulate`.
 
 The function's parameter annotation is the config type the command line builds, so a task class

@@ -25,7 +25,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 from holosoma.config_values import experiment
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
-from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.common import seeding
 from holosoma.utils.safe_torch_import import torch
 from tests.simulators._sim_harness import run_and_hard_exit
@@ -70,7 +70,7 @@ def main() -> int:
 
     failures: list[str] = []
     with tyro_config.create_task() as task:
-        env = cast("LeggedRobotLocomotionManager", task)
+        env = cast("PolicyTask", task)
         if env.device != DEVICE:
             failures.append(f"task resolved device {env.device!r}, expected {DEVICE!r}")
         env.reset_envs_idx()

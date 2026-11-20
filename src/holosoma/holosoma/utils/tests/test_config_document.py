@@ -10,7 +10,7 @@ import yaml
 
 from holosoma import cli
 from holosoma.config_types.experiment import SimulationExperimentConfig, TrainingExperimentConfig
-from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
+from holosoma.envs.policy_task import PolicyTask
 
 pytestmark = pytest.mark.no_sim
 
@@ -67,7 +67,7 @@ def trained(monkeypatch: pytest.MonkeyPatch) -> list[TrainingExperimentConfig]:
     def train(_cls: type, config: TrainingExperimentConfig) -> None:
         seen.append(config)
 
-    monkeypatch.setattr(LeggedRobotLocomotionManager, "train", classmethod(train))
+    monkeypatch.setattr(PolicyTask, "train", classmethod(train))
     return seen
 
 

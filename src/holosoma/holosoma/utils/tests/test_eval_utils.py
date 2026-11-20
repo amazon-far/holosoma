@@ -629,3 +629,19 @@ def test_saved_isaacgym_simulator_is_replaced_by_the_selected_one(backend: str, 
     simulator = eval_cfg.simulator
     assert (simulator._target_, simulator.config.mujoco_backend) == (selected._target_, selected.config.mujoco_backend)
     assert simulator.config.sim.max_episode_length_s == 100000.0
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "spawn", "additive_push"),
+    [("g1_29dof_mujoco", True, False), ("g1_29dof_wbt_w_object_mjwarp_g1_head", False, True)],
+)
+def test_saved_task_subclass_configs_load_onto_policy_task_with_the_terms_that_replace_them(
+    fixture_name: str, spawn: bool, additive_push: bool, tmp_path: Path
+) -> None:
+    loaded = _load_through("checkpoint", _previous_schema(fixture_name), tmp_path)
+
+    assert loaded.task == "holosoma.envs.policy_task:PolicyTask.train"
+    assert loaded.randomization is not None
+    assert (next(iter(loaded.randomization.reset_terms), None) == "randomize_spawn") is spawn
+    push = loaded.randomization.setup_terms["push_randomizer_state"]
+    assert bool(push.params.get("additive", False)) is additive_push

@@ -18,7 +18,7 @@ from holosoma.config_values import (
 )
 
 t1_29dof = TrainingExperimentConfig(
-    task="holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager.train",
+    task="holosoma.envs.policy_task:PolicyTask.train",
     simulator=simulator.isaacsim,
     robot=robot.t1_29dof_waist_wrist,
     terrain=terrain.terrain_locomotion_mix,
@@ -41,7 +41,7 @@ t1_29dof = TrainingExperimentConfig(
 )
 
 t1_29dof_fast_sac = TrainingExperimentConfig(
-    task="holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager.train",
+    task="holosoma.envs.policy_task:PolicyTask.train",
     simulator=simulator.isaacsim,
     robot=robot.t1_29dof_waist_wrist,
     terrain=terrain.terrain_locomotion_mix,
