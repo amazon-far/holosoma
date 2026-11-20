@@ -120,18 +120,11 @@ class PolicyTask(BaseTask):
         if torch.distributed.get_rank() != 0:
             self.curriculum_manager.load_state_dict(payload[0])
 
-    def set_is_evaluating(self, command: Any = None) -> None:
-        """Switch to evaluation, called by the agent before evaluating a policy.
-
-        Command terms enter their evaluation mode; ``command``, when given, is written to every
-        env's locomotion command.
+    def set_is_evaluating(self) -> None:
         """
-        logger.info("Setting Env is evaluating")
+        Called by agent during pre_evaluate_policy
+        """
         self.is_evaluating = True
-        self.command_manager.on_evaluate()
-        if command is not None:
-            commands = self.command_manager.commands
-            commands[:] = torch.as_tensor(command, device=self.device, dtype=commands.dtype).view(1, -1)
 
     @property
     def average_episode_length(self) -> float:

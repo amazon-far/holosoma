@@ -40,9 +40,6 @@ class CommandTermBase(ABC):
     def step(self) -> None:
         """Per-step hook called during simulation rollout."""
 
-    def on_evaluate(self) -> None:  # noqa: B027
-        """Hook called once when the task switches to evaluation."""
-
     def log_metrics(self) -> dict[str, Any]:
         """Per-frame values to log."""
         return {}

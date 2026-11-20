@@ -35,10 +35,6 @@ class LocomotionCommand(CommandTermBase):
         if hasattr(env, "simulator"):
             env.simulator.commands = commands
 
-    def on_evaluate(self) -> None:
-        if self.commands is not None:
-            self.commands.zero_()
-
     def reset(self, env_ids: torch.Tensor | None) -> None:
         commands = self.commands
         if commands is None:
@@ -177,9 +173,6 @@ class LocomotionGait(CommandTermBase):
 
     def set_eval_mode(self, evaluating: bool) -> None:
         self._initialize_indices(None, evaluating=evaluating)
-
-    def on_evaluate(self) -> None:
-        self.set_eval_mode(True)
 
     def resample_frequency(self, env_ids: torch.Tensor) -> None:
         if self.gait_freq is None or self.phase_dt is None:

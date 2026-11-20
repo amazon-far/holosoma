@@ -176,10 +176,6 @@ class CommandManager:
     def _instances(self) -> list[CommandTermBase]:
         return list(dict.fromkeys(entry["instance"] for entry in self._class_entries))
 
-    def on_evaluate(self) -> None:
-        for term in self._instances():
-            term.on_evaluate()
-
     def log_metrics(self) -> dict[str, Any]:
         """The terms' per-frame values to log, merged."""
         merged: dict[str, Any] = {}
