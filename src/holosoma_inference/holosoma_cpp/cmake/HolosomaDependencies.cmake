@@ -88,27 +88,35 @@ find_package(ONNXRuntime QUIET)
 if(NOT ONNXRuntime_FOUND)
   _holosoma_require_fetch("ONNX Runtime ${HOLOSOMA_ONNXRUNTIME_VERSION}")
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
-    set(_ort_platform linux-x64)
-    set(_ort_sha a5ed5a3cac51fbb2e90da632ae43d19212faaa20e76484e62bcb7c23ddb3b3fd)
+    set(_ort_rid linux-x64)
   elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
-    set(_ort_platform linux-aarch64)
-    set(_ort_sha e16a27a8ed330bbc698df7330b0cf56e722f354e3bcc92118682c74ef3c3e3da)
+    set(_ort_rid linux-arm64)
   elseif(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
-    set(_ort_platform osx-arm64)
-    set(_ort_sha 6ebb5062a934537c352937821f9fe9718e7de1a2db1122a93dd363ffd53a7012)
+    set(_ort_rid osx-arm64)
   else()
     message(FATAL_ERROR "No prebuilt ONNX Runtime for ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}; set ONNXRUNTIME_ROOT.")
   endif()
   set(_ort_url_hash)
   if(HOLOSOMA_ONNXRUNTIME_VERSION STREQUAL "1.30.0")
-    set(_ort_url_hash URL_HASH SHA256=${_ort_sha})
+    set(_ort_url_hash URL_HASH SHA256=30df119bd9164eaa187666d93147448fdd4a9a1a3caf83f1505daf7af2d1c5d2)
   endif()
+  # Microsoft's NuGet package: one archive with the headers and the libraries for every platform.
   FetchContent_Declare(onnxruntime_prebuilt
-    URL https://github.com/microsoft/onnxruntime/releases/download/v${HOLOSOMA_ONNXRUNTIME_VERSION}/onnxruntime-${_ort_platform}-${HOLOSOMA_ONNXRUNTIME_VERSION}.tgz
+    URL https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${HOLOSOMA_ONNXRUNTIME_VERSION}/microsoft.ml.onnxruntime.${HOLOSOMA_ONNXRUNTIME_VERSION}.nupkg
+    DOWNLOAD_NAME onnxruntime-${HOLOSOMA_ONNXRUNTIME_VERSION}.zip
     ${_ort_url_hash})
-  # The release tarball has no CMakeLists.txt, so this only downloads and unpacks it.
+  # The package has no CMakeLists.txt, so this only downloads and unpacks it.
   FetchContent_MakeAvailable(onnxruntime_prebuilt)
-  set(ONNXRUNTIME_ROOT "${onnxruntime_prebuilt_SOURCE_DIR}" CACHE PATH "ONNX Runtime root" FORCE)
+  # Lay it out as include/ and lib/, adding the soname link the libraries are loaded by.
+  set(_ort_root "${CMAKE_BINARY_DIR}/onnxruntime-${HOLOSOMA_ONNXRUNTIME_VERSION}-${_ort_rid}")
+  file(COPY "${onnxruntime_prebuilt_SOURCE_DIR}/build/native/include" DESTINATION "${_ort_root}")
+  file(COPY "${onnxruntime_prebuilt_SOURCE_DIR}/runtimes/${_ort_rid}/native/" DESTINATION "${_ort_root}/lib")
+  if(APPLE)
+    file(CREATE_LINK libonnxruntime.dylib "${_ort_root}/lib/libonnxruntime.1.dylib" SYMBOLIC)
+  else()
+    file(CREATE_LINK libonnxruntime.so "${_ort_root}/lib/libonnxruntime.so.1" SYMBOLIC)
+  endif()
+  set(ONNXRUNTIME_ROOT "${_ort_root}" CACHE PATH "ONNX Runtime root" FORCE)
   find_package(ONNXRuntime REQUIRED)
 endif()
 
