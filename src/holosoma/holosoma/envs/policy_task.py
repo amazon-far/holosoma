@@ -163,12 +163,6 @@ class PolicyTask(BaseTask):
         self.command_manager.reset(env_ids)
         self.curriculum_manager.reset(env_ids)
 
-    def _reset_robot_states_callback(self, env_ids: torch.Tensor, target_states: dict[str, Any] | None = None) -> None:
-        """Reset the robot unless a command term resets it."""
-        if self.command_manager.resets_robot:
-            return
-        super()._reset_robot_states_callback(env_ids, target_states)
-
     def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
         self.command_manager.after_reset(env_ids)
         self._pre_compute_observations_callback()

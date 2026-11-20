@@ -176,11 +176,6 @@ class CommandManager:
     def _instances(self) -> list[CommandTermBase]:
         return list(dict.fromkeys(entry["instance"] for entry in self._class_entries))
 
-    @property
-    def resets_robot(self) -> bool:
-        """Whether a term writes the robot's reset state itself."""
-        return any(term.resets_robot for term in self._instances())
-
     def after_reset(self, env_ids: Tensor) -> None:
         for term in self._instances():
             term.after_reset(env_ids)

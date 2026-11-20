@@ -536,8 +536,6 @@ def get_filtered_body_names(body_list: list[str], pattern: str) -> list[str]:
 
 
 class MotionCommand(CommandTermBase):
-    resets_robot = True
-
     def __init__(self, cfg: Any, env: PolicyTask):
         super().__init__(cfg, env)
 
