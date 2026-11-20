@@ -104,7 +104,7 @@ def _build(simulator: str):
     sim.setup_terrain()
     sim.load_assets()
     origins = torch.zeros(1, 3, device=resolved_device)
-    init = config.env.robot.init_state
+    init = config.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
         device=resolved_device,

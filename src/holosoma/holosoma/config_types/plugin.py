@@ -213,7 +213,7 @@ class ROS2OdometryPluginConfig(PluginConfig):
 class MotionPlaybackPluginConfig(PluginConfig):
     """Kinematically drive the robot (and optionally scene objects) from a recorded motion clip.
 
-    Rendering-only playback. Pair with ``--env.simulator.config.sim.kinematic_playback True``: the
+    Rendering-only playback. Pair with ``--simulator.config.sim.kinematic_playback True``: the
     sim then propagates the plugin's per-frame state writes with forward kinematics only — no
     dynamics at all — and the loop ticks once per control frame. Without the flag (any dynamics
     loop, including training/eval), the plugin still works by re-pinning state every

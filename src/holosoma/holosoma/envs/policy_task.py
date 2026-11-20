@@ -422,7 +422,7 @@ def train_on_task(tyro_config: TrainingExperimentConfig, env: PolicyTask, setup:
 
         assert isinstance(logger_cfg, WandbLoggerConfig), "Logger config must be WandbLoggerConfig when type is wandb"
         wandb_cfg = logger_cfg
-        robot_type = tyro_config.env.robot.asset.robot_type
+        robot_type = tyro_config.robot.asset.robot_type
         default_run_name = f"{timestamp}_{tyro_config.run.name}_{wandb_cfg.group or 'default'}_{robot_type}"
         wandb_dir = Path(wandb_cfg.dir or (experiment_dir / ".wandb"))
         wandb_dir.mkdir(exist_ok=True, parents=True)

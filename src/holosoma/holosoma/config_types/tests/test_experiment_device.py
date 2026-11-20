@@ -14,9 +14,7 @@ from holosoma.simulator.session import resolve_simulation_device
 
 pytestmark = pytest.mark.no_sim
 
-_CLASSIC = dataclasses.replace(
-    experiment.g1_29dof, env=dataclasses.replace(experiment.g1_29dof.env, simulator=simulator_values.mujoco)
-)
+_CLASSIC = dataclasses.replace(experiment.g1_29dof, simulator=simulator_values.mujoco)
 
 
 def _with_device(device: str | None) -> TrainingExperimentConfig:

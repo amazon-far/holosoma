@@ -111,8 +111,8 @@ def _dict_value_hint(hint: Any) -> Any | None:
 def find_dynamic_dict_fields(config_type: Any) -> dict[str, Any]:
     """Return string-keyed dict fields for a dataclass config, including those of nested parts.
 
-    Nested plain-dataclass fields (not registry unions) are searched too, so a dict field inside
-    ``env`` is returned as ``"env.sensor"``.
+    Nested plain-dataclass fields (not registry unions) are searched too, so a dict field ``d`` inside
+    a part ``p`` is returned as ``"p.d"``.
 
     Args:
         config_type: Dataclass type or ``Annotated`` alias.

@@ -62,8 +62,8 @@ class SimulatorConfig:
         """Set the simulator type to use throughout the codebase."""
         if simulator_type == "isaacgym":
             raise ValueError(
-                "The Isaac Gym simulator is no longer supported. Select env.simulator:isaacsim, "
-                "env.simulator:mujoco or env.simulator:mjwarp; configs saved with Isaac Gym can still be "
+                "The Isaac Gym simulator is no longer supported. Select simulator:isaacsim, "
+                "simulator:mujoco or simulator:mjwarp; configs saved with Isaac Gym can still be "
                 "evaluated by overriding the simulator on the command line."
             )
         if simulator_type not in cls._supported_simulator_names:

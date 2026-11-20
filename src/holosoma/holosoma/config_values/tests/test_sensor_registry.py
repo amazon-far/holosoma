@@ -30,26 +30,26 @@ def test_cli_composes_camera_lidar_and_pointcloud_route() -> None:
     config = parse_config(
         SimulationExperimentConfig,
         args=[
-            "env.simulator:sim-mujoco",
-            "env.sensor.head:g1-head",
-            "env.sensor.front_scan:g1-pelvis-lidar",
-            "--env.sensor.front-scan.pattern.vertical-angles=[-15,0,15]",
-            "--env.sensor.front-scan.update-decimation=2",
-            "env.plugin.points:ros2-pointcloud",
-            "--env.plugin.points.routes.lidar.lidar=front_scan",
-            "--env.plugin.points.routes.lidar.topic=/front_scan/points",
-            "--env.plugin.points.routes.lidar.frame-id=front_scan_link",
+            "simulator:sim-mujoco",
+            "sensor.head:g1-head",
+            "sensor.front_scan:g1-pelvis-lidar",
+            "--sensor.front-scan.pattern.vertical-angles=[-15,0,15]",
+            "--sensor.front-scan.update-decimation=2",
+            "plugin.points:ros2-pointcloud",
+            "--plugin.points.routes.lidar.lidar=front_scan",
+            "--plugin.points.routes.lidar.topic=/front_scan/points",
+            "--plugin.points.routes.lidar.frame-id=front_scan_link",
         ],
     )
 
-    assert isinstance(config.env.sensor["head"], CameraSensorConfig)
-    lidar = config.env.sensor["front_scan"]
+    assert isinstance(config.sensor["head"], CameraSensorConfig)
+    lidar = config.sensor["front_scan"]
     assert isinstance(lidar, LidarSensorConfig)
     assert isinstance(lidar.pattern, GridLidarRayPatternConfig)
     assert lidar.pattern.vertical_angles == [-15.0, 0.0, 15.0]
     assert lidar.update_decimation == 2
 
-    plugin = config.env.plugin["points"]
+    plugin = config.plugin["points"]
     assert isinstance(plugin, ROS2PointCloudPluginConfig)
     route = plugin.routes["lidar"]
     assert (route.lidar, route.topic, route.frame_id) == (
@@ -63,21 +63,21 @@ def test_cli_round_trips_lidar_range_and_backend_query_options() -> None:
     config = parse_config(
         SimulationExperimentConfig,
         args=[
-            "env.simulator:sim-mujoco",
-            "env.sensor.depth:g1-head",
-            "env.sensor.lidar:g1-pelvis-lidar",
-            "env.sensor.lidar.mujoco:mujoco-lidar-config",
-            "env.sensor.lidar.isaacsim:isaac-sim-lidar-config",
-            "--env.sensor.depth.depth-clipping-behavior=zero",
-            "--env.sensor.lidar.range-clipping-behavior=zero",
-            "--env.sensor.lidar.mujoco.geom-groups=[True,False,True,False,True,False]",
-            "--env.sensor.lidar.body-filter.target-kind=robot_link",
-            "--env.sensor.lidar.body-filter.target=head_link",
-            "--env.sensor.lidar.isaacsim.mesh-prim-paths=['/World/ground','/World/props/box']",
+            "simulator:sim-mujoco",
+            "sensor.depth:g1-head",
+            "sensor.lidar:g1-pelvis-lidar",
+            "sensor.lidar.mujoco:mujoco-lidar-config",
+            "sensor.lidar.isaacsim:isaac-sim-lidar-config",
+            "--sensor.depth.depth-clipping-behavior=zero",
+            "--sensor.lidar.range-clipping-behavior=zero",
+            "--sensor.lidar.mujoco.geom-groups=[True,False,True,False,True,False]",
+            "--sensor.lidar.body-filter.target-kind=robot_link",
+            "--sensor.lidar.body-filter.target=head_link",
+            "--sensor.lidar.isaacsim.mesh-prim-paths=['/World/ground','/World/props/box']",
         ],
     )
 
-    lidar = config.env.sensor["lidar"]
+    lidar = config.sensor["lidar"]
     assert isinstance(lidar, LidarSensorConfig)
     assert lidar.range_clipping_behavior == "zero"
     assert lidar.mujoco is not None
@@ -86,7 +86,7 @@ def test_cli_round_trips_lidar_range_and_backend_query_options() -> None:
     assert lidar.body_filter.target == "head_link"
     assert lidar.isaacsim is not None
     assert lidar.isaacsim.mesh_prim_paths == ["/World/ground", "/World/props/box"]
-    depth = config.env.sensor["depth"]
+    depth = config.sensor["depth"]
     assert isinstance(depth, CameraSensorConfig)
     assert depth.depth_clipping_behavior == "zero"
 
@@ -96,10 +96,10 @@ def test_cli_rejects_removed_isaacsim_camera_depth_clipping_field(capsys: pytest
         parse_config(
             SimulationExperimentConfig,
             args=[
-                "env.simulator:sim-isaacsim",
-                "env.sensor.depth:g1-head",
-                "env.sensor.depth.isaacsim:isaac-sim-camera-config",
-                "--env.sensor.depth.isaacsim.depth-clipping-behavior=max",
+                "simulator:sim-isaacsim",
+                "sensor.depth:g1-head",
+                "sensor.depth.isaacsim:isaac-sim-camera-config",
+                "--sensor.depth.isaacsim.depth-clipping-behavior=max",
             ],
         )
     assert "depth-clipping-behavior" in capsys.readouterr().err
@@ -109,19 +109,19 @@ def test_cli_configures_isaacsim_fisheye_projection() -> None:
     config = parse_config(
         SimulationExperimentConfig,
         args=[
-            "env.simulator:sim-isaacsim",
-            "env.sensor.head:g1-head",
-            "--env.sensor.head.isaacsim.projection-type=fisheyeKannalaBrandtK3",
-            "--env.sensor.head.isaacsim.fisheye.nominal-width=1920",
-            "--env.sensor.head.isaacsim.fisheye.nominal-height=1080",
-            "--env.sensor.head.isaacsim.fisheye.optical-centre-x=960",
-            "--env.sensor.head.isaacsim.fisheye.optical-centre-y=540",
-            "--env.sensor.head.isaacsim.fisheye.max-fov=210",
-            "--env.sensor.head.isaacsim.fisheye.polynomial-a=0.01",
+            "simulator:sim-isaacsim",
+            "sensor.head:g1-head",
+            "--sensor.head.isaacsim.projection-type=fisheyeKannalaBrandtK3",
+            "--sensor.head.isaacsim.fisheye.nominal-width=1920",
+            "--sensor.head.isaacsim.fisheye.nominal-height=1080",
+            "--sensor.head.isaacsim.fisheye.optical-centre-x=960",
+            "--sensor.head.isaacsim.fisheye.optical-centre-y=540",
+            "--sensor.head.isaacsim.fisheye.max-fov=210",
+            "--sensor.head.isaacsim.fisheye.polynomial-a=0.01",
         ],
     )
 
-    camera = config.env.sensor["head"]
+    camera = config.sensor["head"]
     assert isinstance(camera, CameraSensorConfig)
     assert isinstance(camera.isaacsim, IsaacSimCameraConfig)
     assert isinstance(camera.isaacsim.fisheye, IsaacSimFisheyeConfig)
@@ -136,14 +136,14 @@ def test_cli_customizes_explicit_lidar_directions() -> None:
     config = parse_config(
         SimulationExperimentConfig,
         args=[
-            "env.simulator:sim-mujoco",
-            "env.sensor.scan:custom-lidar",
-            "--env.sensor.scan.pattern.ray-directions=[[-1,0,-3],[4,5,-6]]",
-            "--env.sensor.scan.pattern.organized-shape=[1,2]",
+            "simulator:sim-mujoco",
+            "sensor.scan:custom-lidar",
+            "--sensor.scan.pattern.ray-directions=[[-1,0,-3],[4,5,-6]]",
+            "--sensor.scan.pattern.organized-shape=[1,2]",
         ],
     )
 
-    lidar = config.env.sensor["scan"]
+    lidar = config.sensor["scan"]
     assert isinstance(lidar, LidarSensorConfig)
     assert isinstance(lidar.pattern, CustomLidarRayPatternConfig)
     assert lidar.pattern.ray_directions == [[-1.0, 0.0, -3.0], [4.0, 5.0, -6.0]]
@@ -154,17 +154,17 @@ def test_cli_configures_lidar_viz_saved_scan_selection() -> None:
     config = parse_config(
         SimulationExperimentConfig,
         args=[
-            "env.simulator:sim-mujoco",
-            "env.sensor.front_scan:custom-lidar",
-            "env.plugin.debug:lidar-viz-save",
-            "--env.plugin.debug.lidars=['front_scan']",
-            "--env.plugin.debug.env-ids=[0]",
-            "--env.plugin.debug.max-points=500",
-            "--env.plugin.debug.save-dir=logs/debug-scans",
+            "simulator:sim-mujoco",
+            "sensor.front_scan:custom-lidar",
+            "plugin.debug:lidar-viz-save",
+            "--plugin.debug.lidars=['front_scan']",
+            "--plugin.debug.env-ids=[0]",
+            "--plugin.debug.max-points=500",
+            "--plugin.debug.save-dir=logs/debug-scans",
         ],
     )
 
-    plugin = config.env.plugin["debug"]
+    plugin = config.plugin["debug"]
     assert isinstance(plugin, LidarVizPluginConfig)
     assert plugin.save_scans and not plugin.live_window
     assert plugin.lidars == ["front_scan"]
@@ -177,11 +177,11 @@ def test_cli_switches_the_raycast_preset_to_rtx_with_one_override() -> None:
     config = parse_config(
         SimulationExperimentConfig,
         args=[
-            "env.simulator:sim-isaacsim",
-            "env.sensor.depth:g1-head-d435i-raycast-depth",
-            "--env.sensor.depth.isaacsim.renderer=rtx",
+            "simulator:sim-isaacsim",
+            "sensor.depth:g1-head-d435i-raycast-depth",
+            "--sensor.depth.isaacsim.renderer=rtx",
         ],
     )
-    camera = config.env.sensor["depth"]
+    camera = config.sensor["depth"]
     assert isinstance(camera, CameraSensorConfig)
     assert camera.isaacsim.renderer == "rtx"

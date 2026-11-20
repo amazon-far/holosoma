@@ -268,19 +268,19 @@ def test_historical_saved_configs_transition_warp_capacities(
     source: str, backend: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     default = TrainingExperimentConfig()
-    cfg = replace(default, env=replace(default.env, simulator=SIMULATOR_REGISTRY[backend], plugin={}))
+    cfg = replace(default, simulator=SIMULATOR_REGISTRY[backend], plugin={})
     saved = cfg.to_serializable_dict()
-    saved["env"]["simulator"]["config"]["sim"].pop("mujoco")
-    saved["env"]["simulator"]["config"]["mujoco_warp"] = {"nconmax_per_env": 128, "njmax_per_env": 900}
+    saved["simulator"]["config"]["sim"].pop("mujoco")
+    saved["simulator"]["config"]["mujoco_warp"] = {"nconmax_per_env": 128, "njmax_per_env": 900}
     loaded, run_path = _load_saved_config(saved, source, tmp_path, monkeypatch)
     assert run_path == "entity/project/run"
-    assert loaded.env.simulator.config.name == cfg.env.simulator.config.name
-    assert loaded.env.simulator.config.mujoco_backend == cfg.env.simulator.config.mujoco_backend
-    assert loaded.env.simulator.config.sim.mujoco.warp == MujocoWarpConfig(nconmax_per_env=128, njmax_per_env=900)
-    assert loaded.env.robot == cfg.env.robot
+    assert loaded.simulator.config.name == cfg.simulator.config.name
+    assert loaded.simulator.config.mujoco_backend == cfg.simulator.config.mujoco_backend
+    assert loaded.simulator.config.sim.mujoco.warp == MujocoWarpConfig(nconmax_per_env=128, njmax_per_env=900)
+    assert loaded.robot == cfg.robot
     assert loaded.run == cfg.run
-    assert loaded.env.plugin == {}
-    assert "mujoco_warp" not in loaded.to_serializable_dict()["env"]["simulator"]["config"]
+    assert loaded.plugin == {}
+    assert "mujoco_warp" not in loaded.to_serializable_dict()["simulator"]["config"]
 
 
 @pytest.mark.parametrize("source", ["checkpoint", "wandb"])
@@ -289,9 +289,9 @@ def test_saved_native_gravity_transitions_to_extra(
     source: str, gravity: list[float] | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     saved = TrainingExperimentConfig().to_serializable_dict()
-    saved["env"]["simulator"]["config"]["sim"]["mujoco"]["gravity"] = gravity
+    saved["simulator"]["config"]["sim"]["mujoco"]["gravity"] = gravity
     loaded, _ = _load_saved_config(saved, source, tmp_path, monkeypatch)
-    assert loaded.env.simulator.config.sim.mujoco.extra == ({} if gravity is None else {"gravity": gravity})
+    assert loaded.simulator.config.sim.mujoco.extra == ({} if gravity is None else {"gravity": gravity})
 
 
 @pytest.mark.parametrize("source", ["checkpoint", "wandb"])
@@ -309,10 +309,10 @@ def test_saved_native_physics_preserves_zero_false_and_extras(
     )
     simulator = replace(simulator, config=replace(simulator.config, sim=replace(simulator.config.sim, mujoco=native)))
     default = TrainingExperimentConfig()
-    saved = replace(default, env=replace(default.env, simulator=simulator, plugin={})).to_serializable_dict()
+    saved = replace(default, simulator=simulator, plugin={}).to_serializable_dict()
     loaded, _ = _load_saved_config(saved, source, tmp_path, monkeypatch)
-    assert loaded.env.simulator.config.sim.mujoco == native
-    assert loaded.env.plugin == {}
+    assert loaded.simulator.config.sim.mujoco == native
+    assert loaded.plugin == {}
     assert loaded.to_serializable_dict() == saved
 
 
@@ -321,8 +321,8 @@ def test_saved_warp_transition_rejects_conflicting_values(
     source: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     saved = TrainingExperimentConfig().to_serializable_dict()
-    saved["env"]["simulator"]["config"]["mujoco_warp"] = {"nconmax_per_env": 128}
-    saved["env"]["simulator"]["config"]["sim"]["mujoco"]["warp"]["nconmax_per_env"] = 64
+    saved["simulator"]["config"]["mujoco_warp"] = {"nconmax_per_env": 128}
+    saved["simulator"]["config"]["sim"]["mujoco"]["warp"]["nconmax_per_env"] = 64
     with pytest.raises(ValueError, match=r"conflicting mujoco_warp\.nconmax_per_env.*sim\.mujoco\.warp"):
         _load_saved_config(saved, source, tmp_path, monkeypatch)
 
@@ -570,10 +570,10 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     saved = _previous_schema(fixture_name)
 
     loaded_cfg = _load_through(boundary, saved, tmp_path)
-    loaded = loaded_cfg.to_serializable_dict()["env"]
+    loaded = loaded_cfg.to_serializable_dict()
 
     preset = SIMULATOR_REGISTRY[_SURVIVING_BACKEND_FIXTURES[fixture_name]]
-    simulator = loaded_cfg.env.simulator
+    simulator = loaded_cfg.simulator
     assert (simulator._target_, simulator.config.name) == (preset._target_, preset.config.name)
     saved_simulator = copy.deepcopy(saved["simulator"])
     saved_simulator["config"].pop("contact_sensor_history_length")
@@ -619,13 +619,13 @@ def test_scene_object_physics_drops_only_the_isaacgym_block() -> None:
 @pytest.mark.parametrize("backend", ["isaacsim", "mujoco", "mjwarp"])
 def test_saved_isaacgym_simulator_is_replaced_by_the_selected_one(backend: str, tmp_path: Path) -> None:
     saved_cfg = _load_through("checkpoint", _previous_schema("g1_29dof_isaacgym"), tmp_path)
-    args = [f"--task={saved_cfg.task.rpartition('.')[0]}.evaluate", f"env.simulator:{backend}"]
+    args = [f"--task={saved_cfg.task.rpartition('.')[0]}.evaluate", f"simulator:{backend}"]
     first = parse_config(EvaluationExperimentConfig, args=args)
 
     default = EvaluationExperimentConfig.from_training(saved_cfg, first)
     eval_cfg = parse_config(EvaluationExperimentConfig, default=default, args=args)
 
     selected = SIMULATOR_REGISTRY[backend]
-    simulator = eval_cfg.env.simulator
+    simulator = eval_cfg.simulator
     assert (simulator._target_, simulator.config.mujoco_backend) == (selected._target_, selected.config.mujoco_backend)
     assert simulator.config.sim.max_episode_length_s == 100000.0

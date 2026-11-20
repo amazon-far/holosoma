@@ -333,12 +333,12 @@ class SimulatorInitConfig:
     For other simulators (isaacsim), this field is ignored.
 
     Command line usage:
-        --env.simulator.config.mujoco-backend=warp
-        --env.simulator.config.mujoco-backend=classic
+        --simulator.config.mujoco-backend=warp
+        --simulator.config.mujoco-backend=classic
 
     Or use the syntactic sugar configs:
-        env.simulator:mujoco   (uses classic backend)
-        env.simulator:mjwarp   (uses warp backend)
+        simulator:mujoco   (uses classic backend)
+        simulator:mjwarp   (uses warp backend)
     """
 
     bridge: BridgeConfig = field(default_factory=BridgeConfig)

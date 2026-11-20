@@ -162,7 +162,7 @@ def main() -> int:
 
     n = args.num_envs
     env_origins = torch.zeros(n, 3, device=device)
-    init = config.env.robot.init_state
+    init = config.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
         device=device,
@@ -190,7 +190,7 @@ def main() -> int:
     step(sim, max(2, steps_for_seconds(sim, 0.05)))
     sim.render_sensors()
 
-    camera_configs = cast("dict[str, CameraSensorConfig]", dict(config.env.sensor))
+    camera_configs = cast("dict[str, CameraSensorConfig]", dict(config.sensor))
     frames = {name: sim.get_camera_data(name, "rgb") for name in (_PINHOLE, _FISHEYE)}
     for name, frame in frames.items():
         camera = camera_configs[name]

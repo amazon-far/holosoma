@@ -17,7 +17,7 @@ ROBOT_REGISTRY.add("g1_stiff", replace(g1_29dof, control=replace(g1_29dof.contro
 ```
 
 ```bash
-python -m holosoma.run_sim --import-file my_presets.py env.robot:g1-stiff   # repeatable; selectable like a built-in
+python -m holosoma.run_sim --import-file my_presets.py robot:g1-stiff   # repeatable; selectable like a built-in
 ```
 
 `.add(name, value)` type-checks `value` and returns it, so `x = REGISTRY.add(...)` also keeps a normal module attribute.
@@ -138,14 +138,12 @@ Loaders may opt into joining relative values to `asset_root` with
 Publish an entry point under the group whose config type matches your preset. Training and inference share some group names on purpose — the type check routes each preset to the right registry.
 
 **Holosoma (`holosoma`)**, listed by where each preset is selected:
-- **`env.*`:** `robot` `RobotConfig` · `simulator` `SimulatorConfig` · `terrain` `TerrainManagerCfg` · `scene` `SceneConfig` · `sensor` `CameraSensorConfig`/`LidarSensorConfig` · `plugin` `PluginConfig` · `randomization` `RandomizationManagerCfg` · `termination` `TerminationManagerCfg`
-- **`mdp.*`:** `observation` `ObservationManagerCfg` · `action` `ActionManagerCfg` · `reward` `RewardManagerCfg` · `command` `CommandManagerCfg` · `curriculum` `CurriculumManagerCfg`
+- **World fields:** `robot` `RobotConfig` · `simulator` `SimulatorConfig` · `terrain` `TerrainManagerCfg` · `scene` `SceneConfig` · `sensor` `CameraSensorConfig`/`LidarSensorConfig` · `plugin` `PluginConfig` · `randomization` `RandomizationManagerCfg` · `termination` `TerminationManagerCfg`
+- **MDP fields:** `observation` `ObservationManagerCfg` · `action` `ActionManagerCfg` · `reward` `RewardManagerCfg` · `command` `CommandManagerCfg` · `curriculum` `CurriculumManagerCfg`
 - **The rest:**
   - `algo` `PPOAlgoConfig`/`FastSACAlgoConfig` (`algo:`);
   - `logger` `DisabledLoggerConfig`/`WandbLoggerConfig` (`run.logger:`);
   - `experiment` `TrainingExperimentConfig` (the root `exp:`).
-
-The group string doesn't change with the path: a robot preset is still published under `holosoma.config.robot`, and is selected as `env.robot:<name>`.
 
 The `plugin` family runs custom per-step behavior — see [Plugins](#plugins) below.
 
@@ -199,7 +197,7 @@ PLUGIN_REGISTRY.add("log_height", LogHeightPluginConfig())
 ```
 
 ```bash
-python -m holosoma.run_sim --import-file my_plugins.py env.plugin.h:log_height --env.plugin.h.every=5Hz
+python -m holosoma.run_sim --import-file my_plugins.py plugin.h:log_height --plugin.h.every=5Hz
 ```
 
 Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrides via `--plugin.<key>.<field>=…`); each is constructed once in `BaseSimulator.install_plugins`, after the backend is ready. Ship them packaged via the `holosoma.config.plugin` entry-point group like any other preset.

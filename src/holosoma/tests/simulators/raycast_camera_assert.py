@@ -311,29 +311,29 @@ def main() -> int:
 
     config = build_run_sim_config("isaacsim", scene_name, "g1-29dof", "terrain_locomotion_plane", sensors=sensors)
     if args.check == "default-selection":
-        terrain = dataclasses.replace(config.env.terrain.terrain_term, hide_visual=True)
+        terrain = dataclasses.replace(config.terrain.terrain_term, hide_visual=True)
         config = dataclasses.replace(
             config,
-            env=dataclasses.replace(config.env, terrain=dataclasses.replace(config.env.terrain, terrain_term=terrain)),
+            terrain=dataclasses.replace(config.terrain, terrain_term=terrain),
         )
     if args.check == "custom-terrain":
         from holosoma.config_types.terrain import MeshType
 
         terrain = dataclasses.replace(
-            config.env.terrain.terrain_term,
+            config.terrain.terrain_term,
             func="tests.simulators._terrain_presets:FlatMeshTerrain",
             mesh_type=MeshType.LOAD_OBJ,
         )
         config = dataclasses.replace(
             config,
-            env=dataclasses.replace(config.env, terrain=dataclasses.replace(config.env.terrain, terrain_term=terrain)),
+            terrain=dataclasses.replace(config.terrain, terrain_term=terrain),
         )
     if args.check == "dynamic-scene":
-        objects = dict(config.env.scene.rigid_objects)
+        objects = dict(config.scene.rigid_objects)
         objects["target"] = dataclasses.replace(objects["target"], fixed=False)
         config = dataclasses.replace(
             config,
-            env=dataclasses.replace(config.env, scene=dataclasses.replace(config.env.scene, rigid_objects=objects)),
+            scene=dataclasses.replace(config.scene, rigid_objects=objects),
         )
     config = dataclasses.replace(config, run=dataclasses.replace(config.run, device="cuda:0", num_envs=_NUM_ENVS))
     sim, device, _app = launch_simulator(config, device="cuda:0")
@@ -343,7 +343,7 @@ def main() -> int:
     sim.load_assets()
     import torch
 
-    init = config.env.robot.init_state
+    init = config.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
     )

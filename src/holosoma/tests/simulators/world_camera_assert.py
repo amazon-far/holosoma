@@ -95,7 +95,7 @@ def main() -> int:
     env_origins = torch.zeros(n, 3, device=device)
     if n > 1:
         env_origins[:, 0] = torch.arange(n, device=device, dtype=torch.float32) * 10.0
-    init = config.env.robot.init_state
+    init = config.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
     )

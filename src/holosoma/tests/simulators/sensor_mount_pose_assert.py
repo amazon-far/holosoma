@@ -129,7 +129,7 @@ def main() -> int:
     origins[:, 0] = 5.0 + ids * 10.0
     origins[:, 1] = -2.0
     origins[:, 2] = 0.25 + ids * 0.25
-    init = config.env.robot.init_state
+    init = config.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
     )

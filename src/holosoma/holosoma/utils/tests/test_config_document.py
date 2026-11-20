@@ -17,25 +17,25 @@ pytestmark = pytest.mark.no_sim
 DOCUMENT: dict[str, Any] = {
     "version": 1,
     "arguments": {
-        "env.simulator": "sim-mjwarp",
-        "env.robot": "t1-29dof-waist-wrist",
-        "env.plugin": {"clock": "clock_publish"},
+        "simulator": "sim-mjwarp",
+        "robot": "t1-29dof-waist-wrist",
+        "plugin": {"clock": "clock_publish"},
         "overrides": {
             "run.headless": False,
-            "env.robot.init_state.pos": [1.0, -2.0, 0.8],
-            "env.plugin.clock": {"publish_every": "100Hz"},
+            "robot.init_state.pos": [1.0, -2.0, 0.8],
+            "plugin.clock": {"publish_every": "100Hz"},
         },
     },
 }
 EQUIVALENT_CLI = [
-    "env.simulator:sim-mjwarp",
-    "env.robot:t1-29dof-waist-wrist",
-    "env.plugin.clock:clock_publish",
+    "simulator:sim-mjwarp",
+    "robot:t1-29dof-waist-wrist",
+    "plugin.clock:clock_publish",
     "--run.headless",
     "False",
-    "--env.robot.init_state.pos",
+    "--robot.init_state.pos",
     "[1.0, -2.0, 0.8]",
-    "--env.plugin.clock.publish_every",
+    "--plugin.clock.publish_every",
     "100Hz",
 ]
 
@@ -100,13 +100,13 @@ def test_command_line_wins_at_the_same_path_and_deeper_document_edits_still_appl
     doc = {
         "version": 1,
         "arguments": {
-            "env.robot": "g1-29dof",
-            "env.robot.asset.link_physics": "none",
+            "robot": "g1-29dof",
+            "robot.asset.link_physics": "none",
             "overrides": {"run.seed": 3},
         },
     }
-    args = ["--config", _write(tmp_path, doc), "--run.seed", "-1", "env.robot:t1-29dof-waist-wrist"]
-    expected = ["env.robot:t1-29dof-waist-wrist", "env.robot.asset.link_physics:none", "--run.seed", "-1"]
+    args = ["--config", _write(tmp_path, doc), "--run.seed", "-1", "robot:t1-29dof-waist-wrist"]
+    expected = ["robot:t1-29dof-waist-wrist", "robot.asset.link_physics:none", "--run.seed", "-1"]
     assert _sim(args) == _sim(expected)
 
 
@@ -118,11 +118,11 @@ def test_scalars_follow_yaml_1_2(tmp_path: Path) -> None:
         "    run.seed: 010\n"
         "    run.name: off\n"
         "    run.project: 2026-11-17\n"
-        "    env.robot.init_state.pos: [1e-05, 0.0, 0.8]\n"
+        "    robot.init_state.pos: [1e-05, 0.0, 0.8]\n"
     )
     config = _sim(["--config", _write(tmp_path, text)])
     assert (config.run.seed, config.run.name, config.run.project) == (10, "off", "2026-11-17")
-    assert config.env.robot.init_state.pos == [1e-05, 0.0, 0.8]
+    assert config.robot.init_state.pos == [1e-05, 0.0, 0.8]
 
 
 @pytest.mark.parametrize(
@@ -143,16 +143,16 @@ def test_rejects_invalid_documents(tmp_path: Path, content: dict[str, Any] | str
 
 def test_packaged_examples_parse(trained: list[TrainingExperimentConfig]) -> None:
     _sim(["--config", "@holosoma/examples/configs/g1_lidar.yaml"])
-    cli.run(["--config", "@holosoma/examples/configs/g1_locomotion_train.yaml", "env.simulator:mjwarp"])
+    cli.run(["--config", "@holosoma/examples/configs/g1_locomotion_train.yaml", "simulator:mjwarp"])
     (config,) = trained
-    assert (config.run.project, config.env.simulator.config.name, config.run.seed) == ("hv-g1-manager", "mujoco", 1)
+    assert (config.run.project, config.simulator.config.name, config.run.seed) == ("hv-g1-manager", "mujoco", 1)
 
 
 def test_rejected_document_tokens_name_their_key(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    path = _write(tmp_path, {"version": 1, "arguments": {"overrides": {"env.robot.init_state.posx": [1.0, 2.0]}}})
+    path = _write(tmp_path, {"version": 1, "arguments": {"overrides": {"robot.init_state.posx": [1.0, 2.0]}}})
     with pytest.raises(SystemExit):
         _sim(["--config", path])
-    assert f"<- {path}: arguments.overrides.env.robot.init_state.posx" in capsys.readouterr().err
+    assert f"<- {path}: arguments.overrides.robot.init_state.posx" in capsys.readouterr().err
 
 
 def test_print_args_prints_the_equivalent_command_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -171,7 +171,7 @@ def test_old_spellings_give_the_same_config(tmp_path: Path, trained: list[Traini
     old = ["exp:g1-29dof", "simulator:mjwarp", "--training.num_envs=8", "--training.checkpoint=/runs/a.pt"]
     new = [
         "exp:g1-29dof",
-        "env.simulator:mjwarp",
+        "simulator:mjwarp",
         "--run.num_envs=8",
         "--algo.resume_from=/runs/a.pt",
         "--run.project=p",
@@ -183,7 +183,7 @@ def test_old_spellings_give_the_same_config(tmp_path: Path, trained: list[Traini
 
 
 def test_written_record_reproduces_the_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    args = [_SIM, "env.simulator:sim-mjwarp", "env.sensor.scan:g1-pelvis-lidar", "--run.time_scale", "0.50"]
+    args = [_SIM, "simulator:sim-mjwarp", "sensor.scan:g1-pelvis-lidar", "--run.time_scale", "0.50"]
     _Recorder.seen.clear()
     cli.run(args)
     parsed = _Recorder.seen[-1]

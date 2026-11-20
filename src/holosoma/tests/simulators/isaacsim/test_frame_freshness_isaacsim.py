@@ -76,9 +76,9 @@ def _check_frames(task, config, check, failures: list[str], result_file: str | N
     from holosoma.simulator.base_simulator.hooks import Phase
 
     sim, device = task.simulator, task.device
-    camera = next(iter(config.env.sensor))
+    camera = next(iter(config.sensor))
     env_ids = torch.arange(1, device=device)
-    init = config.env.robot.init_state
+    init = config.robot.init_state
     home = sim.env_origins + torch.tensor(list(init.pos), device=device)
     spawn_dof = sim.dof_pos.clone()
 
@@ -96,7 +96,7 @@ def _check_frames(task, config, check, failures: list[str], result_file: str | N
         sim.dof_pos[env_ids] = spawn_dof
         sim.dof_vel[env_ids] = 0.0
 
-    decimation = config.env.simulator.config.sim.control_decimation_steps
+    decimation = config.simulator.config.sim.control_decimation_steps
     offset = [0.0]
     substep = [0]
 

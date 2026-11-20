@@ -148,7 +148,7 @@ class _Ctx:
         return self.sim.get_actor_states([name], self.env_ids)  # [num_envs, 13]
 
     def free_cfg(self):
-        return {name: o for name, o in self.config.env.scene.rigid_objects.items() if not o.fixed}
+        return {name: o for name, o in self.config.scene.rigid_objects.items() if not o.fixed}
 
 
 def _all(t):
@@ -1441,12 +1441,7 @@ def main() -> int:
         lp = twin_link_physics[args.scenario]
         config = dataclasses.replace(
             config,
-            env=dataclasses.replace(
-                config.env,
-                robot=dataclasses.replace(
-                    config.env.robot, asset=dataclasses.replace(config.env.robot.asset, link_physics=lp)
-                ),
-            ),
+            robot=dataclasses.replace(config.robot, asset=dataclasses.replace(config.robot.asset, link_physics=lp)),
         )
 
     # The restitution bounce needs a BOUNCY GROUND too: PhysX combines contact-pair restitution
@@ -1454,7 +1449,7 @@ def main() -> int:
     # bounce on IsaacSim (its ground material).
     # Give the ground high restitution for this scenario so the box's restitution registers. NOTE:
     # restitution lives at terrain.terrain_term.restitution — TerrainManagerCfg itself has no such
-    # field, so a flat dataclasses.replace(config.env.terrain, restitution=0.9) is a SILENT no-op (the
+    # field, so a flat dataclasses.replace(config.terrain, restitution=0.9) is a SILENT no-op (the
     # ground stays at 0.0). Must replace the nested term. (MuJoCo bounces via the box's negative-form
     # solref, independent of ground restitution, so this is harmless there.) restitution-twin needs
     # the same bouncy ground (the robot link bounces against it just like the object); combine-mode-
@@ -1462,12 +1457,9 @@ def main() -> int:
     if args.scenario in ("restitution-bounce", "restitution-twin", "combine-mode-collision"):
         config = dataclasses.replace(
             config,
-            env=dataclasses.replace(
-                config.env,
-                terrain=dataclasses.replace(
-                    config.env.terrain,
-                    terrain_term=dataclasses.replace(config.env.terrain.terrain_term, restitution=0.9),
-                ),
+            terrain=dataclasses.replace(
+                config.terrain,
+                terrain_term=dataclasses.replace(config.terrain.terrain_term, restitution=0.9),
             ),
         )
 
@@ -1482,7 +1474,7 @@ def main() -> int:
     env_origins = torch.zeros(n, 3, device=device)
     if n > 1:
         env_origins[:, 0] = torch.arange(n, device=device, dtype=torch.float32) * 5.0
-    init = config.env.robot.init_state
+    init = config.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
         device=device,
@@ -1507,7 +1499,7 @@ def main() -> int:
     if sim.video_recorder is not None:
         sim.video_recorder.setup_recording()
         # These scenarios are object-centric; aim the camera at the scene objects, not the robot.
-        _focus_camera_on_objects(sim, config.env.scene)
+        _focus_camera_on_objects(sim, config.scene)
         sim.video_recorder.on_episode_start(torch.tensor([sim.video_recorder.config.record_env_id]))
 
     env_ids = torch.arange(sim.num_envs, device=sim.sim_device)
@@ -1520,9 +1512,9 @@ def main() -> int:
     # Fail here rather than let a missing actor (e.g. a silent fallback to g1, or an unregistered
     # robot key) surface as an assertion failure deep in the scenario.
     if args.scenario in twin_link_physics:
-        assert config.env.robot.asset.robot_type == "onelink_box", (
+        assert config.robot.asset.robot_type == "onelink_box", (
             f"twin scenario '{args.scenario}' must run the onelink-box robot, got "
-            f"'{config.env.robot.asset.robot_type}' (did _robot_presets.register() run?)"
+            f"'{config.robot.asset.robot_type}' (did _robot_presets.register() run?)"
         )
         assert "twin" in free_names, (
             f"twin scenario '{args.scenario}' is missing the 'twin' object (free={free_names}); "

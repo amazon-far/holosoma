@@ -61,9 +61,7 @@ def requested(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
 def _config(preset: str, device: str | None) -> SimulationExperimentConfig:
     """A real simulator preset plus the device. The rest of the config the guard never reads."""
-    config = SimpleNamespace(
-        env=SimpleNamespace(simulator=SIMULATOR_REGISTRY.get(preset)), run=SimpleNamespace(device=device)
-    )
+    config = SimpleNamespace(simulator=SIMULATOR_REGISTRY.get(preset), run=SimpleNamespace(device=device))
     return cast("SimulationExperimentConfig", config)
 
 
@@ -146,7 +144,7 @@ def test_explicit_environment_limit_wins(requested: list[int], monkeypatch: pyte
 #
 # The config is a REAL SimulationExperimentConfig from the production parser, not a stand-in: simulate
 # resolves an unset device from the config's simulator preset, which is how
-# ``python -m holosoma.run_sim env.simulator:sim-mujoco`` actually runs.
+# ``python -m holosoma.run_sim simulator:mujoco`` actually runs.
 _CHILD = textwrap.dedent(
     """
     import contextlib
@@ -171,7 +169,7 @@ _CHILD = textwrap.dedent(
 
     session.task_session = task_session
 
-    config = parse_config(SimulationExperimentConfig, args=[f"env.simulator:sim-{PRESET}"])
+    config = parse_config(SimulationExperimentConfig, args=[f"simulator:sim-{PRESET}"])
     if DEVICE is not None:
         config = dataclasses.replace(config, run=dataclasses.replace(config.run, device=DEVICE))
     SimulationTask.simulate(config)

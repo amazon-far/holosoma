@@ -93,7 +93,7 @@ def launch_simulator(config: SimulationExperimentConfig, device: str | None = No
     if get_simulator_type() == SimulatorType.ISAACSIM:
         simulation_app = setup_isaaclab_launcher(env_config, device)
 
-    env = config.env
+    env = config
     full_config = FullSimConfig(
         simulator=env.simulator.config,
         robot=env.robot,
@@ -128,27 +128,27 @@ def build_run_sim_config(
     spawn/behavior check, so both are turned off.
 
     ``sensors`` is a mounted-camera dict (``{name: CameraSensorConfig}``) injected directly onto the
-    parsed config's ``env.sensor`` field — the harness builds rigs in Python rather than through the
-    per-key ``env.sensor`` CLI (a multi-camera rig can't be named by one token). When ``record_dir`` is
+    parsed config's ``sensor`` field — the harness builds rigs in Python rather than through the
+    per-key ``sensor`` CLI (a multi-camera rig can't be named by one token). When ``record_dir`` is
     set, enable video recording every episode to that dir (mp4, no wandb). ``video_camera`` overrides
     the camera config (e.g. an object-framing camera); ``show_command_overlay`` toggles the
     robot-command text overlay (off for object scenarios where it is irrelevant).
     """
     from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 
-    argv = [f"env.simulator:sim-{simulator}", f"env.robot:{robot}", f"env.terrain:{terrain}", f"env.scene:{scene}"]
+    argv = [f"simulator:sim-{simulator}", f"robot:{robot}", f"terrain:{terrain}", f"scene:{scene}"]
     config = tyro.cli(SimulationExperimentConfig, args=argv)
     if sensors is not None:
-        config = dataclasses.replace(config, env=dataclasses.replace(config.env, sensor=dict(sensors)))
+        config = dataclasses.replace(config, sensor=dict(sensors))
     sim_cfg = dataclasses.replace(
-        config.env.simulator,
+        config.simulator,
         config=dataclasses.replace(
-            config.env.simulator.config,
+            config.simulator.config,
             bridge=BridgeConfig(enabled=False),
             virtual_gantry=VirtualGantryCfg(enabled=False),
         ),
     )
-    config = dataclasses.replace(config, env=dataclasses.replace(config.env, simulator=sim_cfg))
+    config = dataclasses.replace(config, simulator=sim_cfg)
 
     if record_dir is not None:
         video_kwargs: dict[str, Any] = {

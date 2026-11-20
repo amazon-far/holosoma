@@ -23,7 +23,7 @@ Train robots to track velocity commands.
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    env.simulator:isaacsim \
+    simulator:isaacsim \
     run.logger:wandb \
     --run.seed 1
 
@@ -31,7 +31,7 @@ python src/holosoma/holosoma/train_agent.py \
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof \
-    env.simulator:isaacsim \
+    simulator:isaacsim \
     run.logger:wandb \
     --run.seed 1
 ```
@@ -47,31 +47,31 @@ Train using the MJWarp simulator (GPU-accelerated MuJoCo). **Note: MJWarp suppor
 source scripts/source_mujoco_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    env.simulator:mjwarp \
+    simulator:mjwarp \
     run.logger:wandb
 
 # G1 with PPO
 source scripts/source_mujoco_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof \
-    env.simulator:mjwarp \
+    simulator:mjwarp \
     run.logger:wandb \
-    --env.terrain.terrain-term.scale-factor=0.5  # required to avoid training instabilities
+    --terrain.terrain-term.scale-factor=0.5  # required to avoid training instabilities
 
 # T1 with FastSAC -- see the T1 note below
 source scripts/source_mujoco_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof-fast-sac \
-    env.simulator:mjwarp \
+    simulator:mjwarp \
     run.logger:wandb
 
 # T1 with PPO -- see the T1 note below
 source scripts/source_mujoco_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof \
-    env.simulator:mjwarp \
+    simulator:mjwarp \
     run.logger:wandb \
-    --env.terrain.terrain-term.scale-factor=0.5  # required to avoid training instabilities
+    --terrain.terrain-term.scale-factor=0.5  # required to avoid training instabilities
 
 ```
 
@@ -107,7 +107,7 @@ source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-wbt \
     run.logger:wandb \
-    --mdp.command.setup_terms.motion_command.params.motion_config.motion_file="holosoma/data/motions/g1_29dof/whole_body_tracking/<your file>.npz"
+    --command.setup_terms.motion_command.params.motion_config.motion_file="holosoma/data/motions/g1_29dof/whole_body_tracking/<your file>.npz"
 
 # Visualize the motion file in isaacsim before training
 source scripts/source_isaacsim_setup.sh
@@ -168,7 +168,7 @@ The training system uses a hierarchical configuration system. The `exp` config s
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof \
-    env.simulator:isaacsim \
+    simulator:isaacsim \
     --run.seed 1 \
     --algo.config.use-symmetry=False \
     run.logger:wandb \
@@ -206,8 +206,8 @@ If training fails on headless servers with display/rendering errors (e.g., `GLXB
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    env.simulator:isaacsim \
-    env.terrain:terrain-locomotion-plane
+    simulator:isaacsim \
+    terrain:terrain-locomotion-plane
 ```
 
 ### Multi-GPU Training
@@ -216,7 +216,7 @@ python src/holosoma/holosoma/train_agent.py \
 source scripts/source_isaacsim_setup.sh
 torchrun --nproc_per_node=4 src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof-fast-sac \
-    env.simulator:isaacsim \
+    simulator:isaacsim \
     --run.num_envs 16384  # global/total number of environments
 ```
 
@@ -226,9 +226,9 @@ torchrun --nproc_per_node=4 src/holosoma/holosoma/train_agent.py \
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    env.simulator:isaacsim \
-    --mdp.reward.terms.tracking-lin-vel.weight=2.5 \
-    --mdp.reward.terms.feet-phase.params.swing-height=0.12
+    simulator:isaacsim \
+    --reward.terms.tracking-lin-vel.weight=2.5 \
+    --reward.terms.feet-phase.params.swing-height=0.12
 ```
 
 ### Observation Noise
@@ -238,8 +238,8 @@ python src/holosoma/holosoma/train_agent.py \
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    env.simulator:isaacsim \
-    --mdp.observation.groups.actor-obs.enable-noise=False
+    simulator:isaacsim \
+    --observation.groups.actor-obs.enable-noise=False
 ```
 
 ### Observation History Length
@@ -250,8 +250,8 @@ Some policies benefit from stacking multiple timesteps of observations. You can 
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    env.simulator:isaacsim \
-    --mdp.observation.groups.actor_obs.history-length 4
+    simulator:isaacsim \
+    --observation.groups.actor_obs.history-length 4
 ```
 
 Make sure to pass the same history length when running inference so the exported ONNX policy receives inputs with the correct shape.
@@ -263,16 +263,16 @@ Make sure to pass the same history length when running inference so the exported
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    env.simulator:isaacsim \
-    --mdp.curriculum.setup-terms.penalty-curriculum.params.enabled=False
+    simulator:isaacsim \
+    --curriculum.setup-terms.penalty-curriculum.params.enabled=False
 
 # Custom curriculum threshold (for shorter episodes)
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    env.simulator:isaacsim \
-    --env.simulator.config.sim.max-episode-length-s=10.0 \
-    --mdp.curriculum.setup-terms.penalty-curriculum.params.level-up-threshold=350
+    simulator:isaacsim \
+    --simulator.config.sim.max-episode-length-s=10.0 \
+    --curriculum.setup-terms.penalty-curriculum.params.level-up-threshold=350
 ```
 
 ### Domain Randomization
@@ -281,8 +281,8 @@ python src/holosoma/holosoma/train_agent.py \
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    env.simulator:isaacsim \
-    --env.randomization.setup-terms.push-randomizer-state.params.enabled=False \
-    --env.randomization.setup-terms.randomize-base-com-startup.params.enabled=True \
-    --env.randomization.setup-terms.mass-randomizer.params.added-mass-range=[-1.0,3.0]
+    simulator:isaacsim \
+    --randomization.setup-terms.push-randomizer-state.params.enabled=False \
+    --randomization.setup-terms.randomize-base-com-startup.params.enabled=True \
+    --randomization.setup-terms.mass-randomizer.params.added-mass-range=[-1.0,3.0]
 ```

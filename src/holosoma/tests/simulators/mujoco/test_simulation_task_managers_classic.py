@@ -21,19 +21,14 @@ EPISODE_S = 0.1
 
 def test_a_timeout_term_ends_and_restarts_the_episode():
     base = SimulationExperimentConfig()
-    sim_cfg = base.env.simulator.config
+    sim_cfg = base.simulator.config
     config = dataclasses.replace(
         base,
-        env=dataclasses.replace(
-            base.env,
-            simulator=dataclasses.replace(
-                base.env.simulator,
-                config=dataclasses.replace(
-                    sim_cfg, sim=dataclasses.replace(sim_cfg.sim, max_episode_length_s=EPISODE_S)
-                ),
-            ),
-            termination=termination.TERMINATION_REGISTRY.get("g1_29dof"),
+        simulator=dataclasses.replace(
+            base.simulator,
+            config=dataclasses.replace(sim_cfg, sim=dataclasses.replace(sim_cfg.sim, max_episode_length_s=EPISODE_S)),
         ),
+        termination=termination.TERMINATION_REGISTRY.get("g1_29dof"),
         run=dataclasses.replace(base.run, headless=True, time_scale=0.0),
     )
 
@@ -61,9 +56,7 @@ def test_a_reset_randomization_term_sets_the_joint_state():
     )
     config = dataclasses.replace(
         base,
-        env=dataclasses.replace(
-            base.env, randomization=RandomizationManagerCfg(reset_terms={"randomize_dof_state": scale_twice})
-        ),
+        randomization=RandomizationManagerCfg(reset_terms={"randomize_dof_state": scale_twice}),
         run=dataclasses.replace(base.run, headless=True, time_scale=0.0),
     )
 

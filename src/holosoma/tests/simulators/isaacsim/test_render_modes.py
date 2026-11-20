@@ -22,7 +22,6 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from holosoma.config_types.environment import EnvironmentConfig
 from holosoma.config_types.experiment import SimulationExperimentConfig
 from holosoma.config_types.simulator import IsaacSimRenderConfig
 from holosoma.config_values import simulator as simulator_values
@@ -47,7 +46,7 @@ def _run_config(render_config: IsaacSimRenderConfig) -> SimulationExperimentConf
         simulator_values.sim_isaacsim,
         config=dataclasses.replace(simulator_values.sim_isaacsim.config, isaacsim=render_config),
     )
-    return SimulationExperimentConfig(env=EnvironmentConfig(simulator=simulator))
+    return SimulationExperimentConfig(simulator=simulator)
 
 
 @pytest.mark.no_sim

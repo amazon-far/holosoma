@@ -106,8 +106,6 @@ def _load_config_from_checkpoint(checkpoint_path: Path) -> tuple[TrainingExperim
     return _experiment_config_from_saved(config_data), checkpoint_contents.get("wandb_run_path")
 
 
-_ENV_FIELDS = ("robot", "simulator", "terrain", "scene", "sensor", "plugin", "randomization", "termination")
-_MDP_FIELDS = ("observation", "action", "reward", "command", "curriculum")
 _RUN_FIELDS_FROM_TRAINING = ("num_envs", "headless", "seed", "torch_deterministic", "project", "name")
 _RUN_FIELDS_FROM_ROOT = ("device", "time_scale", "viewer_update_decimation", "viewer_dt")
 
@@ -118,11 +116,9 @@ LOCOMOTION_TRAIN_CLASS = "holosoma.envs.locomotion.locomotion_manager.LeggedRobo
 _MOVED_TASK_CLASSES: dict[str, str] = {}
 
 
-def _nest_flat_layout(data: dict[str, Any]) -> dict[str, Any]:
-    """Map a config saved with the flat layout (``env_class``, ``training``, root blocks) onto the parts."""
+def _from_env_class_layout(data: dict[str, Any]) -> dict[str, Any]:
+    """Map a config saved before ``task`` (with ``env_class`` and ``training``) onto ``task``, ``run`` and ``algo``."""
     training = dict(data.pop("training", {}) or {})
-    env = {key: data.pop(key) for key in _ENV_FIELDS if key in data}
-    mdp = {key: data.pop(key) for key in _MDP_FIELDS if key in data}
     run = {key: training[key] for key in _RUN_FIELDS_FROM_TRAINING if key in training}
     run.update({key: data.pop(key) for key in _RUN_FIELDS_FROM_ROOT if key in data})
     saved_logger = data.pop("logger", None)
@@ -145,19 +141,19 @@ def _nest_flat_layout(data: dict[str, Any]) -> dict[str, Any]:
     data.pop("nightly", None)
     data.pop("eval_overrides", None)
     module, _, cls = str(data.pop("env_class", LOCOMOTION_TRAIN_CLASS)).rpartition(".")
-    nested = {**data, "task": f"{module}:{cls}.train", "env": env, "mdp": mdp, "run": run}
-    return {**nested, "algo": algo} if algo else nested
+    migrated = {**data, "task": f"{module}:{cls}.train", "run": run}
+    return {**migrated, "algo": algo} if algo else migrated
 
 
 def _experiment_config_from_saved(config_data: dict[str, Any]) -> TrainingExperimentConfig:
     """Load a saved training config, transitioning historical layouts and fields."""
     data = copy.deepcopy(config_data)
-    if "env" not in data:
-        data = _nest_flat_layout(data)
+    if "task" not in data:
+        data = _from_env_class_layout(data)
     task_class, _, function = data["task"].rpartition(".")
     data["task"] = f"{_MOVED_TASK_CLASSES.get(task_class, task_class)}.{function}"
-    env = data["env"] = _drop_retired_isaacgym_fields(data.get("env", {}))
-    simulator = env.get("simulator", {}).get("config", {})
+    data = _drop_retired_isaacgym_fields(data)
+    simulator = data.get("simulator", {}).get("config", {})
     if "mujoco_warp" in simulator:
         native = simulator["sim"].setdefault("mujoco", {})
         warp = native.setdefault("warp", {})

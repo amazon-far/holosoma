@@ -5,8 +5,8 @@ Document shape (YAML or JSON)::
     version: 1
     arguments:
       exp: g1-29dof               # exp:<preset>, the base config; optional
-      env.simulator: mjwarp       # <path>:<preset>
-      env.sensor:                 # <path>.<key>:<preset>
+      simulator: mjwarp           # <path>:<preset>
+      sensor:                     # <path>.<key>:<preset>
         scan: g1-pelvis-lidar
       overrides:                  # --<dotted.path>=<value>
         run.num_envs: 64
@@ -127,7 +127,7 @@ def expand_config_args(
 
 # Fields that moved, by old dotted path (underscored) -> new dotted path. Paths under a moved
 # prefix move with it (``training.seed`` -> ``run.seed``, ``logger.video.enabled`` ->
-# ``run.logger.video.enabled``). The env and mdp parts' own fields are added by ``_moved_prefixes``.
+# ``run.logger.video.enabled``).
 MOVED_FLAGS = {
     **{f"training.{name}": f"run.{name}" for name in ("num_envs", "headless", "seed", "torch_deterministic")},
     **{f"training.{name}": f"run.{name}" for name in ("project", "name")},
@@ -142,28 +142,14 @@ MOVED_FLAGS = {
     "nightly": "algo.nightly",
     "eval_overrides.headless": "run.headless",
     "eval_overrides.num_envs": "run.num_envs",
-    "eval_overrides.max_episode_length_s": "env.simulator.config.sim.max_episode_length_s",
-    "eval_overrides.randomize_tiles": "env.terrain.terrain_term.spawn.randomize_tiles",
-    "eval_overrides.xy_offset_range": "env.terrain.terrain_term.spawn.xy_offset_range",
+    "eval_overrides.max_episode_length_s": "simulator.config.sim.max_episode_length_s",
+    "eval_overrides.randomize_tiles": "terrain.terrain_term.spawn.randomize_tiles",
+    "eval_overrides.xy_offset_range": "terrain.terrain_term.spawn.xy_offset_range",
 }
 # Flags that load but no longer do anything, with the reason.
 REMOVED_FLAGS = {
     "eval_overrides.disable_logger": "evaluation always runs with the logger off; select run.logger: to change it",
 }
-
-
-def _moved_prefixes() -> dict[str, str]:
-    """Each env and mdp field's old root path, mapped to its path in its part."""
-    import dataclasses
-
-    from holosoma.config_types.environment import EnvironmentConfig
-    from holosoma.config_types.mdp import MDPConfig
-
-    return {
-        **{field.name: f"env.{field.name}" for field in dataclasses.fields(EnvironmentConfig)},
-        **{field.name: f"mdp.{field.name}" for field in dataclasses.fields(MDPConfig)},
-        **MOVED_FLAGS,
-    }
 
 
 def _moved(path: str, moves: dict[str, str]) -> str | None:
@@ -179,7 +165,7 @@ def alias_legacy_flags(argv: list[str]) -> list[str]:
 
     ``--env_class=X`` becomes ``--task=X.train`` with ``X`` written as ``module:Class``.
     """
-    moves = _moved_prefixes()
+    moves = MOVED_FLAGS
     aliased: list[str] = []
     tokens = iter(argv)
     for token in tokens:

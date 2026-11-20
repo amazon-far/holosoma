@@ -10,7 +10,7 @@
 
 ```bash
 holosoma                                                           # simulate: one G1 on MuJoCo, in the viewer
-holosoma exp:g1-29dof env.simulator:mjwarp --run.num_envs 1024     # train the g1-29dof experiment
+holosoma exp:g1-29dof simulator:mjwarp --run.num_envs 1024     # train the g1-29dof experiment
 holosoma --task=holosoma.envs.locomotion.locomotion_manager:LeggedRobotLocomotionManager.evaluate \
     --eval.checkpoint=<CHECKPOINT_PATH>                            # evaluate a checkpoint
 holosoma --task=holosoma.envs.simulation_task:SimulationTask.replay exp:g1-29dof-wbt   # replay its motion
@@ -28,12 +28,12 @@ The older scripts set their workflow for you and accept the same arguments:
 Every config has a `task` field naming a task class and the classmethod that runs the config, as
 `module:Class.function`. The class is the environment the workflow builds:
 
-| Workflow | `task` | Config type | Parts |
+| Workflow | `task` | Config type | Holds |
 |---|---|---|---|
-| simulate | `holosoma.envs.simulation_task:SimulationTask.simulate` (the default) | `SimulationExperimentConfig` | `env`, `run` |
-| replay | `holosoma.envs.simulation_task:SimulationTask.replay` | `ReplayExperimentConfig` | `env`, `motion`, `run` |
-| train | `…:LeggedRobotLocomotionManager.train`, `…:WholeBodyTrackingManager.train` | `TrainingExperimentConfig` | `env`, `mdp`, `algo`, `run` |
-| evaluate | the same classes' `evaluate` | `EvaluationExperimentConfig` | `env`, `mdp`, `eval`, `run` |
+| simulate | `holosoma.envs.simulation_task:SimulationTask.simulate` (the default) | `SimulationExperimentConfig` | world, `run` |
+| replay | `holosoma.envs.simulation_task:SimulationTask.replay` | `ReplayExperimentConfig` | world, `motion`, `run` |
+| train | `…:LeggedRobotLocomotionManager.train`, `…:WholeBodyTrackingManager.train` | `TrainingExperimentConfig` | world, MDP, `algo`, `run` |
+| evaluate | the same classes' `evaluate` | `EvaluationExperimentConfig` | world, MDP, `eval`, `run` |
 
 `task` comes from, in order:
 1. `--task` on the command line, or a document's `overrides.task`;
@@ -43,14 +43,15 @@ Every config has a `task` field naming a task class and the classmethod that run
 The function's parameter annotation is the config type the command line builds, so a task class
 can add workflows of its own (see [writing-extensions.md](writing-extensions.md#tasks--custom-workflows)).
 
-## Parts
+## Fields and parts
 
-Each config type holds only the parts its workflow uses. Flags and selections are spelled by part.
+Each config type holds only what its workflow uses. The world and MDP fields sit at the top level of
+the config; everything else is grouped in a part and spelled under it.
 
-| Part | Holds | Spelled |
+| | Holds | Spelled |
 |---|---|---|
-| `env` | robot, simulator, terrain, scene, sensors, plugins, randomization, termination | `env.simulator:mjwarp`, `env.sensor.<key>:<preset>`, `--env.robot.init_state.pos=[0, 0, 0.8]` |
-| `mdp` | observation, action, reward, command, curriculum | `mdp.reward:<preset>`, `--mdp.reward.terms.<term>.weight=2.5` |
+| world (`EnvironmentConfig`, every type) | `robot`, `simulator`, `terrain`, `scene`, `sensor`, `plugin`, `randomization`, `termination` | `simulator:mjwarp`, `sensor.<key>:<preset>`, `--robot.init_state.pos=[0, 0, 0.8]` |
+| MDP (`MDPConfig`, train and evaluate) | `observation`, `action`, `reward`, `command`, `curriculum` | `reward:<preset>`, `--reward.terms.<term>.weight=2.5` |
 | `algo` | the algorithm and its hyperparameters, plus `resume_from`, `teacher_checkpoint`, `multigpu`, `nightly` | `algo:fast-sac`, `--algo.config.num_learning_iterations=10`, `--algo.resume_from=<ckpt>` |
 | `eval` | `checkpoint`, `max_eval_steps`, `export_onnx`, `callbacks` | `--eval.checkpoint=<ckpt>` |
 | `run` | `num_envs`, `headless`, `seed`, `torch_deterministic`, `device`, `time_scale`, `viewer_update_decimation`, `project`, `name`, `logger` | `--run.num_envs=64`, `run.logger:wandb` |
@@ -91,8 +92,8 @@ bridge and virtual gantry on, at the interactive physics rate.
 version: 1
 arguments:
   exp: g1-29dof                # the starting config (exp:g1-29dof); optional
-  env.simulator: mjwarp        # a selection, by path (env.simulator:mjwarp)
-  env.sensor:                  # named slots: env.sensor.scan:g1-pelvis-lidar
+  simulator: mjwarp        # a selection, by path (simulator:mjwarp)
+  sensor:                  # named slots: sensor.scan:g1-pelvis-lidar
     scan: g1-pelvis-lidar
   overrides:                   # values: --<dotted.path>=<value>
     run.num_envs: 64
@@ -105,7 +106,7 @@ Each entry maps to one command-line token, so any preset from an installed exten
 passed as `@holosoma/examples/configs/<name>.yaml`.
 
 - **Precedence is by path.** A selection applies before the selections and values below its path:
-  `exp` sets the whole config, `env.simulator:…` replaces one block of it, and values apply last.
+  `exp` sets the whole config, `simulator:…` replaces one block of it, and values apply last.
   At the same path, the command line wins over the document.
   - A command-line `exp:` replaces the document's, and the document's other entries still apply
     on top of it; holosoma warns when that happens.
@@ -127,10 +128,7 @@ passed as `@holosoma/examples/configs/<name>.yaml`.
 
 ## Old spellings and saved configs
 
-The earlier flat spellings keep working, each with a one-time warning naming the new one:
-- **The world and MDP fields:** `robot:`, `simulator:`, `--terrain.*`, `sensor.*`, `plugin.*`,
-  `randomization:`, `termination:` move under `env`, and `observation:`, `--reward.*`,
-  `--command.*`, `curriculum:` move under `mdp`.
+Earlier spellings keep working, each with a one-time warning naming the new one:
 - **`training.*`:**
   - `num_envs`, `headless`, `seed`, `torch_deterministic`, `project` and `name` → `run.*`;
   - `checkpoint` → `algo.resume_from`;
@@ -146,5 +144,5 @@ The earlier flat spellings keep working, each with a one-time warning naming the
 - **`run_sim`'s simulators:** in `python -m holosoma.run_sim`, `simulator:mujoco` (and `isaacsim`,
   `mjwarp`) still means the interactive preset.
 
-Checkpoints and `holosoma_config.yaml` files saved with the flat layout load into the parts
-unchanged.
+Checkpoints and `holosoma_config.yaml` files saved before `task` (with `env_class` and `training`)
+load unchanged.

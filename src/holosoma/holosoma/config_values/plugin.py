@@ -43,7 +43,7 @@ odometry = PLUGIN_REGISTRY.add("odometry", ROS2OdometryPluginConfig())
 
 # Kinematic motion playback: drive the robot (and optionally one scene object) from a recorded
 # motion NPZ. Rendering-only replay of external trajectories; combine with
-# --env.simulator.config.sim.kinematic_playback True to replace dynamics with forward kinematics,
+# --simulator.config.sim.kinematic_playback True to replace dynamics with forward kinematics,
 # plus a mounted camera + a frame consumer, e.g.
 #   plugin.play:motion-playback '--plugin.play.motion_files=["clip.npz"]' \
 #   --sensor.head_cam:g1-head plugin.out:frame-writer

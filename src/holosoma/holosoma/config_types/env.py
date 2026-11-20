@@ -45,7 +45,7 @@ class EnvConfig:
 
 
 def build_env_config(env_class: str, env: EnvironmentConfig, run: RunConfig, mdp: MDPConfig | None = None) -> EnvConfig:
-    """Bundle a config's parts for environment construction; ``mdp`` is None for tasks without MDP managers."""
+    """Bundle a config's fields for environment construction; ``mdp`` is None for tasks without MDP managers."""
     validate_camera_dict(
         {name: sensor for name, sensor in env.sensor.items() if isinstance(sensor, CameraSensorConfig)}
     )

@@ -50,10 +50,10 @@ def test_run_builds_the_named_config_and_calls_its_function() -> None:
     _RecordingTask.seen.clear()
     task = f"{__name__}:_RecordingTask.simulate"
 
-    cli.run([f"--task={task}", "env.simulator:sim-mjwarp", "--run.num_envs=3"])
+    cli.run([f"--task={task}", "simulator:sim-mjwarp", "--run.num_envs=3"])
 
     (config,) = _RecordingTask.seen
-    assert (config.task, config.env.simulator.config.sim.fps, config.run.num_envs) == (task, 400, 3)
+    assert (config.task, config.simulator.config.sim.fps, config.run.num_envs) == (task, 400, 3)
 
 
 def test_run_rejects_a_task_class_that_does_not_match_the_experiment() -> None:
@@ -71,8 +71,8 @@ def test_replay_base_plays_the_experiment_motion_kinematically() -> None:
 
     assert base.motion is not None
     assert base.motion.motion_file.endswith(".npz")
-    assert base.env.simulator.config.sim.kinematic_playback
-    assert (base.env.randomization, base.env.termination) == (None, None)
+    assert base.simulator.config.sim.kinematic_playback
+    assert (base.randomization, base.termination) == (None, None)
     with pytest.raises(SystemExit, match="motion command"):
         ReplayExperimentConfig.base(first, experiment.g1_29dof)
 
@@ -82,7 +82,7 @@ def test_simulation_base_puts_the_experiment_world_on_its_interactive_simulator(
 
     base = SimulationExperimentConfig.base(SimulationExperimentConfig(), experiment.g1_29dof)
 
-    assert base.env.robot == experiment.g1_29dof.env.robot
-    assert base.env.simulator.config.bridge.enabled and base.env.simulator.config.virtual_gantry.enabled
-    assert (base.env.randomization, base.env.termination) == (None, None)
+    assert base.robot == experiment.g1_29dof.robot
+    assert base.simulator.config.bridge.enabled and base.simulator.config.virtual_gantry.enabled
+    assert (base.randomization, base.termination) == (None, None)
     assert (base.run.num_envs, base.run.project) == (1, experiment.g1_29dof.run.project)

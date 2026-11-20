@@ -1,4 +1,4 @@
-"""Configuration type for the MDP a policy is trained and evaluated on."""
+"""The fields describing the MDP a policy is trained and evaluated on; training and evaluation configs inherit them."""
 
 from __future__ import annotations
 

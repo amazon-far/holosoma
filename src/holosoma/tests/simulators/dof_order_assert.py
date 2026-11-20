@@ -53,23 +53,23 @@ TORQUE_STEPS = 5
 def _build(simulator: str, num_envs: int):
     _robot_presets.register()
     argv = [
-        f"env.simulator:sim-{simulator}",
-        f"env.robot:{ROBOT}",
-        "env.terrain:terrain_locomotion_plane",
-        "env.scene:empty",
+        f"simulator:sim-{simulator}",
+        f"robot:{ROBOT}",
+        "terrain:terrain_locomotion_plane",
+        "scene:empty",
     ]
     config = tyro.cli(SimulationExperimentConfig, args=argv)
     sim_cfg = dataclasses.replace(
-        config.env.simulator,
+        config.simulator,
         config=dataclasses.replace(
-            config.env.simulator.config,
+            config.simulator.config,
             bridge=BridgeConfig(enabled=False),
             virtual_gantry=VirtualGantryCfg(enabled=False),
         ),
     )
     config = dataclasses.replace(
         config,
-        env=dataclasses.replace(config.env, simulator=sim_cfg),
+        simulator=sim_cfg,
         run=dataclasses.replace(config.run, device=("cpu" if simulator == "mujoco" else "cuda:0"), num_envs=num_envs),
     )
     import torch
@@ -81,12 +81,12 @@ def _build(simulator: str, num_envs: int):
     s.load_assets()
     origins = torch.zeros(num_envs, 3, device=device)
     origins[:, 0] = torch.arange(num_envs, device=device, dtype=torch.float32) * 4.0
-    init = config.env.robot.init_state
+    init = config.robot.init_state
     base_init = torch.tensor(list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device)
     s.create_envs(num_envs, origins, base_init)
     s.prepare_sim()
     s.install_plugins()
-    return s, config.env.robot
+    return s, config.robot
 
 
 def _body_positions(sim):

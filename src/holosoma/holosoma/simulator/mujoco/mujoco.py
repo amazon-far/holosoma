@@ -600,7 +600,7 @@ class MuJoCo(BaseSimulator):
         if num_envs > 1 and self.simulator_config.mujoco_backend != MujocoBackend.WARP:
             raise ValueError(
                 f"MuJoCo ClassicBackend only supports single environment, got {num_envs}. "
-                f"Use --env.simulator.config.mujoco-backend=warp for multi-environment support."
+                f"Use --simulator.config.mujoco-backend=warp for multi-environment support."
             )
 
         self.num_envs = num_envs

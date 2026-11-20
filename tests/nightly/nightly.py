@@ -61,8 +61,8 @@ def simulator_tag(config: TrainingExperimentConfig) -> str:
     other GPU and multi-env -- so sharing a tag would make their runs indistinguishable
     and pool their throughput into one baseline.
     """
-    name = config.env.simulator.config.name
-    if name == "mujoco" and config.env.simulator.config.mujoco_backend == MujocoBackend.WARP:
+    name = config.simulator.config.name
+    if name == "mujoco" and config.simulator.config.mujoco_backend == MujocoBackend.WARP:
         return "mjwarp"
     return name
 

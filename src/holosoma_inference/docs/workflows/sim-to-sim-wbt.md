@@ -27,7 +27,7 @@ In one terminal, launch the MuJoCo environment:
 
 ```bash
 source scripts/source_mujoco_setup.sh
-python src/holosoma/holosoma/run_sim.py env.robot:g1-29dof
+python src/holosoma/holosoma/run_sim.py robot:g1-29dof
 ```
 
 The robot will spawn in the simulator, hanging from a gantry.

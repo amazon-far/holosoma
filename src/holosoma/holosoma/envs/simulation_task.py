@@ -34,7 +34,7 @@ def limit_cpu_math_threads(config: ExperimentConfig, device: str | None = None) 
     # Both halves are needed: ``mujoco_backend`` lives on the shared SimulatorInitConfig and
     # defaults to CLASSIC, so every backend's preset reports CLASSIC unless it overrides it. The
     # name is the same discriminator ``resolve_simulation_device`` uses.
-    sim_config = config.env.simulator.config
+    sim_config = config.simulator.config
     is_classic = sim_config.name == "mujoco" and getattr(sim_config, "mujoco_backend", None) == MujocoBackend.CLASSIC
     if device is None:
         device = config.run.device
@@ -109,18 +109,18 @@ class SimulationTask(BaseTask):
     @classmethod
     def replay(cls, config: ReplayExperimentConfig) -> None:
         """Play ``config.motion`` back on the robot with the motion-playback plugin, then stop."""
-        import dataclasses
-
+        from holosoma.config_types.environment import EnvironmentConfig
+        from holosoma.config_types.experiment import part_fields
         from holosoma.config_types.plugin import MotionPlaybackPluginConfig
 
         motion = config.motion
         if motion is None or not (motion.motion_file or motion.motion_dir):
             raise SystemExit("Replay needs a motion: --motion.motion_file=<npz>, or an exp: preset that tracks one.")
         files = [f"{motion.motion_dir.rstrip('/')}/*.npz"] if motion.motion_dir else [motion.motion_file]
-        objects = list(config.env.scene.rigid_objects)[:1]
+        objects = list(config.scene.rigid_objects)[:1]
         playback = MotionPlaybackPluginConfig(motion_files=files, objects=objects)
-        env = dataclasses.replace(config.env, plugin={**config.env.plugin, "motion_playback": playback})
-        cls.simulate(SimulationExperimentConfig(task=config.task, env=env, run=config.run))
+        env = {**part_fields(EnvironmentConfig, config), "plugin": {**config.plugin, "motion_playback": playback}}
+        cls.simulate(SimulationExperimentConfig(**env, task=config.task, run=config.run))
 
     def _get_env_origins(self) -> torch.Tensor:
         """Place a single environment at the world origin, so its poses are world coordinates.

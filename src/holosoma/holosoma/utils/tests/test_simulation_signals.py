@@ -51,7 +51,7 @@ _CHILD = textwrap.dedent(
         run=SimpleNamespace(device="cpu"),
         # A real preset, so the fields simulate reads (``config.name``, ``config.mujoco_backend``)
         # have the shapes they have in production.
-        env=SimpleNamespace(simulator=SIMULATOR_REGISTRY.get("mujoco")),
+        simulator=SIMULATOR_REGISTRY.get("mujoco"),
         env_config=lambda: env_config,
         create_task=lambda: session.task_session(env_config, SimulationTask),
     )

@@ -30,13 +30,12 @@ def validate_warp_options(model: mujoco.MjModel, overrides: dict[str, Any]) -> N
     for name, reason in UNSUPPORTED_ENABLE_FLAGS.items():
         if model.opt.enableflags & int(getattr(mujoco.mjtEnableBit, "mjENBL_" + name.upper())):
             raise ValueError(
-                f"env.simulator.config.sim.mujoco.enableflags: Holosoma's Warp backend does not support "
-                f"{name}: {reason}"
+                f"simulator.config.sim.mujoco.enableflags: Holosoma's Warp backend does not support {name}: {reason}"
             )
     supported = {f.name for f in fields(mjw.Option)} | {"impratio", "jacobian", "noslip_iterations"}
     for name in overrides:
         if name not in supported:
-            raise ValueError(f"env.simulator.config.sim.mujoco.extra.{name}: not implemented by MJWarp")
+            raise ValueError(f"simulator.config.sim.mujoco.extra.{name}: not implemented by MJWarp")
 
 
 def warp_extra_inputs(cfg: MujocoWarpConfig) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -52,10 +51,10 @@ def warp_extra_inputs(cfg: MujocoWarpConfig) -> tuple[dict[str, Any], dict[str, 
     allocation_names = set(signature(mjw.make_data).parameters)
     options, allocations = {}, {}
     for name, value in cfg.extras.items():
-        path = f"env.simulator.config.sim.mujoco.warp.extras.{name}"
+        path = f"simulator.config.sim.mujoco.warp.extras.{name}"
         if isinstance(getattr(mujoco.MjOption, name, None), property):
             owner = name if name in MujocoConfig.__dataclass_fields__ else "extra." + name
-            raise ValueError(f"{path}: physics option; configure env.simulator.config.sim.mujoco.{owner}")
+            raise ValueError(f"{path}: physics option; configure simulator.config.sim.mujoco.{owner}")
         if name == "impratio_invsqrt":
             raise ValueError(f"{path}: derived Option field; configure impratio directly")
         if name in option_names and name in allocation_names:
@@ -94,17 +93,17 @@ def allocation_kwargs(
     for name, value in inputs.items():
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError(
-                f"env.simulator.config.sim.mujoco.warp.extras.{name}: "
+                f"simulator.config.sim.mujoco.warp.extras.{name}: "
                 "expected a nonnegative allocation argument from make_data"
             )
         result[name] = value
     if result.get("nvmax", model.nv) > model.nv:
-        raise ValueError("env.simulator.config.sim.mujoco.warp.extras.nvmax: exceeds model.nv")
+        raise ValueError("simulator.config.sim.mujoco.warp.extras.nvmax: exceeds model.nv")
     ncon = result["nconmax"]
     total = result.get("naconmax", ncon * nworld)
     ccd_total = result.get("naccdmax", result["nccdmax"] * nworld if "nccdmax" in result else total)
     if result.get("nccdmax", ncon) > ncon or ccd_total > total:
-        raise ValueError("env.simulator.config.sim.mujoco.warp: CCD capacity exceeds contact allocation")
+        raise ValueError("simulator.config.sim.mujoco.warp: CCD capacity exceeds contact allocation")
     return result
 
 
@@ -124,7 +123,7 @@ def warp_option_overrides(cfg: MujocoWarpConfig, *, inputs: dict[str, Any] | Non
     result = {}
     for name, value in option_inputs.items():
         path = (
-            f"env.simulator.config.sim.mujoco.warp."
+            f"simulator.config.sim.mujoco.warp."
             f"{name if name in MujocoWarpConfig.__dataclass_fields__ else 'extras.' + name}"
         )
         native_type = option_types[name]

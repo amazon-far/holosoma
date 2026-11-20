@@ -1,4 +1,4 @@
-"""Configuration type for the simulated world every task builds."""
+"""The fields describing the simulated world every task builds; every config type inherits them."""
 
 from __future__ import annotations
 
@@ -43,12 +43,12 @@ class EnvironmentConfig:
     scene: Annotated[SceneConfig, UseRegistry(holosoma.config_values.scene.SCENE_REGISTRY)] = (
         holosoma.config_values.scene.empty
     )
-    # Mounted sensors, declared per-key on the CLI as ``env.sensor.<name>:<variant>`` (resolved from
+    # Mounted sensors, declared per-key on the CLI as ``sensor.<name>:<variant>`` (resolved from
     # SENSOR_REGISTRY), optionally with per-key field overrides. The dict key becomes the sensor name.
     sensor: dict[str, Annotated[SensorConfig, UseRegistry(holosoma.config_values.sensor.SENSOR_REGISTRY)]] = (
         dataclasses.field(default_factory=dict)
     )
-    # Plugins, declared per-key as ``env.plugin.<key>:<variant>`` (resolved from PLUGIN_REGISTRY),
+    # Plugins, declared per-key as ``plugin.<key>:<variant>`` (resolved from PLUGIN_REGISTRY),
     # optionally with per-key field overrides. Includes the camera-frame egress sinks (ROS2 publish,
     # viz window, video record) and any custom plugin. Installed after simulator setup.
     plugin: dict[str, Annotated[PluginConfig, UseRegistry(holosoma.config_values.plugin.PLUGIN_REGISTRY)]] = (

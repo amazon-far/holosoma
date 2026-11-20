@@ -64,7 +64,7 @@ def main() -> int:
     preset = experiment.g1_29dof
     tyro_config = dataclasses.replace(
         preset,
-        env=dataclasses.replace(preset.env, simulator=SIMULATOR_REGISTRY[args.simulator]),
+        simulator=SIMULATOR_REGISTRY[args.simulator],
         run=dataclasses.replace(preset.run, num_envs=NUM_ENVS, headless=True),
     )
 
@@ -81,7 +81,7 @@ def main() -> int:
             if len(obs_dict[name]) != NUM_ENVS
         )
 
-        actions = torch.zeros(NUM_ENVS, tyro_config.env.robot.actions_dim, device=DEVICE)
+        actions = torch.zeros(NUM_ENVS, tyro_config.robot.actions_dim, device=DEVICE)
         n_dones = 0
         for step in range(NUM_STEPS):
             obs_dict, rewards, dones, infos = env.step({"actions": actions})

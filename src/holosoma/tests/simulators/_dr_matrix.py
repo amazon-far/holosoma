@@ -81,9 +81,8 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
     base = experiment.g1_29dof
     cfg = dataclasses.replace(
         base,
-        env=dataclasses.replace(
-            base.env, simulator=simulator_cfg, scene=free_and_static if scene_cfg is None else scene_cfg
-        ),
+        simulator=simulator_cfg,
+        scene=free_and_static if scene_cfg is None else scene_cfg,
         run=dataclasses.replace(base.run, num_envs=num_envs, headless=True, seed=seed, torch_deterministic=False),
     )
     with cfg.create_task() as env:

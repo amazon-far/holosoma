@@ -1,4 +1,4 @@
-"""Top-level configuration types, one per workflow, each built from the parts that workflow uses."""
+"""Top-level configuration types, one per workflow, each holding the fields and parts that workflow uses."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from holosoma.config_types.evaluation import EvalConfig
 from holosoma.config_types.logger import DisabledLoggerConfig
 from holosoma.config_types.mdp import MDPConfig
 from holosoma.config_types.run import RunConfig
+from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_types.video import VideoConfig
 from holosoma.utils.config_registry import UseRegistry
 
@@ -49,15 +50,17 @@ def task_class_path(task: str) -> str:
 _STRICT = ConfigDict(extra="forbid")
 
 
+def part_fields(part: type, config: Any) -> dict[str, Any]:
+    """``config``'s values for the fields ``part`` declares."""
+    return {field.name: getattr(config, field.name) for field in dataclasses.fields(part)}
+
+
 @dataclass(frozen=True, config=_STRICT)
-class ExperimentConfig:
-    """What every workflow's config holds: the task that runs it, the world, and how the run executes."""
+class ExperimentConfig(EnvironmentConfig):
+    """What every workflow's config holds: the world, the task that runs it, and how the run executes."""
 
     task: str = SIMULATE
     """The task class and the classmethod that runs this config, as ``module:Class.function``."""
-
-    env: EnvironmentConfig = EnvironmentConfig()
-    """The robot, the simulator and the world around it."""
 
     run: RunConfig = RunConfig()
     """How the run executes, and how it is named and logged."""
@@ -81,7 +84,7 @@ class ExperimentConfig:
         """The bundle of configs the task class is constructed from."""
         from holosoma.config_types.env import build_env_config
 
-        return build_env_config(task_class_path(self.task), self.env, self.run)
+        return build_env_config(task_class_path(self.task), self, self.run)
 
     def create_task(self) -> AbstractContextManager[BaseTask]:
         """Return a context that builds ``task``'s class and owns its resources."""
@@ -105,7 +108,9 @@ class ExperimentConfig:
 class SimulationExperimentConfig(ExperimentConfig):
     """Simulation with no policy: one environment on an interactive simulator, in the viewer at real time."""
 
-    env: EnvironmentConfig = EnvironmentConfig(simulator=holosoma.config_values.simulator.sim_mujoco)
+    simulator: Annotated[SimulatorConfig, UseRegistry(holosoma.config_values.simulator.SIMULATOR_REGISTRY)] = (
+        holosoma.config_values.simulator.sim_mujoco
+    )
     run: RunConfig = RunConfig(
         num_envs=1,
         headless=False,
@@ -125,10 +130,15 @@ class SimulationExperimentConfig(ExperimentConfig):
         default = cls()
         if exp is None:
             return default
-        simulator = holosoma.config_values.simulator.interactive(exp.env.simulator)
-        env = dataclasses.replace(exp.env, simulator=simulator, randomization=None, termination=None)
+        simulator = holosoma.config_values.simulator.interactive(exp.simulator)
+        env = {
+            **part_fields(EnvironmentConfig, exp),
+            "simulator": simulator,
+            "randomization": None,
+            "termination": None,
+        }
         run = dataclasses.replace(default.run, project=exp.run.project, name=exp.run.name)
-        return cls(env=env, run=run)
+        return cls(**env, run=run)
 
 
 @dataclass(frozen=True, config=_STRICT)
@@ -152,30 +162,28 @@ class ReplayExperimentConfig(ExperimentConfig):
         """
         if exp is None:
             return cls()
-        terms = exp.mdp.command.setup_terms if exp.mdp.command is not None else {}
+        terms = exp.command.setup_terms if exp.command is not None else {}
         term = terms.get("motion_command")
         motion = term.params.get("motion_config") if term is not None else None
         if not isinstance(motion, MotionConfig):
             raise SystemExit(f"Replay needs an experiment with a motion command; {exp.task!r} has none.")
-        simulator = exp.env.simulator
+        simulator = exp.simulator
         sim = dataclasses.replace(simulator.config.sim, kinematic_playback=True)
-        env = dataclasses.replace(
-            exp.env,
-            simulator=dataclasses.replace(simulator, config=dataclasses.replace(simulator.config, sim=sim)),
-            randomization=None,
-            termination=None,
-        )
+        env = {
+            **part_fields(EnvironmentConfig, exp),
+            "simulator": dataclasses.replace(simulator, config=dataclasses.replace(simulator.config, sim=sim)),
+            "randomization": None,
+            "termination": None,
+        }
         run = dataclasses.replace(cls().run, project=exp.run.project, name=exp.run.name)
-        return cls(env=env, motion=motion, run=run)
+        return cls(**env, motion=motion, run=run)
 
 
 @dataclass(frozen=True, config=_STRICT)
-class TrainingExperimentConfig(ExperimentConfig):
+class TrainingExperimentConfig(MDPConfig, ExperimentConfig):
     """Training a policy on an MDP with an algorithm."""
 
     task: str = LOCOMOTION_TRAIN
-    mdp: MDPConfig = MDPConfig()
-    """The managers the policy is trained on."""
 
     algo: Annotated[AlgoConfig, UseRegistry(holosoma.config_values.algo.ALGO_REGISTRY)] = (
         holosoma.config_values.algo.ppo
@@ -187,7 +195,7 @@ class TrainingExperimentConfig(ExperimentConfig):
     def env_config(self) -> EnvConfig:
         from holosoma.config_types.env import build_env_config
 
-        return build_env_config(task_class_path(self.task), self.env, self.run, self.mdp)
+        return build_env_config(task_class_path(self.task), self, self.run, self)
 
     @classmethod
     def base(cls, first: Self, exp: TrainingExperimentConfig | None) -> Self:  # noqa: ARG003
@@ -203,12 +211,10 @@ class TrainingExperimentConfig(ExperimentConfig):
 
 
 @dataclass(frozen=True, config=_STRICT)
-class EvaluationExperimentConfig(ExperimentConfig):
+class EvaluationExperimentConfig(MDPConfig, ExperimentConfig):
     """Evaluating a trained checkpoint on the MDP it was trained on."""
 
     task: str = LOCOMOTION_EVALUATE
-    mdp: MDPConfig = MDPConfig()
-    """The managers the policy was trained on, from the checkpoint's saved config."""
 
     eval: EvalConfig = EvalConfig()
     """What to evaluate and what to do while evaluating it."""
@@ -229,7 +235,7 @@ class EvaluationExperimentConfig(ExperimentConfig):
 
     @classmethod
     def from_training(cls, saved: TrainingExperimentConfig, first: Self) -> Self:
-        """``saved``'s environment and MDP with evaluation's defaults, keeping ``first``'s task and eval part.
+        """``saved``'s world and MDP with evaluation's defaults, keeping ``first``'s task and eval part.
 
         One env in the viewer, logger off, a deterministic spawn and no episode time limit; the saved
         seed and run naming are kept. ``first.task`` must name the class ``saved`` trained. A saved
@@ -241,26 +247,26 @@ class EvaluationExperimentConfig(ExperimentConfig):
             raise SystemExit(
                 f"task {first.task!r} does not match the checkpoint's class {task_class_path(saved.task)!r}."
             )
-        simulator = saved.env.simulator
+        simulator = saved.simulator
         if simulator.config.name == "isaacgym":
-            logger.warning(
-                f"The checkpoint ran on Isaac Gym, which is retired; using {first.env.simulator.config.name}."
-            )
-            simulator = first.env.simulator
-        terrain = saved.env.terrain
+            logger.warning(f"The checkpoint ran on Isaac Gym, which is retired; using {first.simulator.config.name}.")
+            simulator = first.simulator
+        terrain = saved.terrain
         spawn = dataclasses.replace(terrain.terrain_term.spawn, randomize_tiles=False, xy_offset_range=0.0)
         sim = dataclasses.replace(simulator.config.sim, max_episode_length_s=100000.0)
-        env = dataclasses.replace(
-            saved.env,
-            terrain=dataclasses.replace(terrain, terrain_term=dataclasses.replace(terrain.terrain_term, spawn=spawn)),
-            simulator=dataclasses.replace(simulator, config=dataclasses.replace(simulator.config, sim=sim)),
-        )
+        env = {
+            **part_fields(EnvironmentConfig, saved),
+            "terrain": dataclasses.replace(
+                terrain, terrain_term=dataclasses.replace(terrain.terrain_term, spawn=spawn)
+            ),
+            "simulator": dataclasses.replace(simulator, config=dataclasses.replace(simulator.config, sim=sim)),
+        }
         run = dataclasses.replace(
             saved.run, device=None, num_envs=1, headless=False, logger=holosoma.config_values.logger.disabled
         )
-        return cls(task=first.task, env=env, mdp=saved.mdp, eval=first.eval, run=run)
+        return cls(**env, **part_fields(MDPConfig, saved), task=first.task, eval=first.eval, run=run)
 
     def env_config(self) -> EnvConfig:
         from holosoma.config_types.env import build_env_config
 
-        return build_env_config(task_class_path(self.task), self.env, self.run, self.mdp)
+        return build_env_config(task_class_path(self.task), self, self.run, self)

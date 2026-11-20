@@ -1,4 +1,4 @@
-"""CLI/registry resolution for the ``SimulationExperimentConfig`` ``env.plugin`` dynamic-dict field."""
+"""CLI/registry resolution for the ``SimulationExperimentConfig`` ``plugin`` dynamic-dict field."""
 
 from __future__ import annotations
 
@@ -33,26 +33,26 @@ def test_plugin_registry_holds_builtin_preset() -> None:
 
 def test_run_sim_plugin_field_is_scanned_and_bound() -> None:
     found = find_dynamic_dict_fields(SimulationExperimentConfig)
-    assert "env.plugin" in found
-    assert registry_from_annotated(found["env.plugin"]) is PLUGIN_REGISTRY
+    assert "plugin" in found
+    assert registry_from_annotated(found["plugin"]) is PLUGIN_REGISTRY
 
 
 def test_run_sim_defaults_to_empty_plugin() -> None:
-    cfg = parse_config(SimulationExperimentConfig, args=["env.simulator:sim-mujoco"])
-    assert cfg.env.plugin == {}
+    cfg = parse_config(SimulationExperimentConfig, args=["simulator:sim-mujoco"])
+    assert cfg.plugin == {}
 
 
 def test_declare_builtin_plugin() -> None:
-    cfg = parse_config(SimulationExperimentConfig, args=["env.simulator:sim-mujoco", "env.plugin.clk:clock_publish"])
-    assert set(cfg.env.plugin) == {"clk"}
-    assert isinstance(cfg.env.plugin["clk"], ClockPublishPluginConfig)
+    cfg = parse_config(SimulationExperimentConfig, args=["simulator:sim-mujoco", "plugin.clk:clock_publish"])
+    assert set(cfg.plugin) == {"clk"}
+    assert isinstance(cfg.plugin["clk"], ClockPublishPluginConfig)
 
 
 def test_none_preset_resolves_to_noop_config() -> None:
-    # `env.plugin.<key>:none` selects the no-op preset (mirrors every other family's `none`),
+    # `plugin.<key>:none` selects the no-op preset (mirrors every other family's `none`),
     # resolving to a real NoOpPluginConfig rather than a literal None.
-    cfg = parse_config(SimulationExperimentConfig, args=["env.simulator:sim-mujoco", "env.plugin.disabled:none"])
-    assert isinstance(cfg.env.plugin["disabled"], NoOpPluginConfig)
+    cfg = parse_config(SimulationExperimentConfig, args=["simulator:sim-mujoco", "plugin.disabled:none"])
+    assert isinstance(cfg.plugin["disabled"], NoOpPluginConfig)
 
 
 def test_ros2_presets_resolve_with_independent_gantry_topics() -> None:
@@ -61,19 +61,19 @@ def test_ros2_presets_resolve_with_independent_gantry_topics() -> None:
     cfg = parse_config(
         SimulationExperimentConfig,
         args=[
-            "env.simulator:sim-mujoco",
-            "env.plugin.clk:clock_publish",
-            "--env.plugin.clk.topic=/sim_clock",
-            "env.plugin.g:gantry_control",
-            "--env.plugin.g.length-topic=/g/len",
-            "--env.plugin.g.length-readback-topic=/g/len/readback",
-            "--env.plugin.g.position-topic=None",
-            "--env.plugin.g.enabled-readback-topic=None",
+            "simulator:sim-mujoco",
+            "plugin.clk:clock_publish",
+            "--plugin.clk.topic=/sim_clock",
+            "plugin.g:gantry_control",
+            "--plugin.g.length-topic=/g/len",
+            "--plugin.g.length-readback-topic=/g/len/readback",
+            "--plugin.g.position-topic=None",
+            "--plugin.g.enabled-readback-topic=None",
         ],
     )
-    assert isinstance(cfg.env.plugin["clk"], ClockPublishPluginConfig)
-    assert cfg.env.plugin["clk"].topic == "/sim_clock"
-    gantry = cfg.env.plugin["g"]
+    assert isinstance(cfg.plugin["clk"], ClockPublishPluginConfig)
+    assert cfg.plugin["clk"].topic == "/sim_clock"
+    gantry = cfg.plugin["g"]
     assert isinstance(gantry, GantryControlPluginConfig)
     assert gantry.length_topic == "/g/len"
     assert gantry.length_readback_topic == "/g/len/readback"
@@ -89,13 +89,13 @@ def test_declare_plugin_with_leaf_override() -> None:
     cfg = parse_config(
         SimulationExperimentConfig,
         args=[
-            "env.simulator:sim-mujoco",
-            "env.plugin.clk:clock_publish",
-            "--env.plugin.clk.publish-every=25",
-            "--env.plugin.clk.node-name=my_clock",
+            "simulator:sim-mujoco",
+            "plugin.clk:clock_publish",
+            "--plugin.clk.publish-every=25",
+            "--plugin.clk.node-name=my_clock",
         ],
     )
-    plugin = cfg.env.plugin["clk"]
+    plugin = cfg.plugin["clk"]
     assert plugin.publish_every == 25
     assert plugin.node_name == "my_clock"
 
@@ -105,9 +105,9 @@ def test_frequency_string_rate_parses_and_validates() -> None:
     # decimation at install time against the phase base rate).
     cfg = parse_config(
         SimulationExperimentConfig,
-        args=["env.simulator:sim-mujoco", "env.plugin.clk:clock_publish", "--env.plugin.clk.publish-every=20Hz"],
+        args=["simulator:sim-mujoco", "plugin.clk:clock_publish", "--plugin.clk.publish-every=20Hz"],
     )
-    assert cfg.env.plugin["clk"].publish_every == "20Hz"
+    assert cfg.plugin["clk"].publish_every == "20Hz"
 
 
 def test_bad_frequency_string_fails_at_config_time() -> None:
@@ -116,8 +116,8 @@ def test_bad_frequency_string_fails_at_config_time() -> None:
 
 
 def test_unknown_plugin_variant_fails_loud() -> None:
-    with pytest.raises(SystemExit, match="Unknown env.plugin variant 'bogus'"):
-        parse_config(SimulationExperimentConfig, args=["env.simulator:sim-mujoco", "env.plugin.x:bogus"])
+    with pytest.raises(SystemExit, match="Unknown plugin variant 'bogus'"):
+        parse_config(SimulationExperimentConfig, args=["simulator:sim-mujoco", "plugin.x:bogus"])
 
 
 # A second PluginConfig subclass, resolved from the same registry alongside the built-in,

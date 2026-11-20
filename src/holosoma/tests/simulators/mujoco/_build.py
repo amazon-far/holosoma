@@ -20,7 +20,6 @@ import torch
 
 import holosoma.config_values.robot as robot_values
 import holosoma.config_values.simulator as simulator_values
-from holosoma.config_types.environment import EnvironmentConfig
 from holosoma.config_types.experiment import SimulationExperimentConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import BridgeConfig, MujocoBackend, VirtualGantryCfg
@@ -81,9 +80,10 @@ def build_classic_sim(
             ),
         )
     config = SimulationExperimentConfig(
-        env=EnvironmentConfig(
-            simulator=sim_cfg, robot=robot_values.g1_29dof, scene=scene or SceneConfig(), plugin=plugin or {}
-        ),
+        simulator=sim_cfg,
+        robot=robot_values.g1_29dof,
+        scene=scene or SceneConfig(),
+        plugin=plugin or {},
         run=dataclasses.replace(SimulationExperimentConfig().run, device="cpu"),
     )
     sim, device, _ = launch_simulator(config, device="cpu")
@@ -118,7 +118,9 @@ def build_warp_sim(
             config=dataclasses.replace(sim_cfg.config, sim=dataclasses.replace(sim_cfg.config.sim, mujoco=native)),
         )
     config = SimulationExperimentConfig(
-        env=EnvironmentConfig(simulator=sim_cfg, robot=robot_values.g1_29dof, scene=scene or SceneConfig()),
+        simulator=sim_cfg,
+        robot=robot_values.g1_29dof,
+        scene=scene or SceneConfig(),
         run=dataclasses.replace(
             SimulationExperimentConfig().run, num_envs=num_envs, headless=True, seed=seed, device="cuda:0"
         ),

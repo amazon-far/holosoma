@@ -145,7 +145,7 @@ def test_training_interrupt_closes_environment_before_app(
 
     config = _patch_session(monkeypatch, env, app)
     config.run = SimpleNamespace(logger=SimpleNamespace(type="local"), project="project", name="run", num_envs=1)
-    config.env = SimpleNamespace(robot=SimpleNamespace(asset=SimpleNamespace(robot_type="test")))
+    config.robot = SimpleNamespace(asset=SimpleNamespace(robot_type="test"))
     config.algo = SimpleNamespace(_target_="test.Algo", config=object(), resume_from=None, teacher_checkpoint=None)
     config.save_config = MagicMock()
     monkeypatch.setitem(sys.modules, "wandb", types.ModuleType("wandb"))

@@ -81,7 +81,7 @@ def main() -> int:
 
     n = args.num_envs
     env_origins = torch.zeros(n, 3, device=device)
-    init = config.env.robot.init_state
+    init = config.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
     )
@@ -100,7 +100,7 @@ def main() -> int:
         print(f"[{args.simulator}] FAIL: expected fast_cam+slow_cam, got {sim.get_sensor_names()}")
         return 1
 
-    _first_cam = cast("CameraSensorConfig", next(iter(config.env.sensor.values())))
+    _first_cam = cast("CameraSensorConfig", next(iter(config.sensor.values())))
     h, w = _first_cam.height, _first_cam.width
     # A dict (concatenate=False) group: fast_cam as CHW float01 rgb, slow_cam as plain rgb.
     rgb_tf = {"layout": "CHW", "scale": "float01"}

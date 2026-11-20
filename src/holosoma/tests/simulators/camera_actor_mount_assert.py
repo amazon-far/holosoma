@@ -60,7 +60,7 @@ def main() -> int:
 
     n = args.num_envs
     env_origins = torch.zeros(n, 3, device=device)
-    init = config.env.robot.init_state
+    init = config.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
     )
@@ -78,7 +78,7 @@ def main() -> int:
 
     fails: list[str] = []
     img = sim.get_camera_data("panel_cam", "rgb")  # [N,H,W,3] uint8
-    cam = cast("CameraSensorConfig", next(iter(config.env.sensor.values())))
+    cam = cast("CameraSensorConfig", next(iter(config.sensor.values())))
     if tuple(img.shape) != (n, cam.height, cam.width, 3) or img.dtype != torch.uint8:
         fails.append(f"{args.simulator}: actor-mount frame shape/dtype {tuple(img.shape)} {img.dtype}")
     for e in range(n):

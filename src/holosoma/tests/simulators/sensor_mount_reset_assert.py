@@ -28,7 +28,7 @@ def main() -> int:
     config = build_run_sim_config("isaacsim", "empty", "g1-29dof", "terrain_locomotion_plane", sensors=_sensors())
     config = dataclasses.replace(
         config,
-        env=dataclasses.replace(config.env, scene=_camera_presets.panel_target),
+        scene=_camera_presets.panel_target,
         run=dataclasses.replace(config.run, device="cuda:0", time_scale=0.0, num_envs=args.num_envs, headless=True),
     )
     with config.create_task() as task:

@@ -60,7 +60,7 @@ Train a G1 robot with FastSAC on IsaacSim:
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    env.simulator:isaacsim \
+    simulator:isaacsim \
     run.logger:wandb \
     --run.seed 1
 ```

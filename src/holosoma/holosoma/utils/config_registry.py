@@ -304,10 +304,10 @@ def _reject_legacy_mujoco_cli(argv: list[str]) -> None:
     aliases = tuple(
         f"--{root}simulator.config.{spelling}." for root in ("", "env.") for spelling in ("mujoco-warp", "mujoco_warp")
     )
-    canonical = "--env.simulator.config.sim.mujoco.warp."
+    canonical = "--simulator.config.sim.mujoco.warp."
     if any(token.startswith(aliases) for token in argv):
         raise SystemExit(
-            f"--env.simulator.config.mujoco-warp.* moved to {canonical}*. "
+            f"--simulator.config.mujoco-warp.* moved to {canonical}*. "
             "Move the flags to that path; capacity field names and defaults are unchanged."
         )
 

@@ -130,7 +130,7 @@ def main() -> int:
 
     n = args.num_envs
     env_origins = torch.zeros(n, 3, device=device)
-    init = config.env.robot.init_state
+    init = config.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
     )
@@ -154,7 +154,7 @@ def main() -> int:
     sim.render_sensors()
 
     fails: list[str] = []
-    cameras = cast("dict[str, CameraSensorConfig]", config.env.sensor)
+    cameras = cast("dict[str, CameraSensorConfig]", config.sensor)
     depth_outputs = {}
     rgb_outputs = {}
     for cam_name, cam in cameras.items():

@@ -26,28 +26,28 @@ def test_shared_entrypoint_cli_yaml_and_preset_roundtrip(
 ) -> None:
     preset_name = f"sim-{backend}" if kind is SimulationExperimentConfig else backend
     args = [
-        f"env.simulator:{preset_name}",
-        "--env.simulator.config.sim.mujoco.integrator",
+        f"simulator:{preset_name}",
+        "--simulator.config.sim.mujoco.integrator",
         "rk4",
-        "--env.simulator.config.sim.mujoco.iterations",
+        "--simulator.config.sim.mujoco.iterations",
         "0",
-        "--env.simulator.config.sim.mujoco.disableflags",
+        "--simulator.config.sim.mujoco.disableflags",
         "('contact', 'gravity')",
     ]
     if backend == "mjwarp":
         args += [
-            "--env.simulator.config.sim.mujoco.warp.nconmax-per-env",
+            "--simulator.config.sim.mujoco.warp.nconmax-per-env",
             "128",
-            "--env.simulator.config.sim.mujoco.warp.naconmax",
+            "--simulator.config.sim.mujoco.warp.naconmax",
             "300",
-            "--env.simulator.config.sim.mujoco.warp.graph-conditional",
+            "--simulator.config.sim.mujoco.warp.graph-conditional",
             "False",
         ]
     parsed = parse_config(
         kind,
         args=args,
     )
-    native = parsed.env.simulator.config.sim.mujoco
+    native = parsed.simulator.config.sim.mujoco
     assert native.integrator == "rk4"
     assert native.iterations == 0
     assert native.disableflags == ("contact", "gravity")
@@ -61,8 +61,8 @@ def test_shared_entrypoint_cli_yaml_and_preset_roundtrip(
     encoded = adapter.dump_python(parsed, mode="json")
     assert parsed.to_serializable_dict() == encoded
     restored = adapter.validate_python(yaml.safe_load(yaml.safe_dump(encoded)))
-    assert restored.env.simulator.config.sim.mujoco == native
-    assert "mujoco_warp" not in encoded["env"]["simulator"]["config"]
+    assert restored.simulator.config.sim.mujoco == native
+    assert "mujoco_warp" not in encoded["simulator"]["config"]
     assert preset.config.sim.mujoco.integrator is None
 
 
@@ -88,15 +88,13 @@ def test_extra_cli_false_and_yaml_values_roundtrip() -> None:
     assert adapter.validate_python(yaml.safe_load(yaml.safe_dump(adapter.dump_python(cfg, mode="json")))) == cfg
 
 
-@pytest.mark.parametrize(
-    "path", ["env.simulator.config.sim.mujoco.extra", "env.simulator.config.sim.mujoco.warp.extras"]
-)
+@pytest.mark.parametrize("path", ["simulator.config.sim.mujoco.extra", "simulator.config.sim.mujoco.warp.extras"])
 @pytest.mark.parametrize("value", ["{'a': 0", '{"a": }'])
 def test_malformed_extra_cli_values_report_usage_errors(
     path: str, value: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     with pytest.raises(SystemExit) as error:
-        parse_config(SimulationExperimentConfig, args=["env.simulator:sim-mujoco", f"--{path}", value])
+        parse_config(SimulationExperimentConfig, args=["simulator:sim-mujoco", f"--{path}", value])
     assert error.value.code == 2
     message = capsys.readouterr().err
     assert f"--{path}" in message
@@ -214,7 +212,7 @@ def test_old_warp_capacity_location_fails_with_replacement_in_yaml_and_python() 
 
 def test_old_cli_path_fails_with_replacement() -> None:
     with pytest.raises(SystemExit, match=r"sim.mujoco\."):
-        parse_config(SimulationExperimentConfig, args=["--env.simulator.config.mujoco-warp.nconmax-per-env", "128"])
+        parse_config(SimulationExperimentConfig, args=["--simulator.config.mujoco-warp.nconmax-per-env", "128"])
 
 
 def test_nested_warp_uses_pydantic_and_dataclass_preset_replacement() -> None:

@@ -53,7 +53,7 @@ Run it (MuJoCo CPU needs no GPU; the others need their SDK + a CUDA device):
     python -m holosoma.examples.object_managers_demo --backend isaacsim
 
 The scene is the ``object-managers-demo`` preset (``config_values/scene.py``); it is also
-selectable from the normal CLI, e.g. ``run_sim.py simulator:mujoco env.scene:object-managers-demo``.
+selectable from the normal CLI, e.g. ``run_sim.py simulator:mujoco scene:object-managers-demo``.
 
 Exits 0 on success, non-zero on failure, so it doubles as a smoke test (see
 ``tests/simulators/mujoco/test_object_managers_demo.py``).
@@ -110,11 +110,11 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> TrainingE
 
     base = experiment_values.g1_29dof
     sim_cfg = getattr(simulator_values, _BACKENDS[backend][0])
-    assert base.mdp.observation is not None, "g1_29dof preset must define an ObservationManager"
-    assert base.env.randomization is not None, "g1_29dof preset must define a RandomizationManager"
+    assert base.observation is not None, "g1_29dof preset must define an ObservationManager"
+    assert base.randomization is not None, "g1_29dof preset must define a RandomizationManager"
 
     # Add an object_obs group alongside the preset's existing actor/critic groups.
-    obs_groups = dict(base.mdp.observation.groups)
+    obs_groups = dict(base.observation.groups)
     obs_groups["object_obs"] = ObsGroupCfg(
         concatenate=True,
         enable_noise=False,
@@ -126,12 +126,12 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> TrainingE
             "object_ang_vel_b": ObsTermCfg(func=f"{_OBJ_OBS_TERMS}:object_ang_vel_b"),
         },
     )
-    observation = dataclasses.replace(base.mdp.observation, groups=obs_groups)
+    observation = dataclasses.replace(base.observation, groups=obs_groups)
 
     # Object physics DR as startup randomizers: the RandomizationManager applies these once at
     # env build (after expanding the required model fields). Exaggerated, far-from-default bands
     # so the effect is unambiguous when we read it back (default box mass is 0.1 kg << [5,6]).
-    setup_terms = dict(base.env.randomization.setup_terms)
+    setup_terms = dict(base.randomization.setup_terms)
     setup_terms["randomize_object_mass"] = RandomizationTermCfg(
         func=f"{_OBJ_RAND}:randomize_object_rigid_body_mass_startup",
         params={"mass_distribution_params": [5.0, 6.0]},
@@ -164,7 +164,7 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> TrainingE
     )
 
     # Pose-jitter as a reset randomizer (runs on every reset).
-    reset_terms = dict(base.env.randomization.reset_terms)
+    reset_terms = dict(base.randomization.reset_terms)
     reset_terms["jitter_object_pose"] = RandomizationTermCfg(
         func=f"{_OBJ_RAND}:jitter_object_pose_on_reset",
         params={"xy_range": 0.1, "yaw_range": 0.3, "enabled": True},
@@ -173,15 +173,15 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> TrainingE
     # in the manager's _failed_randomizers) rather than crashing the build. The object DR terms
     # are cross-backend, so nothing is skipped here today — this just keeps the demo robust.
     randomization = dataclasses.replace(
-        base.env.randomization, setup_terms=setup_terms, reset_terms=reset_terms, ignore_unsupported=True
+        base.randomization, setup_terms=setup_terms, reset_terms=reset_terms, ignore_unsupported=True
     )
 
     return dataclasses.replace(
         base,
-        env=dataclasses.replace(
-            base.env, simulator=sim_cfg, scene=scene_values.object_managers_demo, randomization=randomization
-        ),
-        mdp=dataclasses.replace(base.mdp, observation=observation),
+        simulator=sim_cfg,
+        scene=scene_values.object_managers_demo,
+        randomization=randomization,
+        observation=observation,
         run=dataclasses.replace(
             base.run,
             num_envs=num_envs,

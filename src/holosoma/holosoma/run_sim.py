@@ -7,7 +7,7 @@ from holosoma.cli import explicit_task, run
 from holosoma.config_types.experiment import SIMULATE
 
 # This script's simulator names meant the interactive presets (bridge and virtual gantry on).
-_INTERACTIVE = {f"simulator:{name}": f"env.simulator:sim-{name}" for name in ("isaacsim", "mujoco", "mjwarp")}
+_INTERACTIVE = {f"simulator:{name}": f"simulator:sim-{name}" for name in ("isaacsim", "mujoco", "mjwarp")}
 
 
 def main() -> None:
