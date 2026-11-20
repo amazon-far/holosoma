@@ -8,24 +8,26 @@ reset flushes the spawn pose, a same-pose no-op for the simulator) while the PD-
 gravity, the terrain manager must run without feet-height queries (the robot declares no ``feet_height``
 tag), and PPO must train for two iterations on CPU. One in-process root write off the spawn pose exercises the
 other half of the fixed-base rule (a kinematic teleport, velocity ignored) and turns the following reset into a
-real write back to spawn. The isaacgym/cuda counterpart for a floating robot is test_e2e.py.
+real write back to spawn.
 """
 
 from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 from holosoma.simulator.shared.root_states import root_pose_changed
 from holosoma.utils.common import seeding
 from holosoma.utils.helpers import get_class
 from holosoma.utils.safe_torch_import import torch
 from tests.simulators._fixed_base_env import LEARNING_ITERATIONS, OBS_DIM, fixed_base_arm_experiment
 from tests.simulators._robot_presets import test_arm_fixed
+
+if TYPE_CHECKING:
+    from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 
 pytest.importorskip("mujoco")
 
