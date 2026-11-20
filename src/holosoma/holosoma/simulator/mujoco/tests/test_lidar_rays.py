@@ -89,6 +89,7 @@ def _robot_filter_model() -> tuple[mujoco.MjModel, mujoco.MjData]:
         """
     )
     scene_manager.robot_spec_meta = ActorSpecMeta(prefix="unit_", root_body="torso_link", body_names=["torso_link"])
+    scene_manager.robot_config = SimpleNamespace(asset=SimpleNamespace(enable_self_collisions=True, link_physics=None))
     model = scene_manager.compile()
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
@@ -191,6 +192,7 @@ def test_scene_manager_compile_tags_robot_groups_after_inertia_compilation() -> 
     scene_manager = MujocoSceneManager(mujoco_config.config)
     scene_manager.world_spec = build_spec()
     scene_manager.robot_spec_meta = ActorSpecMeta(prefix="unit_", root_body="torso_link", body_names=["torso_link"])
+    scene_manager.robot_config = SimpleNamespace(asset=SimpleNamespace(enable_self_collisions=True, link_physics=None))
 
     tagged_model = scene_manager.compile()
 
