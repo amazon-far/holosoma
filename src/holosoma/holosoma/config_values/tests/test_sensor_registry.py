@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.plugin import LidarVizPluginConfig, ROS2PointCloudPluginConfig
-from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
     CustomLidarRayPatternConfig,
@@ -14,6 +14,7 @@ from holosoma.config_types.sensor import (
     IsaacSimFisheyeConfig,
     LidarSensorConfig,
 )
+from holosoma.config_values import experiment as experiment_values
 from holosoma.config_values.sensor import SENSOR_REGISTRY
 from holosoma.utils.config_registry import parse_config
 
@@ -28,7 +29,8 @@ def test_sensor_registry_contains_camera_and_lidar_presets() -> None:
 
 def test_cli_composes_camera_lidar_and_pointcloud_route() -> None:
     config = parse_config(
-        RunSimConfig,
+        ExperimentConfig,
+        default=experiment_values.sim,
         args=[
             "simulator:sim-mujoco",
             "sensor.head:g1-head",
@@ -61,7 +63,8 @@ def test_cli_composes_camera_lidar_and_pointcloud_route() -> None:
 
 def test_cli_round_trips_lidar_range_and_backend_query_options() -> None:
     config = parse_config(
-        RunSimConfig,
+        ExperimentConfig,
+        default=experiment_values.sim,
         args=[
             "simulator:sim-mujoco",
             "sensor.depth:g1-head",
@@ -94,7 +97,8 @@ def test_cli_round_trips_lidar_range_and_backend_query_options() -> None:
 def test_cli_rejects_removed_isaacsim_camera_depth_clipping_field(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         parse_config(
-            RunSimConfig,
+            ExperimentConfig,
+            default=experiment_values.sim,
             args=[
                 "simulator:sim-isaacsim",
                 "sensor.depth:g1-head",
@@ -107,7 +111,8 @@ def test_cli_rejects_removed_isaacsim_camera_depth_clipping_field(capsys: pytest
 
 def test_cli_configures_isaacsim_fisheye_projection() -> None:
     config = parse_config(
-        RunSimConfig,
+        ExperimentConfig,
+        default=experiment_values.sim,
         args=[
             "simulator:sim-isaacsim",
             "sensor.head:g1-head",
@@ -134,7 +139,8 @@ def test_cli_configures_isaacsim_fisheye_projection() -> None:
 
 def test_cli_customizes_explicit_lidar_directions() -> None:
     config = parse_config(
-        RunSimConfig,
+        ExperimentConfig,
+        default=experiment_values.sim,
         args=[
             "simulator:sim-mujoco",
             "sensor.scan:custom-lidar",
@@ -152,7 +158,8 @@ def test_cli_customizes_explicit_lidar_directions() -> None:
 
 def test_cli_configures_lidar_viz_saved_scan_selection() -> None:
     config = parse_config(
-        RunSimConfig,
+        ExperimentConfig,
+        default=experiment_values.sim,
         args=[
             "simulator:sim-mujoco",
             "sensor.front_scan:custom-lidar",
@@ -175,7 +182,8 @@ def test_cli_configures_lidar_viz_saved_scan_selection() -> None:
 
 def test_cli_switches_the_raycast_preset_to_rtx_with_one_override() -> None:
     config = parse_config(
-        RunSimConfig,
+        ExperimentConfig,
+        default=experiment_values.sim,
         args=[
             "simulator:sim-isaacsim",
             "sensor.depth:g1-head-d435i-raycast-depth",

@@ -7,6 +7,7 @@ from typing import Any, cast
 from loguru import logger
 
 import holosoma.config_values.logger
+import holosoma.config_values.run
 from holosoma.agents.base_algo.base_algo import BaseAlgo
 from holosoma.config_types.eval_callback import EvalCallbacksConfig
 from holosoma.config_types.experiment import ExperimentConfig
@@ -61,7 +62,9 @@ def _run_eval_session(
     eval_cbs_cfg: EvalCallbacksConfig | None,
     run_args: list[str] | None = None,
 ) -> None:
-    eval_log_dir = get_experiment_dir(tyro_config.logger, tyro_config.run, get_timestamp(), task_name="eval")
+    eval_log_dir = get_experiment_dir(
+        tyro_config.logger, tyro_config.project, tyro_config.name, get_timestamp(), task_name="eval"
+    )
     eval_log_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Saving eval logs to {eval_log_dir}")
@@ -124,14 +127,20 @@ def _run_eval_session(
 
 
 def _eval_config(saved: ExperimentConfig) -> ExperimentConfig:
-    """``saved`` with evaluation's defaults: one viewed env, logger off, deterministic spawn, no time limit.
+    """``saved`` with evaluation's defaults: the interactive run (keeping the saved seed), logger off,
+    deterministic spawn, no time limit.
 
     The command line is parsed on top, so any of these can still be overridden.
     """
     spawn = dataclasses.replace(saved.terrain.terrain_term.spawn, randomize_tiles=False, xy_offset_range=0.0)
+    run = dataclasses.replace(
+        holosoma.config_values.run.interactive,
+        seed=saved.run.seed,
+        torch_deterministic=saved.run.torch_deterministic,
+    )
     return dataclasses.replace(
         saved,
-        run=dataclasses.replace(saved.run, device=None, headless=False, num_envs=1),
+        run=run,
         terrain=dataclasses.replace(
             saved.terrain, terrain_term=dataclasses.replace(saved.terrain.terrain_term, spawn=spawn)
         ),

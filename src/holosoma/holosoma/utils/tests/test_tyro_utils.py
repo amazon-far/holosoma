@@ -42,7 +42,7 @@ _SIM_DEFAULTS = {"mujoco": _MujocoSim(), "isaacsim": _IsaacSim()}
 
 @dataclasses.dataclass(frozen=True)
 class _RunConfig:
-    """Stand-in for RunSimConfig: a subcommand field plus a dynamic dict field."""
+    """Stand-in for ExperimentConfig: a subcommand field plus a dynamic dict field."""
 
     simulator: Annotated[
         object,

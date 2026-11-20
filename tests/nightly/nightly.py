@@ -267,7 +267,7 @@ def main():
 
     config = dataclasses.replace(config, run=dataclasses.replace(config.run, seed=42))
     # Get experiment name from config instead of hydra runtime choices
-    exp = config.run.name or config.logger.name
+    exp = config.name
     # Sanitize experiment name for wandb project name (cannot contain /,\,#,?,%,:)
     sanitized_exp = (
         exp.replace("/", "-").replace("\\", "-").replace("#", "-").replace("?", "-").replace("%", "-").replace(":", "-")
@@ -309,10 +309,10 @@ def main():
 
     config = dataclasses.replace(
         config,
+        project="nightly-holosoma-runs",
         logger=dataclasses.replace(
             config.logger,
-            project="nightly-holosoma-runs",
-            name=nightly_name,
+            display_name=nightly_name,
             id=nightly_name,  # set id to name so url is readable
             tags=tuple(run_tags),
         ),

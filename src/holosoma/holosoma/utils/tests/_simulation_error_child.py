@@ -139,7 +139,7 @@ def run_task_session(
 
     ``on_enter`` runs once the task exists, before the scenario fails.
     """
-    from holosoma.config_types.experiment import RunConfig
+    from holosoma.config_types.run import RunConfig
     from holosoma.envs.simulation_task import SimulationTask
     from holosoma.simulator import session
     from holosoma.simulator.base_simulator.hooks import HookRegistry

@@ -3,7 +3,6 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
-import warnings
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
@@ -21,6 +20,7 @@ import holosoma.config_values.plugin
 import holosoma.config_values.randomization
 import holosoma.config_values.reward
 import holosoma.config_values.robot
+import holosoma.config_values.run
 import holosoma.config_values.scene
 import holosoma.config_values.sensor
 import holosoma.config_values.simulator
@@ -31,13 +31,13 @@ from holosoma.config_types.action import ActionManagerCfg
 from holosoma.config_types.algo import AlgoConfig
 from holosoma.config_types.command import CommandManagerCfg
 from holosoma.config_types.curriculum import CurriculumManagerCfg
-from holosoma.config_types.frequency import DecimationLike, validate_decimation_like
 from holosoma.config_types.logger import LoggerConfig
 from holosoma.config_types.observation import ObservationManagerCfg
 from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.reward import RewardManagerCfg
 from holosoma.config_types.robot import RobotConfig
+from holosoma.config_types.run import RunConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import SensorConfig
 from holosoma.config_types.simulator import SimulatorConfig
@@ -49,8 +49,6 @@ from holosoma.utils.config_registry import UseRegistry
 if TYPE_CHECKING:
     from holosoma.envs.base_task.base_task import BaseTask
 
-_VIEWER_DT_REMOVAL_DATE = datetime.date(2027, 3, 1)
-
 
 def now_timestamp() -> str:
     return datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -60,63 +58,6 @@ def now_timestamp() -> str:
 class NightlyConfig:
     iterations: int
     metrics: dict[str, list[float | str]]
-
-
-@dataclass(frozen=True)
-class RunConfig:
-    """Settings every task reads the same way: the environments it builds and how they run."""
-
-    num_envs: int = 4096
-    """Number of parallel environments."""
-
-    headless: bool = True
-    """Run simulation without rendering."""
-
-    seed: int = 42
-    """Random seed for reproducibility."""
-
-    torch_deterministic: bool = False
-    """Enable PyTorch deterministic mode."""
-
-    device: str | None = None
-    """Device for the task. None (the default) resolves from the simulator backend: cuda:0 for
-    MuJoCo Warp, cuda:0 for IsaacSim when CUDA is available (else cpu), cpu for classic MuJoCo,
-    and the process rank's GPU when distributed. Pass e.g. "cuda:0" to override. Not carried into
-    eval."""
-
-    time_scale: float = 0.0
-    """Sim-time to real-time ratio for the control loop: 1 paces sim time to match real time, 2 runs
-    twice as fast, 0 disables pacing entirely (run as fast as possible)."""
-
-    viewer_update_decimation: DecimationLike = "<60Hz"
-    """Viewer render rate: a physics-step decimation, or a frequency string resolved against the
-    physics rate."""
-
-    viewer_dt: float | None = None
-    """Deprecated, removed after 2027-03-01: use ``viewer_update_decimation``. Converted to
-    ``">{1 / viewer_dt}Hz"``, the same decimation it gave before."""
-
-    project: str = "default_project"
-    """Project the run's logs and checkpoints are filed under. `logger.project` takes precedence if set."""
-
-    name: str = "run"
-    """Name the run's logs and checkpoints are filed under. `logger.name` takes precedence if set."""
-
-    def __post_init__(self) -> None:
-        if self.time_scale < 0:
-            raise ValueError(f"run.time_scale must be >= 0, got {self.time_scale}.")
-        if self.viewer_dt is not None:
-            if self.viewer_dt <= 0:
-                raise ValueError(f"run.viewer_dt must be > 0, got {self.viewer_dt}.")
-            warnings.warn(
-                "run.viewer_dt is deprecated; use run.viewer_update_decimation. It will be removed "
-                f"after {_VIEWER_DT_REMOVAL_DATE}.",
-                FutureWarning,
-                stacklevel=3,
-            )
-            object.__setattr__(self, "viewer_update_decimation", f">{1 / self.viewer_dt!r}Hz")
-            object.__setattr__(self, "viewer_dt", None)
-        validate_decimation_like(self.viewer_update_decimation, field="run.viewer_update_decimation")
 
 
 # Unknown fields are rejected, so code still passing a moved or removed field fails loudly.
@@ -131,8 +72,14 @@ class ExperimentConfig:
 
     env_class: str = "holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager"
 
-    run: RunConfig = RunConfig()
-    """Settings every task reads the same way."""
+    run: Annotated[RunConfig, UseRegistry(holosoma.config_values.run.RUN_REGISTRY)] = holosoma.config_values.run.batch
+    """How the run executes (``run:<profile>``): environment count, viewer, seed, device, pacing."""
+
+    project: str = "default_project"
+    """Project the run is filed under: its log and checkpoint directory and its W&B project."""
+
+    name: str = "run"
+    """Name the run is filed under: its log and checkpoint directory, and the base of its W&B run name."""
 
     algo: Annotated[AlgoConfig, UseRegistry(holosoma.config_values.algo.ALGO_REGISTRY)] = (
         holosoma.config_values.algo.ppo

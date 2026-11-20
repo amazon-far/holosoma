@@ -51,7 +51,7 @@ class SimulationTask(BaseTask):
     """BaseTask specialization that advances the simulation until the simulator requests shutdown.
 
     It uses the ordinary task lifecycle, including the default robot reset, reset events, and the
-    randomization and termination terms configured on ``RunSimConfig``, but owns no policy managers.
+    randomization and termination terms configured on the experiment, but owns no policy managers.
     """
 
     def _get_env_origins(self) -> torch.Tensor:

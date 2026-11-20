@@ -34,6 +34,7 @@ import sys
 if sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
 
+from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.light import (
     DEFAULT_LIGHT_KEY,
     DefaultLightConfig,
@@ -43,7 +44,6 @@ from holosoma.config_types.light import (
     RectLightConfig,
     SphereLightConfig,
 )
-from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.simulator import IsaacSimRenderConfig
 from holosoma.simulator.shared.object_registry import ObjectType
 from tests.simulators import _scene_presets
@@ -54,8 +54,10 @@ _DEFAULT_SUN_INTENSITY = 1000.0
 _DEFAULT_SUN_COLOR = (1.0, 1.0, 1.0)
 
 
-def _build_run_sim_config(simulator: str, scene: str, robot: str, terrain: str, record_dir: str | None) -> RunSimConfig:
-    """Bridge/gantry-disabled RunSimConfig with optional (default-camera) video — see _sim_harness."""
+def _build_run_sim_config(
+    simulator: str, scene: str, robot: str, terrain: str, record_dir: str | None
+) -> ExperimentConfig:
+    """Bridge/gantry-disabled sim experiment with optional (default-camera) video — see _sim_harness."""
     return build_run_sim_config(simulator, scene, robot, terrain, record_dir=record_dir)
 
 

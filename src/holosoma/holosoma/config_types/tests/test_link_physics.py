@@ -210,10 +210,12 @@ def test_no_circular_import() -> None:
 def test_tyro_cli_round_trips_link_physics(robot_key: str) -> None:
     import tyro
 
-    from holosoma.config_types.run_sim import RunSimConfig
+    from holosoma.config_types.experiment import ExperimentConfig
+    from holosoma.config_values import experiment as experiment_values
 
     cfg = tyro.cli(
-        RunSimConfig,
+        ExperimentConfig,
+        default=experiment_values.sim,
         args=["simulator:sim-mujoco", f"robot:{robot_key}", "terrain:terrain-locomotion-plane", "scene:empty"],
     )
     # The nested PhysicsConfig survives the CLI surface.

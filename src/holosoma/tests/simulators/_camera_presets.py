@@ -350,7 +350,7 @@ def register() -> None:
 
 
 def as_mjwarp(config):
-    """Switch a MuJoCo ``RunSimConfig`` to the Warp backend (GPU, multi-env capable)."""
+    """Switch a MuJoCo sim experiment to the Warp backend (GPU, multi-env capable)."""
     import dataclasses
 
     from holosoma.config_types.simulator import MujocoBackend

@@ -12,7 +12,7 @@ contracts (the virtual gantry, the clock, etc.). Each plugin pairs:
   no base class to inherit: any class constructed as ``cls(cfg, simulator)`` that
   registers its hooks on ``simulator.hooks`` works (duck-typed).
 
-The config is resolved on the CLI as a dynamic-dict field (see ``RunSimConfig.plugin``);
+The config is resolved on the CLI as a dynamic-dict field (see ``ExperimentConfig.plugin``);
 ``BaseSimulator.install_plugins`` instantiates each ``get_cls()`` after backend setup.
 """
 

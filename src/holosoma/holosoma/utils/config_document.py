@@ -120,7 +120,9 @@ def expand_config_args(
 # Flags whose field moved: old dotted path (underscored) -> new dotted path.
 MOVED_FLAGS = {
     **{f"training.{name}": f"run.{name}" for name in ("num_envs", "headless", "seed", "torch_deterministic")},
-    **{f"training.{name}": f"run.{name}" for name in ("project", "name")},
+    **{f"training.{name}": name for name in ("project", "name")},
+    "logger.project": "project",
+    "logger.name": "logger.display_name",
     **{name: f"run.{name}" for name in ("device", "time_scale", "viewer_update_decimation", "viewer_dt")},
     "training.checkpoint": "task.resume_from",
     **{

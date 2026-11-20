@@ -17,9 +17,10 @@ accept the same arguments and documents. Extensions add tasks through the `holos
 group. Each entry in `arguments` maps to the token you would type on the command line, so any
 preset from an installed extension or an `--import-file` works the same way here.
 
-`sim` defaults to the interactive simulator presets `sim-mujoco`, `sim-mjwarp` and
-`sim-isaacsim`: the training presets with the robot bridge and virtual gantry on, and MuJoCo
-stepping at 2000 Hz (MJWarp 400 Hz). `simulator:mujoco` and the other plain names select the
+`sim` starts from the `sim` experiment preset (`exp:sim`): a `SimulationTask` on
+`run:interactive` and the `sim-mujoco` simulator. The `sim-mujoco`, `sim-mjwarp` and
+`sim-isaacsim` presets are the training presets with the robot bridge and virtual gantry on, and
+MuJoCo stepping at 2000 Hz (MJWarp 400 Hz). `simulator:mujoco` and the other plain names select the
 training presets.
 
 ```yaml
@@ -56,7 +57,7 @@ holosoma --config @holosoma/examples/configs/g1_locomotion_train.yaml \
 
 # Evaluate; the checkpoint supplies the experiment and the document overrides it
 holosoma --config eval.yaml
-holosoma task:eval --task.checkpoint=<CHECKPOINT_PATH> --run.num_envs 1
+holosoma task:eval --task.checkpoint=<CHECKPOINT_PATH> run:batch --run.num_envs 64  # headless
 
 # Print the equivalent command line, or turn a command line into a document, instead of running it
 holosoma --config eval.yaml --print-args
@@ -73,7 +74,6 @@ arguments:
   task: eval                             # task:eval
   overrides:
     task.checkpoint: <CHECKPOINT_PATH>   # the eval task's own field: --task.checkpoint
-    run.num_envs: 1
     task.max_eval_steps: 1000
     task.export_onnx: true
 ```
@@ -85,28 +85,35 @@ arguments:
   task: replay
   exp: g1-29dof-wbt
   simulator: isaacsim
-  overrides:
-    run.num_envs: 1
-    run.headless: false
 ```
 
 ## Run and task settings
 
-`run` holds what every task reads the same way; each task owns the rest under `task`:
+`project` and `name` file the run (its log directory and W&B project); `run` holds what every task
+reads the same way; each task owns the rest under `task`:
 
 | Block | Fields |
 |---|---|
-| `run` | `num_envs`, `headless`, `seed`, `torch_deterministic`, `device`, `time_scale`, `viewer_update_decimation`, `project`, `name` |
+| top level | `project`, `name` |
+| `run` | `num_envs`, `headless`, `seed`, `torch_deterministic`, `device`, `time_scale`, `viewer_update_decimation` |
 | `task` (train) | `resume_from`, `teacher_checkpoint`, `multigpu` |
 | `task` (eval) | `checkpoint`, `max_eval_steps`, `export_onnx`, `callbacks` |
 
+`run` is a selection like any other block. `run:batch` (4096 headless envs, unpaced) is the
+experiments' default and what `train` uses; `run:interactive` (one env in the viewer at real time)
+is the `sim` preset's and `replay` selects it unless the arguments select a `run:`. `eval` defaults
+to `run:interactive` with the checkpoint's `seed` and `torch_deterministic`; selecting a `run:`
+replaces that too.
+`--run.*` flags apply on top of either.
+
 Settings that used to live under `training` still work under their old spelling, with a warning
-naming the new one: `training.{num_envs, headless, seed, torch_deterministic, project, name}` and
-top-level `device`, `time_scale` and `viewer_*` → `run.*`; `training.checkpoint` →
+naming the new one: `training.{num_envs, headless, seed, torch_deterministic}` and
+top-level `device`, `time_scale` and `viewer_*` → `run.*`; `training.{project, name}` and
+`logger.project` → `project`/`name`; `logger.name` (the W&B run name) → `logger.display_name`; `training.checkpoint` →
 `task.resume_from`; `training.{teacher_checkpoint, multigpu, max_eval_steps, export_onnx}` →
 `task.*`; `--checkpoint` → `--task.checkpoint`. Checkpoints saved with the old layout load
-unchanged. `eval_overrides.*` is ignored with a warning: eval applies its defaults (one viewed
-env, logger off, deterministic spawn) to the checkpoint's config before the command line, so set
+unchanged. `eval_overrides.*` is ignored with a warning: eval applies its defaults (the interactive run,
+logger off, deterministic spawn) to the checkpoint's config before the command line, so set
 the field itself instead.
 
 ## Rules

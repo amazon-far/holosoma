@@ -22,7 +22,7 @@ _CHILD = textwrap.dedent(
 
     import holosoma.tasks.sim as runner
     from holosoma.config_types import env as env_types
-    from holosoma.config_types.experiment import RunConfig
+    from holosoma.config_types.run import RunConfig
     from holosoma.config_values.simulator import SIMULATOR_REGISTRY
     from holosoma.envs.simulation_task import SimulationTask
     from holosoma.simulator import session

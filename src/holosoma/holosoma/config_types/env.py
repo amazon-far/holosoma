@@ -5,13 +5,14 @@ from pydantic.dataclasses import dataclass
 from holosoma.config_types.action import ActionManagerCfg
 from holosoma.config_types.command import CommandManagerCfg
 from holosoma.config_types.curriculum import CurriculumManagerCfg
-from holosoma.config_types.experiment import ExperimentConfig, RunConfig
+from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.logger import LoggerConfig
 from holosoma.config_types.observation import ObservationManagerCfg
 from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.reward import RewardManagerCfg
 from holosoma.config_types.robot import RobotConfig
+from holosoma.config_types.run import RunConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import CameraSensorConfig, SensorConfig, validate_camera_dict
 from holosoma.config_types.simulator import SimulatorConfig
@@ -42,6 +43,12 @@ class EnvConfig:
     plugin: dict[str, PluginConfig]
     """Plugins to install on the simulator (key -> resolved PluginConfig), including the
     ROS2/viz/video egress sinks. Installed after the concrete simulator backend is ready."""
+
+    project: str = "default_project"
+    """Project the run is filed under."""
+
+    name: str = "run"
+    """Name the run is filed under."""
 
 
 def _validate_cameras(sensors: dict[str, SensorConfig]) -> None:
@@ -80,4 +87,6 @@ def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
         curriculum=tyro_config.curriculum,
         robot=tyro_config.robot,
         logger=tyro_config.logger,
+        project=tyro_config.project,
+        name=tyro_config.name,
     )

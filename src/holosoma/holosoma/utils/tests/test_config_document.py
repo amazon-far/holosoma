@@ -8,7 +8,8 @@ from typing import Any
 import pytest
 import yaml
 
-from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_values import experiment as experiment_values
 from holosoma.config_values.experiment import get_annotated_experiment_config
 from holosoma.utils.config_document import select_task
 from holosoma.utils.config_registry import parse_config
@@ -41,6 +42,10 @@ EQUIVALENT_CLI = [
 ]
 
 
+def _parse_sim(args: list[str], **kwargs: Any) -> Any:
+    return parse_config(ExperimentConfig, default=experiment_values.sim, args=args, **kwargs)
+
+
 def _write(tmp_path: Path, content: dict[str, Any] | str, name: str = "run.yaml") -> str:
     path = tmp_path / name
     path.write_text(content if isinstance(content, str) else yaml.safe_dump(content))
@@ -60,7 +65,7 @@ def test_document_parses_like_equivalent_cli(tmp_path: Path, content: dict[str, 
     args = ["--config", _write(tmp_path, content)]
     if config_path:
         args += ["--config-path", config_path]
-    assert parse_config(RunSimConfig, args=args) == parse_config(RunSimConfig, args=EQUIVALENT_CLI)
+    assert _parse_sim(args) == _parse_sim(EQUIVALENT_CLI)
 
 
 def test_command_line_overrides_document(tmp_path: Path) -> None:
@@ -70,7 +75,7 @@ def test_command_line_overrides_document(tmp_path: Path) -> None:
     }
     args = ["--config", _write(tmp_path, doc), "--run.seed", "-1", "robot:t1-29dof-waist-wrist"]
     expected = ["robot:t1-29dof-waist-wrist", "robot.asset.link_physics:none", "--run.seed", "-1"]
-    assert parse_config(RunSimConfig, args=args) == parse_config(RunSimConfig, args=expected)
+    assert _parse_sim(args) == _parse_sim(expected)
 
 
 def test_scalars_follow_yaml_1_2(tmp_path: Path) -> None:
@@ -79,12 +84,12 @@ def test_scalars_follow_yaml_1_2(tmp_path: Path) -> None:
         "arguments:\n"
         "  overrides:\n"
         "    run.seed: 010\n"
-        "    run.name: off\n"
-        "    run.project: 2026-11-17\n"
+        "    name: off\n"
+        "    project: 2026-11-17\n"
         "    robot.init_state.pos: [1e-05, 0.0, 0.8]\n"
     )
-    config = parse_config(RunSimConfig, args=["--config", _write(tmp_path, text)])
-    assert (config.run.seed, config.run.name, config.run.project) == (10, "off", "2026-11-17")
+    config = _parse_sim(["--config", _write(tmp_path, text)])
+    assert (config.run.seed, config.name, config.project) == (10, "off", "2026-11-17")
     assert config.robot.init_state.pos == [1e-05, 0.0, 0.8]
 
 
@@ -110,20 +115,23 @@ def test_root_subcommand_comes_first(tmp_path: Path) -> None:
 )
 def test_rejects_invalid_documents(tmp_path: Path, content: dict[str, Any] | str, extra_args: list[str]) -> None:
     with pytest.raises(SystemExit):
-        parse_config(RunSimConfig, args=["--config", _write(tmp_path, content), *extra_args])
+        _parse_sim(["--config", _write(tmp_path, content), *extra_args])
 
 
 def test_json_document(tmp_path: Path) -> None:
     path = _write(tmp_path, json.dumps(DOCUMENT, indent="\t"), name="run.json")
-    assert parse_config(RunSimConfig, args=["--config", path]) == parse_config(RunSimConfig, args=EQUIVALENT_CLI)
+    assert _parse_sim(["--config", path]) == _parse_sim(EQUIVALENT_CLI)
 
 
 @pytest.mark.parametrize(
-    ("name", "config_type"),
-    [("g1_lidar", RunSimConfig), ("g1_locomotion_train", get_annotated_experiment_config)],
+    ("name", "config_type", "default"),
+    [
+        ("g1_lidar", ExperimentConfig, experiment_values.sim),
+        ("g1_locomotion_train", get_annotated_experiment_config, None),
+    ],
 )
-def test_packaged_examples_parse(name: str, config_type: Any) -> None:
-    parse_config(config_type, args=["--config", f"@holosoma/examples/configs/{name}.yaml"])
+def test_packaged_examples_parse(name: str, config_type: Any, default: Any) -> None:
+    parse_config(config_type, default=default, args=["--config", f"@holosoma/examples/configs/{name}.yaml"])
 
 
 @pytest.mark.parametrize(
@@ -190,8 +198,6 @@ def test_run_sim_is_the_holosoma_command() -> None:
 
 
 def test_document_selects_the_task_and_sets_its_fields(tmp_path: Path) -> None:
-    from holosoma.config_types.experiment import ExperimentConfig
-
     overrides = {"task.checkpoint": "/runs/a.pt", "task.callbacks.push.config.enabled": True}
     doc = {"version": 1, "arguments": {"task": "eval", "overrides": overrides}}
     from_document = parse_config(ExperimentConfig, args=["--config", _write(tmp_path, doc)])
@@ -206,19 +212,19 @@ def test_document_selects_the_task_and_sets_its_fields(tmp_path: Path) -> None:
 def test_rejected_document_tokens_name_their_key(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = _write(tmp_path, {"version": 1, "arguments": {"overrides": {"robot.init_state.posx": [1.0, 2.0]}}})
     with pytest.raises(SystemExit):
-        parse_config(RunSimConfig, args=["--config", path])
+        _parse_sim(["--config", path])
     assert f"<- {path}: arguments.overrides.robot.init_state.posx" in capsys.readouterr().err
 
 
 def test_print_args_prints_the_equivalent_command_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exit_info:
-        parse_config(RunSimConfig, args=["--config", _write(tmp_path, DOCUMENT), "--print-args"])
+        _parse_sim(["--config", _write(tmp_path, DOCUMENT), "--print-args"])
     assert exit_info.value.code == 0
     printed = capsys.readouterr().out.strip()
     assert printed.startswith("holosoma ")
     import shlex
 
-    assert parse_config(RunSimConfig, args=shlex.split(printed)[1:]) == parse_config(RunSimConfig, args=EQUIVALENT_CLI)
+    assert _parse_sim(shlex.split(printed)[1:]) == _parse_sim(EQUIVALENT_CLI)
 
 
 def test_moved_flags_keep_working(tmp_path: Path) -> None:
@@ -234,7 +240,7 @@ def test_moved_flags_keep_working(tmp_path: Path) -> None:
         "exp:g1-29dof",
         "--run.num_envs=8",
         "--task.resume_from=/runs/a.pt",
-        "--run.project=p",
+        "--project=p",
         "--run.time_scale=0.5",
     ]
     parsed_old = parse_config(get_annotated_experiment_config, args=[*old, "--config", _write(tmp_path, doc)])
@@ -242,10 +248,11 @@ def test_moved_flags_keep_working(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("config_type", "args"),
+    ("config_type", "default", "args"),
     [
         (
-            RunSimConfig,
+            ExperimentConfig,
+            experiment_values.sim,
             [
                 "simulator:sim-mjwarp",
                 "robot:t1-29dof-waist-wrist",
@@ -260,22 +267,36 @@ def test_moved_flags_keep_working(tmp_path: Path) -> None:
         ),
         (
             get_annotated_experiment_config,
+            None,
             ["exp:g1-29dof", "task:train", "simulator:mjwarp", "--run.num_envs=8", "--task.resume_from=/runs/a.pt"],
         ),
     ],
     ids=["sim", "train"],
 )
 def test_written_document_reproduces_the_command_line(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], config_type: Any, args: list[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], config_type: Any, default: Any, args: list[str]
 ) -> None:
     from holosoma.utils.config_document import args_to_document, dump_document, write_document
 
     record: list[str] = []
-    parsed = parse_config(config_type, args=args, record=record)
+    parsed = parse_config(config_type, default=default, args=args, record=record)
     path = tmp_path / "holosoma_run.yaml"
     write_document(path, record)
-    assert parse_config(config_type, args=["--config", str(path)]) == parsed
+    assert parse_config(config_type, default=default, args=["--config", str(path)]) == parsed
 
     with pytest.raises(SystemExit):
-        parse_config(config_type, args=[*args, "--to-config"])
+        parse_config(config_type, default=default, args=[*args, "--to-config"])
     assert capsys.readouterr().out == dump_document(args_to_document(record))
+
+
+@pytest.mark.parametrize(("arguments", "num_envs"), [({}, 1), ({"run": "batch"}, 4096)], ids=["default", "selected"])
+def test_default_selection_applies_only_when_the_group_is_unselected(
+    tmp_path: Path, arguments: dict[str, Any], num_envs: int
+) -> None:
+    doc = {"version": 1, "arguments": {"exp": "g1-29dof", **arguments}}
+    config = parse_config(
+        get_annotated_experiment_config,
+        args=["--config", _write(tmp_path, doc)],
+        default_selections=("run:interactive",),
+    )
+    assert config.run.num_envs == num_envs

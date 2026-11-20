@@ -94,7 +94,7 @@ class BaseTask:
         # Compute experiment directory from logger config
         timestamp = get_timestamp()
         experiment_dir = get_experiment_dir(
-            tyro_config.logger, tyro_config.run, timestamp, task_name=self._get_task_name()
+            tyro_config.logger, tyro_config.project, tyro_config.name, timestamp, task_name=self._get_task_name()
         )
 
         SimulatorClass = get_class(simulator_config._target_)

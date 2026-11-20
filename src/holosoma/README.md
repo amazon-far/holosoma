@@ -112,10 +112,7 @@ python src/holosoma/holosoma/train_agent.py \
 
 # Visualize the motion file in isaacsim before training
 source scripts/source_isaacsim_setup.sh
-python src/holosoma/holosoma/replay.py \
-    exp:g1-29dof-wbt \
-    --run.headless=False \
-    --run.num_envs=1
+python src/holosoma/holosoma/replay.py exp:g1-29dof-wbt
 ```
 
 Once checkpoints are saved, you can evaluate policies using [In-Training Evaluation](#in-training-evaluation) (same simulator as training) or cross-simulator evaluation in MuJoCo (see [holosoma_inference](../holosoma_inference/README.md)).
@@ -173,8 +170,8 @@ python src/holosoma/holosoma/train_agent.py \
     --run.seed 1 \
     --algo.config.use-symmetry=False \
     logger:wandb \
-    --logger.project locomotion-g1-29dof-ppo \
-    --logger.name ppo-without-symmetry-seed1
+    --project locomotion-g1-29dof-ppo \
+    --name ppo-without-symmetry-seed1
 ```
 
 ### Video Recording

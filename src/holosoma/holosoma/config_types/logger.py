@@ -48,11 +48,8 @@ class WandbLoggerConfig:
     entity: str | None = None
     """Weights & Biases entity (team or user)."""
 
-    project: str | None = None
-    """Project name to use when logging."""
-
-    name: str | None = None
-    """Optional override for the run name."""
+    display_name: str | None = None
+    """W&B run name shown in the UI. None derives one from the timestamp, ``name``, group and robot."""
 
     group: str | None = None
     """Optional run group."""

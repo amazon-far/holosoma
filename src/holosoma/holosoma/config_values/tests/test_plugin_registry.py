@@ -1,4 +1,4 @@
-"""CLI/registry resolution for the ``RunSimConfig.plugin`` dynamic-dict field."""
+"""CLI/registry resolution for the ``ExperimentConfig.plugin`` dynamic-dict field."""
 
 from __future__ import annotations
 
@@ -8,13 +8,14 @@ from typing import Annotated, Any, TypeAlias
 
 import pytest
 
+from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.plugin import (
     ClockPublishPluginConfig,
     GantryControlPluginConfig,
     NoOpPluginConfig,
     PluginConfig,
 )
-from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_values import experiment as experiment_values
 from holosoma.config_values.plugin import PLUGIN_REGISTRY
 from holosoma.utils import config_registry as registry
 from holosoma.utils.config_registry import UseRegistry, parse_config, registry_from_annotated
@@ -32,18 +33,20 @@ def test_plugin_registry_holds_builtin_preset() -> None:
 
 
 def test_run_sim_plugin_field_is_scanned_and_bound() -> None:
-    found = find_dynamic_dict_fields(RunSimConfig)
+    found = find_dynamic_dict_fields(ExperimentConfig)
     assert "plugin" in found
     assert registry_from_annotated(found["plugin"]) is PLUGIN_REGISTRY
 
 
 def test_run_sim_defaults_to_empty_plugin() -> None:
-    cfg = parse_config(RunSimConfig, args=["simulator:sim-mujoco"])
+    cfg = parse_config(ExperimentConfig, default=experiment_values.sim, args=["simulator:sim-mujoco"])
     assert cfg.plugin == {}
 
 
 def test_declare_builtin_plugin() -> None:
-    cfg = parse_config(RunSimConfig, args=["simulator:sim-mujoco", "plugin.clk:clock_publish"])
+    cfg = parse_config(
+        ExperimentConfig, default=experiment_values.sim, args=["simulator:sim-mujoco", "plugin.clk:clock_publish"]
+    )
     assert set(cfg.plugin) == {"clk"}
     assert isinstance(cfg.plugin["clk"], ClockPublishPluginConfig)
 
@@ -51,7 +54,9 @@ def test_declare_builtin_plugin() -> None:
 def test_none_preset_resolves_to_noop_config() -> None:
     # `plugin.<key>:none` selects the no-op preset (mirrors every other family's `none`),
     # resolving to a real NoOpPluginConfig rather than a literal None.
-    cfg = parse_config(RunSimConfig, args=["simulator:sim-mujoco", "plugin.disabled:none"])
+    cfg = parse_config(
+        ExperimentConfig, default=experiment_values.sim, args=["simulator:sim-mujoco", "plugin.disabled:none"]
+    )
     assert isinstance(cfg.plugin["disabled"], NoOpPluginConfig)
 
 
@@ -59,7 +64,8 @@ def test_ros2_presets_resolve_with_independent_gantry_topics() -> None:
     # The two ROS2 example plugins resolve from the registry (their configs are rclpy-free);
     # per-topic gantry overrides target one property's topic without touching the others.
     cfg = parse_config(
-        RunSimConfig,
+        ExperimentConfig,
+        default=experiment_values.sim,
         args=[
             "simulator:sim-mujoco",
             "plugin.clk:clock_publish",
@@ -87,7 +93,8 @@ def test_ros2_presets_resolve_with_independent_gantry_topics() -> None:
 
 def test_declare_plugin_with_leaf_override() -> None:
     cfg = parse_config(
-        RunSimConfig,
+        ExperimentConfig,
+        default=experiment_values.sim,
         args=[
             "simulator:sim-mujoco",
             "plugin.clk:clock_publish",
@@ -104,7 +111,8 @@ def test_frequency_string_rate_parses_and_validates() -> None:
     # A frequency string is accepted on a rate field and held as-written (resolved to a
     # decimation at install time against the phase base rate).
     cfg = parse_config(
-        RunSimConfig,
+        ExperimentConfig,
+        default=experiment_values.sim,
         args=["simulator:sim-mujoco", "plugin.clk:clock_publish", "--plugin.clk.publish-every=20Hz"],
     )
     assert cfg.plugin["clk"].publish_every == "20Hz"
@@ -117,7 +125,7 @@ def test_bad_frequency_string_fails_at_config_time() -> None:
 
 def test_unknown_plugin_variant_fails_loud() -> None:
     with pytest.raises(SystemExit, match="Unknown plugin variant 'bogus'"):
-        parse_config(RunSimConfig, args=["simulator:sim-mujoco", "plugin.x:bogus"])
+        parse_config(ExperimentConfig, default=experiment_values.sim, args=["simulator:sim-mujoco", "plugin.x:bogus"])
 
 
 # A second PluginConfig subclass, resolved from the same registry alongside the built-in,

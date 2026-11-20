@@ -20,8 +20,8 @@ torch = pytest.importorskip("torch")
 from holosoma.config_types.experiment import ExperimentConfig  # noqa: E402
 from holosoma.config_types.full_sim import FullSimConfig  # noqa: E402
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig  # noqa: E402
-from holosoma.config_types.run_sim import RunSimConfig  # noqa: E402
 from holosoma.config_types.scene import MujocoPhysicsConfig, PhysicsConfig  # noqa: E402
+from holosoma.config_values import experiment as experiment_values  # noqa: E402
 from holosoma.config_values.robot import g1_29dof  # noqa: E402
 from holosoma.config_values.simulator import mjwarp  # noqa: E402
 from holosoma.config_values.simulator import mujoco as preset  # noqa: E402
@@ -54,7 +54,7 @@ def compiled(native, backend=preset, *, xml=XML):
 
 
 def warp_backend_config(native):
-    run = RunSimConfig()
+    run = experiment_values.sim
     return FullSimConfig(
         simulator=replace(mjwarp.config, sim=replace(mjwarp.config.sim, fps=100, mujoco=native)),
         robot=run.robot,
@@ -427,7 +427,8 @@ def test_classic_keeps_warp_only_inputs_inactive_and_preserves_shared_dynamics(s
 
 def test_saved_warp_preset_can_override_only_backend_then_initialize_classic():
     warp_config = parse_config(
-        RunSimConfig,
+        ExperimentConfig,
+        default=experiment_values.sim,
         args=[
             "simulator:sim-mjwarp",
             "--simulator.config.sim.mujoco.integrator",
@@ -448,10 +449,10 @@ def test_saved_warp_preset_can_override_only_backend_then_initialize_classic():
             '{"nccdmax": 64}',
         ],
     )
-    saved = TypeAdapter(RunSimConfig).validate_python(
-        yaml.safe_load(yaml.safe_dump(TypeAdapter(RunSimConfig).dump_python(warp_config, mode="json")))
+    saved = TypeAdapter(ExperimentConfig).validate_python(
+        yaml.safe_load(yaml.safe_dump(TypeAdapter(ExperimentConfig).dump_python(warp_config, mode="json")))
     )
-    classic = parse_config(RunSimConfig, default=saved, args=["--simulator.config.mujoco-backend", "CLASSIC"])
+    classic = parse_config(ExperimentConfig, default=saved, args=["--simulator.config.mujoco-backend", "CLASSIC"])
     assert classic.simulator.config.sim.mujoco == saved.simulator.config.sim.mujoco
     sim = build_classic_sim(simulator=classic.simulator)
     try:
@@ -534,8 +535,8 @@ def test_training_checkpoint_native_physics_reaches_standalone_core_and_stepping
     torch.save({"experiment_config": training.to_serializable_dict()}, checkpoint)
     loaded, _ = load_saved_experiment_config(CheckpointConfig(checkpoint=str(checkpoint)))
     standalone = parse_config(
-        RunSimConfig,
-        default=RunSimConfig(simulator=loaded.simulator, robot=loaded.robot, plugin={}),
+        ExperimentConfig,
+        default=replace(experiment_values.sim, simulator=loaded.simulator, robot=loaded.robot, plugin={}),
         args=["--simulator.config.mujoco-backend", "CLASSIC"],
     )
     sim = build_classic_sim(simulator=standalone.simulator)

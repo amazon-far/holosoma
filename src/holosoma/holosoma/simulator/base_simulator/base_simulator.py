@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from holosoma.config_types.experiment import RunConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.robot import RobotConfig
+from holosoma.config_types.run import RunConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager

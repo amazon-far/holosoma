@@ -7,9 +7,9 @@ from typing import Any, cast
 
 import pytest
 
-from holosoma.config_types.experiment import RunConfig
 from holosoma.config_types.logger import DisabledLoggerConfig
 from holosoma.config_types.plugin import NoOpPluginConfig, PluginConfig
+from holosoma.config_types.run import RunConfig
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 

@@ -9,7 +9,7 @@ import traceback
 from loguru import logger
 
 from holosoma.config_types.experiment import ExperimentConfig
-from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_values import experiment as experiment_values
 from holosoma.tasks.base import Task
 from holosoma.utils.eval_utils import init_eval_logging
 
@@ -74,7 +74,8 @@ class SimTask(Task):
 
         init_eval_logging()
         config = parse_config(
-            RunSimConfig,
+            ExperimentConfig,
+            default=experiment_values.sim,
             args=cls.with_selection(args),
             description="Run simulation with direct simulator control and bridge support.\n\n"
             "Usage: holosoma simulator:<sim> robot:<robot> terrain:<terrain>\n"

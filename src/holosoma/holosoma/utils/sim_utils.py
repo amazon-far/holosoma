@@ -89,7 +89,7 @@ def _ensure_render_pipeline_active() -> None:
     ``SimulationContext`` reads that flag at construction and, with no GUI and no offscreen render,
     latches ``render_mode = NO_GUI_OR_RENDERING`` — a terminal state in which ``sim.render()`` is a
     no-op, so camera sensors never receive a new frame. A non-headless run with cameras (the
-    ``RunSimConfig`` default) lands exactly there: cameras are enabled but nothing renders.
+    ``sim`` experiment default) lands exactly there: cameras are enabled but nothing renders.
 
     Setting the flag after the app exists but before ``SimulationContext`` is built puts the run in
     ``PARTIAL_RENDERING`` instead, which is what the camera path needs. A real GUI run is unaffected:

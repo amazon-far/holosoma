@@ -131,13 +131,26 @@ def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConf
     data.pop("task", None)
     data.pop("eval_overrides", None)
     run = dict(data.get("run", {}))
-    for key, value in data.pop("training", {}).items():
+    training = data.pop("training", {})
+    for key, value in training.items():
         if key in _RUN_FIELDS:
             run.setdefault(key, value)
     for key in ("device", "time_scale", "viewer_update_decimation", "viewer_dt"):
         if key in data:
             run.setdefault(key, data.pop(key))
+    # The run's project/name were saved under `training` (or `run`) before moving to the top level.
+    for key in ("project", "name"):
+        value = run.pop(key, training.get(key))
+        if value is not None:
+            data.setdefault(key, value)
     data["run"] = run
+    saved_logger = data.get("logger")
+    if isinstance(saved_logger, dict):
+        saved_logger = dict(saved_logger)
+        saved_logger.pop("project", None)  # the top-level project names the run everywhere
+        if "name" in saved_logger:
+            saved_logger.setdefault("display_name", saved_logger.pop("name"))
+        data["logger"] = saved_logger
     # ExperimentConfig rejects unknown fields; a saved file may carry fields this version dropped.
     known = {field.name for field in dataclasses.fields(ExperimentConfig)}
     unknown = sorted(set(data) - known)
@@ -146,7 +159,7 @@ def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConf
     return ExperimentConfig(**{key: value for key, value in data.items() if key in known})
 
 
-_RUN_FIELDS = ("num_envs", "headless", "seed", "torch_deterministic", "project", "name")
+_RUN_FIELDS = ("num_envs", "headless", "seed", "torch_deterministic")
 
 
 def replace_retired_simulator(eval_cfg: ExperimentConfig, args: list[str]) -> ExperimentConfig:

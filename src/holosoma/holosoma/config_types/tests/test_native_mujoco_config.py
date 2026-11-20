@@ -11,20 +11,18 @@ from pydantic import TypeAdapter, ValidationError
 
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
-from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.scene import MujocoPhysicsConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
+from holosoma.config_values import experiment as experiment_values
 from holosoma.config_values.simulator import mujoco as preset
 from holosoma.utils.config_registry import parse_config
 
 pytestmark = pytest.mark.no_sim
 
 
-@pytest.mark.parametrize("kind", [RunSimConfig, ExperimentConfig])
+@pytest.mark.parametrize("default", [experiment_values.sim, None], ids=["sim", "experiment"])
 @pytest.mark.parametrize("backend", ["mujoco", "mjwarp"])
-def test_shared_entrypoint_cli_yaml_and_preset_roundtrip(
-    kind: type[RunSimConfig | ExperimentConfig], backend: str
-) -> None:
+def test_shared_entrypoint_cli_yaml_and_preset_roundtrip(default: ExperimentConfig | None, backend: str) -> None:
     args = [
         f"simulator:{backend}",
         "--simulator.config.sim.mujoco.integrator",
@@ -43,10 +41,7 @@ def test_shared_entrypoint_cli_yaml_and_preset_roundtrip(
             "--simulator.config.sim.mujoco.warp.graph-conditional",
             "False",
         ]
-    parsed = parse_config(
-        kind,
-        args=args,
-    )
+    parsed = parse_config(ExperimentConfig, default=default, args=args)
     native = parsed.simulator.config.sim.mujoco
     assert native.integrator == "rk4"
     assert native.iterations == 0
@@ -57,10 +52,9 @@ def test_shared_entrypoint_cli_yaml_and_preset_roundtrip(
         assert native.warp.graph_conditional is False
     else:
         assert native.warp.nconmax_per_env is native.warp.naconmax is native.warp.graph_conditional is None
-    adapter: TypeAdapter[RunSimConfig | ExperimentConfig] = TypeAdapter(kind)
+    adapter: TypeAdapter[ExperimentConfig] = TypeAdapter(ExperimentConfig)
     encoded = adapter.dump_python(parsed, mode="json")
-    if kind is ExperimentConfig:
-        assert parsed.to_serializable_dict() == encoded
+    assert parsed.to_serializable_dict() == encoded
     restored = adapter.validate_python(yaml.safe_load(yaml.safe_dump(encoded)))
     assert restored.simulator.config.sim.mujoco == native
     assert "mujoco_warp" not in encoded["simulator"]["config"]
@@ -95,7 +89,7 @@ def test_malformed_extra_cli_values_report_usage_errors(
     path: str, value: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     with pytest.raises(SystemExit) as error:
-        parse_config(RunSimConfig, args=["simulator:mujoco", f"--{path}", value])
+        parse_config(ExperimentConfig, default=experiment_values.sim, args=["simulator:mujoco", f"--{path}", value])
     assert error.value.code == 2
     message = capsys.readouterr().err
     assert f"--{path}" in message
@@ -213,7 +207,11 @@ def test_old_warp_capacity_location_fails_with_replacement_in_yaml_and_python() 
 
 def test_old_cli_path_fails_with_replacement() -> None:
     with pytest.raises(SystemExit, match=r"sim.mujoco\."):
-        parse_config(RunSimConfig, args=["--simulator.config.mujoco-warp.nconmax-per-env", "128"])
+        parse_config(
+            ExperimentConfig,
+            default=experiment_values.sim,
+            args=["--simulator.config.mujoco-warp.nconmax-per-env", "128"],
+        )
 
 
 def test_nested_warp_uses_pydantic_and_dataclass_preset_replacement() -> None:

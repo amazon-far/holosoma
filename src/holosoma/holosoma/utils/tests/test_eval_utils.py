@@ -643,13 +643,14 @@ def test_saved_config_with_the_old_training_block_loads(tmp_path: Path) -> None:
     from holosoma.config_values import experiment
 
     current = replace(
-        experiment.g1_29dof, run=replace(experiment.g1_29dof.run, num_envs=7, project="p", time_scale=0.5)
+        experiment.g1_29dof, project="p", run=replace(experiment.g1_29dof.run, num_envs=7, time_scale=0.5)
     )
     data = current.to_serializable_dict()
     run = data.pop("run")
     data.pop("task")
     data["training"] = {
-        **{key: run[key] for key in ("num_envs", "headless", "seed", "torch_deterministic", "project", "name")},
+        **{key: run[key] for key in ("num_envs", "headless", "seed", "torch_deterministic")},
+        **{key: data.pop(key) for key in ("project", "name")},
         "checkpoint": "/runs/old.pt",
         "max_eval_steps": 10,
     }

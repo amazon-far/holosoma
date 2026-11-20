@@ -28,8 +28,12 @@ class ReplayTask(Task):
         from holosoma.config_values.experiment import get_annotated_experiment_config
         from holosoma.utils.config_registry import parse_config
 
-        # Pass the factory uncalled so parse_config builds it after plugins load.
-        return cls(parse_config(get_annotated_experiment_config, args=cls.with_selection(args)))
+        # Pass the factory uncalled so parse_config builds it after plugins load. Replay runs one env
+        # in the viewer at real time unless the arguments select a ``run:``.
+        config = parse_config(
+            get_annotated_experiment_config, args=cls.with_selection(args), default_selections=("run:interactive",)
+        )
+        return cls(config)
 
     def run(self) -> None:
         replay(self.config)

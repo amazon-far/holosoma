@@ -127,7 +127,9 @@ def setup_training(tyro_config: ExperimentConfig) -> TrainingSetup:
 
     distributed_conf = configure_multi_gpu()
     timestamp = get_timestamp()
-    experiment_dir = get_experiment_dir(tyro_config.logger, tyro_config.run, timestamp, task_name="locomotion")
+    experiment_dir = get_experiment_dir(
+        tyro_config.logger, tyro_config.project, tyro_config.name, timestamp, task_name="locomotion"
+    )
     configure_logging(distributed_conf=distributed_conf, log_dir=experiment_dir)
     return TrainingSetup(distributed_conf, timestamp, experiment_dir)
 
@@ -182,11 +184,8 @@ def train_on_task(
 
         assert isinstance(logger_cfg, WandbLoggerConfig), "Logger config must be WandbLoggerConfig when type is wandb"
         wandb_cfg = logger_cfg
-        # Use training config for project/name, fallback to logger config, then defaults
-        default_project = tyro_config.run.project or wandb_cfg.project or "default_project"
         default_run_name = (
-            f"{timestamp}_{tyro_config.run.name or 'run'}_"
-            f"{wandb_cfg.group or 'default'}_{tyro_config.robot.asset.robot_type}"
+            f"{timestamp}_{tyro_config.name}_{wandb_cfg.group or 'default'}_{tyro_config.robot.asset.robot_type}"
         )
         wandb_dir = Path(wandb_cfg.dir or (experiment_dir / ".wandb"))
         wandb_dir.mkdir(exist_ok=True, parents=True)
@@ -194,8 +193,8 @@ def train_on_task(
 
         # Only pass optional parameters when specified so wandb can fall back to environment defaults.
         wandb_kwargs: dict[str, Any] = {
-            "project": wandb_cfg.project or default_project,
-            "name": wandb_cfg.name or default_run_name,
+            "project": tyro_config.project,
+            "name": wandb_cfg.display_name or default_run_name,
             "config": dataclasses.asdict(tyro_config),
             "dir": str(wandb_dir),
             "mode": wandb_cfg.mode,

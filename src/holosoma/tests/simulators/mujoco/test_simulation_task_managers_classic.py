@@ -1,4 +1,4 @@
-"""Termination and randomization terms configured on RunSimConfig run on SimulationTask (MuJoCo Classic)."""
+"""Termination and randomization terms configured on the sim experiment run on SimulationTask (MuJoCo Classic)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ pytest.importorskip("mujoco")
 pytestmark = pytest.mark.mujoco_classic
 
 from holosoma.config_types.randomization import RandomizationManagerCfg, RandomizationTermCfg  # noqa: E402
-from holosoma.config_types.run_sim import RunSimConfig  # noqa: E402
+from holosoma.config_values import experiment as experiment_values  # noqa: E402
 from holosoma.config_values import termination  # noqa: E402
 from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
 
@@ -20,7 +20,7 @@ EPISODE_S = 0.1
 
 
 def test_a_timeout_term_ends_and_restarts_the_episode():
-    base = RunSimConfig()
+    base = experiment_values.sim
     sim_cfg = base.simulator.config
     config = dataclasses.replace(
         base,
@@ -44,7 +44,7 @@ def test_a_timeout_term_ends_and_restarts_the_episode():
 
 
 def test_a_reset_randomization_term_sets_the_joint_state():
-    base = RunSimConfig()
+    base = experiment_values.sim
     scale_twice = RandomizationTermCfg(
         func="holosoma.managers.randomization.terms.locomotion:randomize_dof_state",
         params={

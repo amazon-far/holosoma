@@ -210,6 +210,7 @@ def parse_config(
     args: list[str] | None = None,
     default: Any = None,
     record: list[str] | None = None,
+    default_selections: tuple[str, ...] = (),
     **tyro_kwargs: Any,
 ) -> Any:
     """Parse a config with plugin, preset-file, and dynamic-dict support.
@@ -225,6 +226,7 @@ def parse_config(
         args: CLI tokens. ``None`` reads from ``sys.argv``.
         default: Optional base config instance.
         record: Filled with the final CLI tokens (documents expanded, aliases applied).
+        default_selections: ``group:name`` selections applied when ``args`` select nothing for that group.
         tyro_kwargs: Extra keyword arguments forwarded to ``tyro.cli``.
 
     Returns:
@@ -254,10 +256,15 @@ def parse_config(
 
     # Factories build tyro subcommand aliases from registries after external presets are loaded.
     config_type = _resolve_config(config)
+    roots = frozenset(_root_subcommands(config_type))
     provenance: dict[str, str] = {}
     try:
-        expanded = expand_config_args(argv, frozenset(_root_subcommands(config_type)), provenance)
+        expanded = expand_config_args(argv, roots, provenance)
         argv = alias_legacy_flags(expanded)
+        for selection in default_selections:
+            if not any(t.startswith(selection.partition(":")[0] + ":") for t in argv):
+                after_root = next((i for i, t in enumerate(argv) if t.replace("_", "-") not in roots), len(argv))
+                argv.insert(after_root, selection)
         provenance = {
             renamed[0]: source for token, source in provenance.items() if (renamed := alias_legacy_flags([token]))
         }

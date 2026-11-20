@@ -20,10 +20,10 @@ import torch
 
 import holosoma.config_values.robot as robot_values
 import holosoma.config_values.simulator as sim_values
-from holosoma.config_types.experiment import RunConfig
-from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_types.run import RunConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import BridgeConfig, MujocoBackend, VirtualGantryCfg
+from holosoma.config_values import experiment as experiment_values
 
 
 def _bridge_gantry_off(preset):
@@ -80,8 +80,12 @@ def build_classic_sim(
                 sim_cfg.config, sim=dataclasses.replace(sim_cfg.config.sim, kinematic_playback=True)
             ),
         )
-    base = RunSimConfig(
-        simulator=sim_cfg, robot=robot_values.g1_29dof, scene=scene or SceneConfig(), plugin=plugin or {}
+    base = dataclasses.replace(
+        experiment_values.sim,
+        simulator=sim_cfg,
+        robot=robot_values.g1_29dof,
+        scene=scene or SceneConfig(),
+        plugin=plugin or {},
     )
     config = dataclasses.replace(base, run=dataclasses.replace(base.run, device="cpu"))
     sim, device, _ = launch_simulator(config, device="cpu")
@@ -115,7 +119,8 @@ def build_warp_sim(
             sim_cfg,
             config=dataclasses.replace(sim_cfg.config, sim=dataclasses.replace(sim_cfg.config.sim, mujoco=native)),
         )
-    config = RunSimConfig(
+    config = dataclasses.replace(
+        experiment_values.sim,
         simulator=sim_cfg,
         robot=robot_values.g1_29dof,
         scene=scene or SceneConfig(),

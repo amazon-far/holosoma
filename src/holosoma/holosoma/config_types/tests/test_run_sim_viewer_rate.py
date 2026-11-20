@@ -6,8 +6,8 @@ import warnings
 
 import pytest
 
-from holosoma.config_types.experiment import RunConfig
 from holosoma.config_types.frequency import resolve_decimation
+from holosoma.config_types.run import RunConfig
 
 pytestmark = pytest.mark.no_sim
 
