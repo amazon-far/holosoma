@@ -215,7 +215,7 @@ def test_tyro_cli_round_trips_link_physics(robot_key: str) -> None:
     cfg = tyro.cli(
         SimulationExperimentConfig,
         args=[
-            "simulator:sim-mujoco",
+            "simulator:mujoco-sim2sim",
             f"robot:{robot_key}",
             "terrain:terrain-locomotion-plane",
             "scene:empty",

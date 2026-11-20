@@ -16,7 +16,7 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_values.logger import LOGGER_REGISTRY
 from holosoma.config_values.robot import g1_29dof
-from holosoma.config_values.simulator import sim_mjwarp, sim_mujoco
+from holosoma.config_values.simulator import mjwarp_sim2sim, mujoco_sim2sim
 from holosoma.utils import config_registry as registry
 from holosoma.utils import path as path_utils
 from holosoma.utils.config_registry import ConfigRegistry, UseRegistry
@@ -27,8 +27,8 @@ registry.load_plugins()
 
 # A second registry over SimulatorConfig, whose presets share names with SIMULATOR_REGISTRY's.
 _INTERACTIVE_SIMULATORS = ConfigRegistry(SimulatorConfig)
-_INTERACTIVE_SIMULATORS.add("mujoco", sim_mujoco)
-_INTERACTIVE_SIMULATORS.add("mjwarp", sim_mjwarp)
+_INTERACTIVE_SIMULATORS.add("mujoco", mujoco_sim2sim)
+_INTERACTIVE_SIMULATORS.add("mjwarp", mjwarp_sim2sim)
 
 
 class _FakeEP:

@@ -66,7 +66,7 @@ def build_classic_sim(
     """
     from tests.simulators._sim_harness import launch_simulator
 
-    sim_cfg = _bridge_gantry_off(simulator or simulator_values.sim_mujoco)
+    sim_cfg = _bridge_gantry_off(simulator or simulator_values.mujoco_sim2sim)
     if native is not None:
         sim_cfg = dataclasses.replace(
             sim_cfg,
@@ -107,11 +107,11 @@ def build_warp_sim(
     """
     pytest.importorskip("warp")
     pytest.importorskip("mujoco_warp")
-    if getattr(simulator_values.sim_mjwarp.config, "mujoco_backend", None) != MujocoBackend.WARP:
+    if getattr(simulator_values.mjwarp_sim2sim.config, "mujoco_backend", None) != MujocoBackend.WARP:
         pytest.skip("mjwarp config is not the Warp backend")
     from tests.simulators._sim_harness import launch_simulator
 
-    sim_cfg = _bridge_gantry_off(simulator_values.sim_mjwarp)
+    sim_cfg = _bridge_gantry_off(simulator_values.mjwarp_sim2sim)
     if native is not None:
         sim_cfg = dataclasses.replace(
             sim_cfg,

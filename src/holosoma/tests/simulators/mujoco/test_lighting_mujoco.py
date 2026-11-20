@@ -33,7 +33,7 @@ pytestmark = pytest.mark.mujoco_classic
 def _manager() -> MujocoSceneManager:
     # MujocoSceneManager annotates its arg as SimulatorConfig but reads .sim.fps off the inner
     # SimulatorInitConfig (.config); the real backend passes it with the same type: ignore.
-    return MujocoSceneManager(simulator_values.sim_mujoco.config)  # type: ignore[arg-type]
+    return MujocoSceneManager(simulator_values.mujoco_sim2sim.config)  # type: ignore[arg-type]
 
 
 def test_add_lighting_builds_supported_and_skips_unsupported() -> None:

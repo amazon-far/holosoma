@@ -43,8 +43,8 @@ def _has_isaacsim() -> bool:
 
 def _run_config(render_config: IsaacSimRenderConfig) -> SimulationExperimentConfig:
     simulator = dataclasses.replace(
-        simulator_values.sim_isaacsim,
-        config=dataclasses.replace(simulator_values.sim_isaacsim.config, isaacsim=render_config),
+        simulator_values.isaacsim_sim2sim,
+        config=dataclasses.replace(simulator_values.isaacsim_sim2sim.config, isaacsim=render_config),
     )
     return SimulationExperimentConfig(simulator=simulator)
 

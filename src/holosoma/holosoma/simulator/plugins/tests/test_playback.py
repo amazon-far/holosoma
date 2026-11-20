@@ -439,7 +439,7 @@ def test_config_rejects_duplicate_objects() -> None:
 
 def test_kinematic_playback_config_flag_default_off() -> None:
     # Kinematic playback is a simulator-config flag (sim.kinematic_playback), not plugin-derived.
-    from holosoma.config_values.simulator import sim_mujoco as mujoco_preset
+    from holosoma.config_values.simulator import mujoco_sim2sim as mujoco_preset
 
     assert mujoco_preset.config.sim.kinematic_playback is False
 

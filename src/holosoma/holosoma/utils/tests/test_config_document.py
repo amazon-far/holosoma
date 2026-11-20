@@ -17,7 +17,7 @@ pytestmark = pytest.mark.no_sim
 DOCUMENT: dict[str, Any] = {
     "version": 1,
     "arguments": {
-        "simulator": "sim-mjwarp",
+        "simulator": "mjwarp-sim2sim",
         "robot": "t1-29dof-waist-wrist",
         "plugin": {"clock": "clock_publish"},
         "overrides": {
@@ -28,7 +28,7 @@ DOCUMENT: dict[str, Any] = {
     },
 }
 EQUIVALENT_CLI = [
-    "simulator:sim-mjwarp",
+    "simulator:mjwarp-sim2sim",
     "robot:t1-29dof-waist-wrist",
     "plugin.clock:clock_publish",
     "--run.headless",
@@ -183,7 +183,7 @@ def test_old_spellings_give_the_same_config(tmp_path: Path, trained: list[Traini
 
 
 def test_written_record_reproduces_the_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    args = [_SIM, "simulator:sim-mjwarp", "sensor.scan:g1-pelvis-lidar", "--run.time_scale", "0.50"]
+    args = [_SIM, "simulator:mjwarp-sim2sim", "sensor.scan:g1-pelvis-lidar", "--run.time_scale", "0.50"]
     _Recorder.seen.clear()
     cli.run(args)
     parsed = _Recorder.seen[-1]

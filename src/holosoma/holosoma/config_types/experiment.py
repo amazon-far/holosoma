@@ -106,10 +106,10 @@ class ExperimentConfig(EnvironmentConfig):
 
 @dataclass(frozen=True, config=_STRICT)
 class SimulationExperimentConfig(ExperimentConfig):
-    """Simulation with no policy: one environment on an interactive simulator, in the viewer at real time."""
+    """Simulation with no policy: one environment on a sim-to-sim simulator, in the viewer at real time."""
 
     simulator: Annotated[SimulatorConfig, UseRegistry(holosoma.config_values.simulator.SIMULATOR_REGISTRY)] = (
-        holosoma.config_values.simulator.sim_mujoco
+        holosoma.config_values.simulator.mujoco_sim2sim
     )
     run: RunConfig = RunConfig(
         num_envs=1,
@@ -122,7 +122,7 @@ class SimulationExperimentConfig(ExperimentConfig):
 
     @classmethod
     def base(cls, first: Self, exp: TrainingExperimentConfig | None) -> Self:  # noqa: ARG003
-        """The simulation defaults, or ``exp``'s world on the interactive variant of its simulator.
+        """The simulation defaults, or ``exp``'s world on the sim-to-sim variant of its simulator.
 
         The experiment's randomization and termination terms are dropped: they act on the policy's
         managers, which a simulation has none of.
@@ -130,7 +130,7 @@ class SimulationExperimentConfig(ExperimentConfig):
         default = cls()
         if exp is None:
             return default
-        simulator = holosoma.config_values.simulator.interactive(exp.simulator)
+        simulator = holosoma.config_values.simulator.sim2sim(exp.simulator)
         env = {
             **part_fields(EnvironmentConfig, exp),
             "simulator": simulator,

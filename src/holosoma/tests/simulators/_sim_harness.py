@@ -136,7 +136,7 @@ def build_run_sim_config(
     """
     from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 
-    argv = [f"simulator:sim-{simulator}", f"robot:{robot}", f"terrain:{terrain}", f"scene:{scene}"]
+    argv = [f"simulator:{simulator}-sim2sim", f"robot:{robot}", f"terrain:{terrain}", f"scene:{scene}"]
     config = tyro.cli(SimulationExperimentConfig, args=argv)
     if sensors is not None:
         config = dataclasses.replace(config, sensor=dict(sensors))

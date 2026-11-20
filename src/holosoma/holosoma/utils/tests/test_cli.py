@@ -50,7 +50,7 @@ def test_run_builds_the_named_config_and_calls_its_function() -> None:
     _RecordingTask.seen.clear()
     task = f"{__name__}:_RecordingTask.simulate"
 
-    cli.run([f"--task={task}", "simulator:sim-mjwarp", "--run.num_envs=3"])
+    cli.run([f"--task={task}", "simulator:mjwarp-sim2sim", "--run.num_envs=3"])
 
     (config,) = _RecordingTask.seen
     assert (config.task, config.simulator.config.sim.fps, config.run.num_envs) == (task, 400, 3)
@@ -77,7 +77,7 @@ def test_replay_base_plays_the_experiment_motion_kinematically() -> None:
         ReplayExperimentConfig.base(first, experiment.g1_29dof)
 
 
-def test_simulation_base_puts_the_experiment_world_on_its_interactive_simulator() -> None:
+def test_simulation_base_puts_the_experiment_world_on_its_sim2sim_simulator() -> None:
     from holosoma.config_values import experiment
 
     base = SimulationExperimentConfig.base(SimulationExperimentConfig(), experiment.g1_29dof)

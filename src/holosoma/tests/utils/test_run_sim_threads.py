@@ -40,7 +40,7 @@ pytestmark = pytest.mark.no_sim
 
 CLASSIC_PRESET = "mujoco"  # the only single-env CPU-physics backend
 OTHER_PRESETS = ["isaacsim", "mjwarp"]
-INTERACTIVE_PRESETS = ["sim-mujoco", "sim-isaacsim", "sim-mjwarp"]  # same backends as above, for run_sim
+INTERACTIVE_PRESETS = ["mujoco-sim2sim", "isaacsim-sim2sim", "mjwarp-sim2sim"]  # same backends as above, for run_sim
 THREAD_LIMIT_VARIABLES = ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"]
 
 
@@ -169,7 +169,7 @@ _CHILD = textwrap.dedent(
 
     session.task_session = task_session
 
-    config = parse_config(SimulationExperimentConfig, args=[f"simulator:sim-{PRESET}"])
+    config = parse_config(SimulationExperimentConfig, args=[f"simulator:{PRESET}-sim2sim"])
     if DEVICE is not None:
         config = dataclasses.replace(config, run=dataclasses.replace(config.run, device=DEVICE))
     SimulationTask.simulate(config)

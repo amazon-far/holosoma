@@ -24,7 +24,7 @@ pytestmark = pytest.mark.no_sim
 def test_shared_entrypoint_cli_yaml_and_preset_roundtrip(
     kind: type[SimulationExperimentConfig | TrainingExperimentConfig], backend: str
 ) -> None:
-    preset_name = f"sim-{backend}" if kind is SimulationExperimentConfig else backend
+    preset_name = f"{backend}-sim2sim" if kind is SimulationExperimentConfig else backend
     args = [
         f"simulator:{preset_name}",
         "--simulator.config.sim.mujoco.integrator",
@@ -94,7 +94,7 @@ def test_malformed_extra_cli_values_report_usage_errors(
     path: str, value: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     with pytest.raises(SystemExit) as error:
-        parse_config(SimulationExperimentConfig, args=["simulator:sim-mujoco", f"--{path}", value])
+        parse_config(SimulationExperimentConfig, args=["simulator:mujoco-sim2sim", f"--{path}", value])
     assert error.value.code == 2
     message = capsys.readouterr().err
     assert f"--{path}" in message

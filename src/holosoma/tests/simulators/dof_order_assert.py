@@ -53,7 +53,7 @@ TORQUE_STEPS = 5
 def _build(simulator: str, num_envs: int):
     _robot_presets.register()
     argv = [
-        f"simulator:sim-{simulator}",
+        f"simulator:{simulator}-sim2sim",
         f"robot:{ROBOT}",
         "terrain:terrain_locomotion_plane",
         "scene:empty",

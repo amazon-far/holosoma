@@ -8,7 +8,7 @@
 version: 1
 arguments:
   # Selections, by path: <path>:<preset>
-  simulator: sim-mujoco
+  simulator: mujoco-sim2sim
   robot: g1-29dof
   # Named slots: <path>.<key>:<preset>
   sensor:

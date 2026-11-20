@@ -64,9 +64,9 @@ and its W&B project; `run.logger.display_name` overrides the W&B run name.
 
 The command line applies on top of a starting config that each config type builds:
 
-- **Simulate.** The interactive defaults: `sim-mujoco` with the bridge and virtual gantry on, and
+- **Simulate.** The sim-to-sim defaults: `mujoco-sim2sim` with the bridge and virtual gantry on, and
   one env in the viewer at real time. With `exp:<preset>`, it is that experiment's world on the
-  interactive variant of its simulator.
+  sim-to-sim variant of its simulator.
   - The experiment's randomization and terminations are dropped, since they act on the policy's
     managers.
 - **Replay.** The `exp:` preset's world with kinematic playback on, and the motion its motion
@@ -82,8 +82,8 @@ The command line applies on top of a starting config that each config type build
 
   The algorithm is the one the checkpoint trained, and `task` must name the class it trained with.
 
-The `sim-isaacsim`, `sim-mujoco` and `sim-mjwarp` presets are the training presets with the robot
-bridge and virtual gantry on, at the interactive physics rate.
+The `isaacsim-sim2sim`, `mujoco-sim2sim` and `mjwarp-sim2sim` presets are the training presets with
+the robot bridge and virtual gantry on, at the sim-to-sim physics rate: 200 Hz, 2000 Hz and 400 Hz.
 
 ## Run documents
 
@@ -142,7 +142,7 @@ Earlier spellings keep working, each with a one-time warning naming the new one:
   - `--env_class=X` → `--task=X.train`;
   - `--eval_overrides.*` → the field each one set.
 - **`run_sim`'s simulators:** in `python -m holosoma.run_sim`, `simulator:mujoco` (and `isaacsim`,
-  `mjwarp`) still means the interactive preset.
+  `mjwarp`) still means the sim-to-sim preset (`mujoco-sim2sim`, …).
 
 Checkpoints and `holosoma_config.yaml` files saved before `task` (with `env_class` and `training`)
 load unchanged.

@@ -87,8 +87,8 @@ mjwarp = SIMULATOR_REGISTRY.add(
 )
 
 
-def interactive(preset: SimulatorConfig) -> SimulatorConfig:
-    """``preset`` with the robot bridge and virtual gantry on, at the backend's interactive physics rate.
+def sim2sim(preset: SimulatorConfig) -> SimulatorConfig:
+    """``preset`` with the robot bridge and virtual gantry on, at the backend's sim-to-sim physics rate.
 
     The rates are 200 Hz for Isaac Sim, 2000 Hz for classic MuJoCo and 400 Hz for MuJoCo Warp.
     """
@@ -109,11 +109,11 @@ def interactive(preset: SimulatorConfig) -> SimulatorConfig:
     )
 
 
-# Interactive simulation: an external controller drives the robot over the bridge, and the virtual
+# Sim-to-sim: an external controller drives the robot over the bridge, and the virtual
 # gantry holds it until released.
-sim_isaacsim = SIMULATOR_REGISTRY.add("sim-isaacsim", interactive(isaacsim))
-sim_mujoco = SIMULATOR_REGISTRY.add("sim-mujoco", interactive(mujoco))
-sim_mjwarp = SIMULATOR_REGISTRY.add("sim-mjwarp", interactive(mjwarp))
+isaacsim_sim2sim = SIMULATOR_REGISTRY.add("isaacsim-sim2sim", sim2sim(isaacsim))
+mujoco_sim2sim = SIMULATOR_REGISTRY.add("mujoco-sim2sim", sim2sim(mujoco))
+mjwarp_sim2sim = SIMULATOR_REGISTRY.add("mjwarp-sim2sim", sim2sim(mjwarp))
 
 from holosoma.utils.config_registry import (  # noqa: E402
     deprecated_defaults_alias as _deprecated_defaults_alias,

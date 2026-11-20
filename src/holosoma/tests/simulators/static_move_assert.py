@@ -78,7 +78,7 @@ def _build(simulator: str, num_envs: int):
     from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 
     argv = [
-        f"simulator:sim-{simulator}",
+        f"simulator:{simulator}-sim2sim",
         "robot:g1-29dof",
         "terrain:terrain_locomotion_plane",
         "scene:empty",
