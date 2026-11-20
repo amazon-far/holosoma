@@ -19,7 +19,7 @@ from typing import Any, NoReturn
 
 import tyro
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_values import experiment as experiment_values
 
 
@@ -68,11 +68,11 @@ def step(sim: Any, n: int, *, render: bool = False) -> None:
             sim.render()
 
 
-def launch_simulator(config: ExperimentConfig, device: str | None = None) -> tuple[Any, str, Any]:
+def launch_simulator(config: HolosomaConfig, device: str | None = None) -> tuple[Any, str, Any]:
     """Construct the configured simulator without running its setup lifecycle.
 
     Harnesses drive ``setup -> setup_terrain -> load_assets -> create_envs -> prepare_sim``
-    themselves so they can act between stages; tasks use ``ExperimentConfig.create_task()`` instead.
+    themselves so they can act between stages; tasks use ``HolosomaConfig.create_task()`` instead.
 
     Returns
     -------
@@ -121,7 +121,7 @@ def build_run_sim_config(
     record_dir: str | None = None,
     video_camera: Any = None,
     show_command_overlay: bool = True,
-) -> ExperimentConfig:
+) -> HolosomaConfig:
     """Parse the ``sim`` experiment as the CLI would, with the bridge + virtual gantry disabled.
 
     The bridge binds a ZMQ clock publisher that lingers between rapid subprocess runs, and the gantry
@@ -138,7 +138,7 @@ def build_run_sim_config(
     from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 
     argv = [f"simulator:sim-{simulator}", f"robot:{robot}", f"terrain:{terrain}", f"scene:{scene}"]
-    config = tyro.cli(ExperimentConfig, default=experiment_values.sim, args=argv)
+    config = tyro.cli(HolosomaConfig, default=experiment_values.sim, args=argv)
     if sensors is not None:
         config = dataclasses.replace(config, sensor=dict(sensors))
     sim_cfg = dataclasses.replace(

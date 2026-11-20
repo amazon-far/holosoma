@@ -360,7 +360,7 @@ def _resolve_config(config: Any) -> Any:
 def _root_subcommands(config_type: Any) -> dict[str, Any]:
     """Return root-level subcommand names (hyphenated) mapped to their preset defaults.
 
-    A root alias like ``Annotated[ExperimentConfig, tyro.conf.arg(constructor=
+    A root alias like ``Annotated[HolosomaConfig, tyro.conf.arg(constructor=
     subcommand_type_from_defaults({'exp:name': preset, ...}))]`` carries each preset as
     the ``default`` of a ``tyro.conf.subcommand`` on the union members. Returns an empty
     mapping when the root is not such an alias.

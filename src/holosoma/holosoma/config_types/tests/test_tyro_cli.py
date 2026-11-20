@@ -7,7 +7,7 @@ import pytest
 import tyro
 
 from holosoma.config_types.distribution import DistributionSpec
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_types.randomization import MujocoMaterialDR
 from holosoma.utils.tyro_utils import TYRO_CONIFG
 
@@ -15,7 +15,7 @@ pytestmark = pytest.mark.no_sim
 
 
 def test_experiment_config() -> None:
-    assert isinstance(tyro.cli(ExperimentConfig, args=(), config=TYRO_CONIFG), ExperimentConfig)
+    assert isinstance(tyro.cli(HolosomaConfig, args=(), config=TYRO_CONIFG), HolosomaConfig)
 
 
 def test_distribution_like_field_is_a_cli_flag() -> None:

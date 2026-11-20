@@ -26,7 +26,7 @@ from typing import cast
 import pytest
 
 import holosoma.config_values.simulator
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
 from holosoma.tasks import sim as sim_task
@@ -58,10 +58,10 @@ def requested(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     return calls
 
 
-def _config(preset: str, device: str | None) -> ExperimentConfig:
+def _config(preset: str, device: str | None) -> HolosomaConfig:
     """A real simulator preset plus the device. The rest of the config the guard never reads."""
     return cast(
-        "ExperimentConfig",
+        "HolosomaConfig",
         SimpleNamespace(simulator=SIMULATOR_REGISTRY.get(preset), run=SimpleNamespace(device=device)),
     )
 
@@ -153,7 +153,7 @@ _CHILD = textwrap.dedent(
     import dataclasses
 
     import holosoma.tasks.sim as runner
-    from holosoma.config_types.experiment import ExperimentConfig
+    from holosoma.config_types.experiment import HolosomaConfig
     from holosoma.config_values import experiment as experiment_values
     from holosoma.utils.config_registry import parse_config
     from holosoma.utils.safe_torch_import import torch
@@ -169,9 +169,9 @@ _CHILD = textwrap.dedent(
         print(f"AT_SETUP={torch.get_num_threads()}", flush=True)
         yield Task()
 
-    ExperimentConfig.create_task = create_task
+    HolosomaConfig.create_task = create_task
 
-    config = parse_config(ExperimentConfig, default=experiment_values.sim, args=[f"simulator:sim-{PRESET}"])
+    config = parse_config(HolosomaConfig, default=experiment_values.sim, args=[f"simulator:sim-{PRESET}"])
     if DEVICE is not None:
         config = dataclasses.replace(config, run=dataclasses.replace(config.run, device=DEVICE))
     runner.run_simulation(config)

@@ -2,7 +2,7 @@ from typing import Annotated
 
 import tyro
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_values import run, simulator, task
 from holosoma.config_values.loco.g1.experiment import g1_29dof, g1_29dof_fast_sac
 from holosoma.config_values.loco.t1.experiment import t1_29dof, t1_29dof_fast_sac
@@ -14,7 +14,7 @@ from holosoma.config_values.wbt.g1.experiment import (
 )
 from holosoma.utils.config_registry import ConfigRegistry
 
-EXPERIMENT_REGISTRY = ConfigRegistry(ExperimentConfig, group="holosoma.config.experiment")
+EXPERIMENT_REGISTRY = ConfigRegistry(HolosomaConfig, group="holosoma.config.experiment")
 
 EXPERIMENT_REGISTRY.add("g1_29dof", g1_29dof)
 EXPERIMENT_REGISTRY.add("g1_29dof_fast_sac", g1_29dof_fast_sac)
@@ -25,22 +25,20 @@ EXPERIMENT_REGISTRY.add("g1_29dof_wbt_w_object", g1_29dof_wbt_w_object)
 EXPERIMENT_REGISTRY.add("g1_29dof_wbt_fast_sac", g1_29dof_wbt_fast_sac)
 EXPERIMENT_REGISTRY.add("g1_29dof_wbt_fast_sac_w_object", g1_29dof_wbt_fast_sac_w_object)
 
-sim = EXPERIMENT_REGISTRY.add(
-    "sim",
-    ExperimentConfig(
-        task=task.sim,
-        env_class="holosoma.envs.simulation_task.SimulationTask",
-        simulator=simulator.sim_mujoco,
-        run=run.interactive,
-    ),
+sim = HolosomaConfig(
+    task=task.sim,
+    env_class="holosoma.envs.simulation_task.SimulationTask",
+    simulator=simulator.sim_mujoco,
+    run=run.interactive,
 )
-"""The ``sim`` task's base: one ``SimulationTask`` env, no policy, bridge and gantry on, viewer at real time."""
+"""The ``sim`` task's base config, not an ``exp:`` preset: one ``SimulationTask`` env with no policy,
+bridge and gantry on, in the viewer at real time."""
 
 
 def get_annotated_experiment_config() -> type:
     """Return the ``exp:`` subcommand type."""
     return Annotated[  # type: ignore[return-value]  # Annotated[...] alias; mypy models it as object
-        ExperimentConfig,
+        HolosomaConfig,
         tyro.conf.arg(
             constructor=tyro.extras.subcommand_type_from_defaults(
                 {f"exp:{k.replace('_', '-')}": v for k, v in EXPERIMENT_REGISTRY.items()}

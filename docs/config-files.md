@@ -2,7 +2,7 @@
 
 The `holosoma` command (also `python -m holosoma`) launches every workflow. The `task:<name>`
 selection (on the command line, or `task: <name>` under a document's `arguments`) selects a workflow task from `TASK_REGISTRY`; every task reads the same config type,
-`ExperimentConfig`, where `env_class` names the environment the task builds and drives:
+`HolosomaConfig`, where `env_class` names the environment the task builds and drives:
 
 | `task` | Runs | Environment class | Alias |
 |---|---|---|---|
@@ -17,7 +17,7 @@ accept the same arguments and documents. Extensions add tasks through the `holos
 group. Each entry in `arguments` maps to the token you would type on the command line, so any
 preset from an installed extension or an `--import-file` works the same way here.
 
-`sim` starts from the `sim` experiment preset (`exp:sim`): a `SimulationTask` on
+`sim` starts from its own base config (`holosoma.config_values.experiment.sim`): a `SimulationTask` on
 `run:interactive` and the `sim-mujoco` simulator. The `sim-mujoco`, `sim-mjwarp` and
 `sim-isaacsim` presets are the training presets with the robot bridge and virtual gantry on, and
 MuJoCo stepping at 2000 Hz (MJWarp 400 Hz). `simulator:mujoco` and the other plain names select the

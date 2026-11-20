@@ -14,7 +14,7 @@ from os import getenv
 from pathlib import Path
 from typing import Any, cast
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_types.simulator import MujocoBackend
 from holosoma.config_types.task import TrainTaskConfig
 from holosoma.config_values.experiment import get_annotated_experiment_config
@@ -55,7 +55,7 @@ PERF_BASELINE_MIN_RUNS = 5
 PERF_WARN_SIGMA = 2.0
 
 
-def simulator_tag(config: ExperimentConfig) -> str:
+def simulator_tag(config: HolosomaConfig) -> str:
     """Simulator name to tag a run with, distinguishing the two MuJoCo backends.
 
     Both report `mujoco`, but they are different engines -- one CPU and single-env, the
@@ -207,7 +207,7 @@ def check_throughput_regression(cell_tags: list[str]) -> None:
         print(f"Throughput check failed, ignoring: {e}")
 
 
-def validate_wandb_metrics(config: ExperimentConfig):
+def validate_wandb_metrics(config: HolosomaConfig):
     # lazy import to avoid conflicts with Isaac
     import wandb
 

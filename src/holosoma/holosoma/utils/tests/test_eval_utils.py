@@ -12,7 +12,7 @@ import torch
 import yaml
 from omegaconf import OmegaConf
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
 from holosoma.tasks.eval import _eval_config
@@ -233,7 +233,7 @@ def test_load_saved_experiment_config_with_wandb_run_only(tmp_path: Path) -> Non
 
 def test_load_saved_experiment_config_from_checkpoint(tmp_path: Path) -> None:
     checkpoint_path = tmp_path / "model.pt"
-    cfg = ExperimentConfig()
+    cfg = HolosomaConfig()
     torch.save(
         {
             "actor_model_state_dict": {},
@@ -252,7 +252,7 @@ def test_load_saved_experiment_config_from_checkpoint(tmp_path: Path) -> None:
 
 def _load_saved_config(
     data: dict[str, Any], source: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[ExperimentConfig, str | None]:
+) -> tuple[HolosomaConfig, str | None]:
     if source == "checkpoint":
         path = tmp_path / "model.pt"
         torch.save({"experiment_config": data, "wandb_run_path": "entity/project/run"}, path)
@@ -270,7 +270,7 @@ def _load_saved_config(
 def test_historical_saved_configs_transition_warp_capacities(
     source: str, backend: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = replace(ExperimentConfig(), simulator=SIMULATOR_REGISTRY[backend], plugin={})
+    cfg = replace(HolosomaConfig(), simulator=SIMULATOR_REGISTRY[backend], plugin={})
     saved = cfg.to_serializable_dict()
     saved["simulator"]["config"]["sim"].pop("mujoco")
     saved["simulator"]["config"]["mujoco_warp"] = {"nconmax_per_env": 128, "njmax_per_env": 900}
@@ -290,7 +290,7 @@ def test_historical_saved_configs_transition_warp_capacities(
 def test_saved_native_gravity_transitions_to_extra(
     source: str, gravity: list[float] | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    saved = ExperimentConfig().to_serializable_dict()
+    saved = HolosomaConfig().to_serializable_dict()
     saved["simulator"]["config"]["sim"]["mujoco"]["gravity"] = gravity
     loaded, _ = _load_saved_config(saved, source, tmp_path, monkeypatch)
     assert loaded.simulator.config.sim.mujoco.extra == ({} if gravity is None else {"gravity": gravity})
@@ -310,7 +310,7 @@ def test_saved_native_physics_preserves_zero_false_and_extras(
         warp=MujocoWarpConfig(nconmax_per_env=128, naconmax=300, graph_conditional=False),
     )
     simulator = replace(simulator, config=replace(simulator.config, sim=replace(simulator.config.sim, mujoco=native)))
-    saved = replace(ExperimentConfig(), simulator=simulator, plugin={}).to_serializable_dict()
+    saved = replace(HolosomaConfig(), simulator=simulator, plugin={}).to_serializable_dict()
     loaded, _ = _load_saved_config(saved, source, tmp_path, monkeypatch)
     assert loaded.simulator.config.sim.mujoco == native
     assert loaded.plugin == {}
@@ -321,7 +321,7 @@ def test_saved_native_physics_preserves_zero_false_and_extras(
 def test_saved_warp_transition_rejects_conflicting_values(
     source: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    saved = ExperimentConfig().to_serializable_dict()
+    saved = HolosomaConfig().to_serializable_dict()
     saved["simulator"]["config"]["mujoco_warp"] = {"nconmax_per_env": 128}
     saved["simulator"]["config"]["sim"]["mujoco"]["warp"]["nconmax_per_env"] = 64
     with pytest.raises(ValueError, match=r"conflicting mujoco_warp\.nconmax_per_env.*sim\.mujoco\.warp"):
@@ -332,7 +332,7 @@ def test_load_saved_experiment_config_uses_generic_remote_loader(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     checkpoint_path = tmp_path / "model.pt"
-    cfg = ExperimentConfig()
+    cfg = HolosomaConfig()
     torch.save(
         {
             "experiment_config": cfg.to_serializable_dict(),
@@ -550,7 +550,7 @@ def _without(block: dict[str, Any], key: str = "isaacgym") -> dict[str, Any]:
     return {k: v for k, v in block.items() if k != key}
 
 
-def _load_through(boundary: str, data: dict[str, Any], tmp_path: Path) -> ExperimentConfig:
+def _load_through(boundary: str, data: dict[str, Any], tmp_path: Path) -> HolosomaConfig:
     if boundary == "checkpoint":
         checkpoint_path = tmp_path / "model.pt"
         torch.save({"experiment_config": data, "wandb_run_path": None}, checkpoint_path)
@@ -632,9 +632,7 @@ def test_saved_isaacgym_simulator_can_be_overridden_on_the_cli(backend: str, tmp
     saved_cfg = _load_through("checkpoint", _previous_schema("g1_29dof_isaacgym"), tmp_path)
     args = [f"simulator:{backend}"]
 
-    eval_cfg = parse_config(
-        ExperimentConfig, default=replace_retired_simulator(_eval_config(saved_cfg), args), args=args
-    )
+    eval_cfg = parse_config(HolosomaConfig, default=replace_retired_simulator(_eval_config(saved_cfg), args), args=args)
 
     assert eval_cfg.simulator == SIMULATOR_REGISTRY[backend]
 

@@ -57,4 +57,4 @@ class EvalTaskConfig(TaskConfig):
 
 
 TaskConfigType = TaskConfig | TrainTaskConfig | EvalTaskConfig
-"""The ``ExperimentConfig.task`` type: a serialized task validates back to the right subclass."""
+"""The ``HolosomaConfig.task`` type: a serialized task validates back to the right subclass."""

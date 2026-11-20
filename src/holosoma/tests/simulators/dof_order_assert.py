@@ -30,7 +30,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 import tyro
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 from holosoma.config_values import experiment as experiment_values
 from tests.simulators import _robot_presets
@@ -54,7 +54,7 @@ TORQUE_STEPS = 5
 def _build(simulator: str, num_envs: int):
     _robot_presets.register()
     argv = [f"simulator:sim-{simulator}", f"robot:{ROBOT}", "terrain:terrain_locomotion_plane", "scene:empty"]
-    config = tyro.cli(ExperimentConfig, default=experiment_values.sim, args=argv)
+    config = tyro.cli(HolosomaConfig, default=experiment_values.sim, args=argv)
     sim_cfg = dataclasses.replace(
         config.simulator,
         config=dataclasses.replace(

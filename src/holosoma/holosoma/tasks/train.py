@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 from loguru import logger
 
 from holosoma.agents.distillation.checkpoint import infer_num_teachers_from_checkpoint
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.tasks.base import Task
 from holosoma.utils.config_document import write_document
 from holosoma.utils.config_utils import CONFIG_NAME, RUN_DOCUMENT_NAME
@@ -93,7 +93,7 @@ def configure_logging(distributed_conf: MultGPUConfig | None = None, log_dir: Pa
     logging.getLogger().addHandler(LoguruLoggingBridge())
 
 
-def split_envs_across_ranks(tyro_config: ExperimentConfig) -> ExperimentConfig:
+def split_envs_across_ranks(tyro_config: HolosomaConfig) -> HolosomaConfig:
     """Return ``tyro_config`` with ``run.num_envs`` divided among the distributed ranks.
 
     Call it before ``create_task()``: each rank builds only its share of the environments.
@@ -121,7 +121,7 @@ class TrainingSetup:
     experiment_dir: Path
 
 
-def setup_training(tyro_config: ExperimentConfig) -> TrainingSetup:
+def setup_training(tyro_config: HolosomaConfig) -> TrainingSetup:
     """Start the process group and route logs to the run's experiment directory."""
     from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
 
@@ -134,7 +134,7 @@ def setup_training(tyro_config: ExperimentConfig) -> TrainingSetup:
     return TrainingSetup(distributed_conf, timestamp, experiment_dir)
 
 
-def train(tyro_config: ExperimentConfig, run_args: list[str] | None = None) -> None:
+def train(tyro_config: HolosomaConfig, run_args: list[str] | None = None) -> None:
     """Train an agent on the task built from ``tyro_config``."""
     tyro_config = split_envs_across_ranks(tyro_config)
     try:
@@ -149,7 +149,7 @@ def train(tyro_config: ExperimentConfig, run_args: list[str] | None = None) -> N
 
 
 def train_on_task(
-    tyro_config: ExperimentConfig,
+    tyro_config: HolosomaConfig,
     env: PolicyTask,
     setup: TrainingSetup | None = None,
     run_args: list[str] | None = None,

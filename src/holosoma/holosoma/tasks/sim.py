@@ -8,7 +8,7 @@ import traceback
 
 from loguru import logger
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_values import experiment as experiment_values
 from holosoma.tasks.base import Task
 from holosoma.utils.eval_utils import init_eval_logging
@@ -16,7 +16,7 @@ from holosoma.utils.eval_utils import init_eval_logging
 _THREAD_LIMIT_VARIABLES = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
 
 
-def limit_cpu_math_threads(config: ExperimentConfig, device: str | None = None) -> None:
+def limit_cpu_math_threads(config: HolosomaConfig, device: str | None = None) -> None:
     """Serialize Torch's CPU intra-op pool for classic MuJoCo on cpu, unless the operator set a limit.
 
     Classic MuJoCo runs one env on the host, where every tensor is small enough that a machine-sized
@@ -46,7 +46,7 @@ def limit_cpu_math_threads(config: ExperimentConfig, device: str | None = None) 
     logger.info("Classic MuJoCo on cpu - limiting Torch to 1 CPU thread")
 
 
-def run_simulation(config: ExperimentConfig) -> None:
+def run_simulation(config: HolosomaConfig) -> None:
     """Build the configured simulation task and run it until shutdown."""
     from holosoma.config_types.env import get_tyro_env_config
     from holosoma.simulator.session import get_local_rank, resolve_simulation_device
@@ -74,7 +74,7 @@ class SimTask(Task):
 
         init_eval_logging()
         config = parse_config(
-            ExperimentConfig,
+            HolosomaConfig,
             default=experiment_values.sim,
             args=cls.with_selection(args),
             description="Run simulation with direct simulator control and bridge support.\n\n"

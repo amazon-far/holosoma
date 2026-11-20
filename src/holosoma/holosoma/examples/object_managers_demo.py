@@ -66,7 +66,7 @@ import dataclasses
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from holosoma.config_types.experiment import ExperimentConfig
+    from holosoma.config_types.experiment import HolosomaConfig
     from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
     from holosoma.simulator.mujoco.backends import WarpBackend
     from holosoma.simulator.mujoco.mujoco import MuJoCo
@@ -88,8 +88,8 @@ _OBJ_OBS_TERMS = "holosoma.managers.observation.terms.objects"
 _OBJ_RAND = "holosoma.managers.randomization.terms.objects"
 
 
-def _experiment_config(backend: str, num_envs: int, headless: bool) -> ExperimentConfig:
-    """Build the ExperimentConfig for the demo: the g1_29dof locomotion preset, retargeted to the
+def _experiment_config(backend: str, num_envs: int, headless: bool) -> HolosomaConfig:
+    """Build the HolosomaConfig for the demo: the g1_29dof locomotion preset, retargeted to the
     chosen backend + the object-managers demo scene, with the object managers wired in PURELY via
     config — the env then runs them through its real manager stack, exactly as training does:
 

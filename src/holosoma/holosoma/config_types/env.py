@@ -5,7 +5,7 @@ from pydantic.dataclasses import dataclass
 from holosoma.config_types.action import ActionManagerCfg
 from holosoma.config_types.command import CommandManagerCfg
 from holosoma.config_types.curriculum import CurriculumManagerCfg
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_types.logger import LoggerConfig
 from holosoma.config_types.observation import ObservationManagerCfg
 from holosoma.config_types.plugin import PluginConfig
@@ -55,12 +55,12 @@ def _validate_cameras(sensors: dict[str, SensorConfig]) -> None:
     validate_camera_dict({name: sensor for name, sensor in sensors.items() if isinstance(sensor, CameraSensorConfig)})
 
 
-def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
-    """Convert ExperimentConfig to EnvConfig for environment construction.
+def get_tyro_env_config(tyro_config: HolosomaConfig) -> EnvConfig:
+    """Convert HolosomaConfig to EnvConfig for environment construction.
 
     Parameters
     ----------
-    tyro_config : ExperimentConfig
+    tyro_config : HolosomaConfig
         The experiment configuration containing all settings.
 
     Returns

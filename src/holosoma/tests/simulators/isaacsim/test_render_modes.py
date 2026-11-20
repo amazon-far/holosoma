@@ -23,7 +23,7 @@ import pytest
 from pydantic import ValidationError
 
 from holosoma.config_types.env import get_tyro_env_config
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_types.simulator import IsaacSimRenderConfig
 from holosoma.config_values import experiment as experiment_values
 from holosoma.config_values import simulator as sim_values
@@ -43,7 +43,7 @@ def _has_isaacsim() -> bool:
     return torch.cuda.is_available()
 
 
-def _run_config(render_config: IsaacSimRenderConfig) -> ExperimentConfig:
+def _run_config(render_config: IsaacSimRenderConfig) -> HolosomaConfig:
     simulator = dataclasses.replace(
         sim_values.sim_isaacsim,
         config=dataclasses.replace(sim_values.sim_isaacsim.config, isaacsim=render_config),

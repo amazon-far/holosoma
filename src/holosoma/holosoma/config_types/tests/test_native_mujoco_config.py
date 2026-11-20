@@ -9,7 +9,7 @@ import pytest
 import yaml
 from pydantic import TypeAdapter, ValidationError
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_types.scene import MujocoPhysicsConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
@@ -22,7 +22,7 @@ pytestmark = pytest.mark.no_sim
 
 @pytest.mark.parametrize("default", [experiment_values.sim, None], ids=["sim", "experiment"])
 @pytest.mark.parametrize("backend", ["mujoco", "mjwarp"])
-def test_shared_entrypoint_cli_yaml_and_preset_roundtrip(default: ExperimentConfig | None, backend: str) -> None:
+def test_shared_entrypoint_cli_yaml_and_preset_roundtrip(default: HolosomaConfig | None, backend: str) -> None:
     args = [
         f"simulator:{backend}",
         "--simulator.config.sim.mujoco.integrator",
@@ -41,7 +41,7 @@ def test_shared_entrypoint_cli_yaml_and_preset_roundtrip(default: ExperimentConf
             "--simulator.config.sim.mujoco.warp.graph-conditional",
             "False",
         ]
-    parsed = parse_config(ExperimentConfig, default=default, args=args)
+    parsed = parse_config(HolosomaConfig, default=default, args=args)
     native = parsed.simulator.config.sim.mujoco
     assert native.integrator == "rk4"
     assert native.iterations == 0
@@ -52,7 +52,7 @@ def test_shared_entrypoint_cli_yaml_and_preset_roundtrip(default: ExperimentConf
         assert native.warp.graph_conditional is False
     else:
         assert native.warp.nconmax_per_env is native.warp.naconmax is native.warp.graph_conditional is None
-    adapter: TypeAdapter[ExperimentConfig] = TypeAdapter(ExperimentConfig)
+    adapter: TypeAdapter[HolosomaConfig] = TypeAdapter(HolosomaConfig)
     encoded = adapter.dump_python(parsed, mode="json")
     assert parsed.to_serializable_dict() == encoded
     restored = adapter.validate_python(yaml.safe_load(yaml.safe_dump(encoded)))
@@ -89,7 +89,7 @@ def test_malformed_extra_cli_values_report_usage_errors(
     path: str, value: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     with pytest.raises(SystemExit) as error:
-        parse_config(ExperimentConfig, default=experiment_values.sim, args=["simulator:mujoco", f"--{path}", value])
+        parse_config(HolosomaConfig, default=experiment_values.sim, args=["simulator:mujoco", f"--{path}", value])
     assert error.value.code == 2
     message = capsys.readouterr().err
     assert f"--{path}" in message
@@ -208,7 +208,7 @@ def test_old_warp_capacity_location_fails_with_replacement_in_yaml_and_python() 
 def test_old_cli_path_fails_with_replacement() -> None:
     with pytest.raises(SystemExit, match=r"sim.mujoco\."):
         parse_config(
-            ExperimentConfig,
+            HolosomaConfig,
             default=experiment_values.sim,
             args=["--simulator.config.mujoco-warp.nconmax-per-env", "128"],
         )

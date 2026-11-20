@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 import yaml
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_values import experiment as experiment_values
 from holosoma.config_values.experiment import get_annotated_experiment_config
 from holosoma.utils.config_document import select_task
@@ -43,7 +43,7 @@ EQUIVALENT_CLI = [
 
 
 def _parse_sim(args: list[str], **kwargs: Any) -> Any:
-    return parse_config(ExperimentConfig, default=experiment_values.sim, args=args, **kwargs)
+    return parse_config(HolosomaConfig, default=experiment_values.sim, args=args, **kwargs)
 
 
 def _write(tmp_path: Path, content: dict[str, Any] | str, name: str = "run.yaml") -> str:
@@ -126,7 +126,7 @@ def test_json_document(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("name", "config_type", "default"),
     [
-        ("g1_lidar", ExperimentConfig, experiment_values.sim),
+        ("g1_lidar", HolosomaConfig, experiment_values.sim),
         ("g1_locomotion_train", get_annotated_experiment_config, None),
     ],
 )
@@ -200,9 +200,9 @@ def test_run_sim_is_the_holosoma_command() -> None:
 def test_document_selects_the_task_and_sets_its_fields(tmp_path: Path) -> None:
     overrides = {"task.checkpoint": "/runs/a.pt", "task.callbacks.push.config.enabled": True}
     doc = {"version": 1, "arguments": {"task": "eval", "overrides": overrides}}
-    from_document = parse_config(ExperimentConfig, args=["--config", _write(tmp_path, doc)])
+    from_document = parse_config(HolosomaConfig, args=["--config", _write(tmp_path, doc)])
     from_flags = parse_config(
-        ExperimentConfig,
+        HolosomaConfig,
         args=["task:eval", "--task.checkpoint=/runs/a.pt", "--task.callbacks.push.config.enabled=True"],
     )
     assert from_document == from_flags
@@ -251,7 +251,7 @@ def test_moved_flags_keep_working(tmp_path: Path) -> None:
     ("config_type", "default", "args"),
     [
         (
-            ExperimentConfig,
+            HolosomaConfig,
             experiment_values.sim,
             [
                 "simulator:sim-mjwarp",

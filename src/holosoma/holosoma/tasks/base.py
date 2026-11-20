@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing_extensions import Self
 
-    from holosoma.config_types.experiment import ExperimentConfig
+    from holosoma.config_types.experiment import HolosomaConfig
 
 
 class Task(ABC):
@@ -17,7 +17,7 @@ class Task(ABC):
     name: str
     """Registry name selected by ``task:<name>``."""
 
-    def __init__(self, config: ExperimentConfig, args: list[str] | None = None) -> None:
+    def __init__(self, config: HolosomaConfig, args: list[str] | None = None) -> None:
         self.config = config
         self.args = list(args or [])
         """The final CLI tokens the config was parsed from, for the run's record."""

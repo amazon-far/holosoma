@@ -137,7 +137,7 @@ Loaders may opt into joining relative values to `asset_root` with
 
 Publish an entry point under the group whose config type matches your preset. Training and inference share some group names on purpose — the type check routes each preset to the right registry.
 
-**Training (`holosoma`)** — `robot` `RobotConfig` · `simulator` `SimulatorConfig` · `terrain` `TerrainManagerCfg` · `scene` `SceneConfig` · `algo` `PPOAlgoConfig`/`FastSACAlgoConfig` · `observation` `ObservationManagerCfg` · `action` `ActionManagerCfg` · `reward` `RewardManagerCfg` · `termination` `TerminationManagerCfg` · `randomization` `RandomizationManagerCfg` · `command` `CommandManagerCfg` · `curriculum` `CurriculumManagerCfg` · `logger` `DisabledLoggerConfig`/`WandbLoggerConfig` · `plugin` `PluginConfig` · `experiment` `ExperimentConfig` (top-level `exp:`)
+**Training (`holosoma`)** — `robot` `RobotConfig` · `simulator` `SimulatorConfig` · `terrain` `TerrainManagerCfg` · `scene` `SceneConfig` · `algo` `PPOAlgoConfig`/`FastSACAlgoConfig` · `observation` `ObservationManagerCfg` · `action` `ActionManagerCfg` · `reward` `RewardManagerCfg` · `termination` `TerminationManagerCfg` · `randomization` `RandomizationManagerCfg` · `command` `CommandManagerCfg` · `curriculum` `CurriculumManagerCfg` · `logger` `DisabledLoggerConfig`/`WandbLoggerConfig` · `plugin` `PluginConfig` · `experiment` `HolosomaConfig` (top-level `exp:`)
 
 The `plugin` family runs custom per-step behavior — see [Plugins](#plugins) below.
 

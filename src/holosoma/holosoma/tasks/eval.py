@@ -10,7 +10,7 @@ import holosoma.config_values.logger
 import holosoma.config_values.run
 from holosoma.agents.base_algo.base_algo import BaseAlgo
 from holosoma.config_types.eval_callback import EvalCallbacksConfig
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_types.task import EvalTaskConfig
 from holosoma.tasks.base import Task
 from holosoma.utils.config_document import (
@@ -33,9 +33,9 @@ from holosoma.utils.helpers import get_class
 
 
 def run_eval_with_tyro(
-    tyro_config: ExperimentConfig,
+    tyro_config: HolosomaConfig,
     checkpoint_cfg: CheckpointConfig,
-    saved_config: ExperimentConfig,
+    saved_config: HolosomaConfig,
     saved_wandb_path: str | None,
     eval_cbs_cfg: EvalCallbacksConfig | None = None,
     run_args: list[str] | None = None,
@@ -54,10 +54,10 @@ def run_eval_with_tyro(
 
 def _run_eval_session(
     env: Any,
-    tyro_config: ExperimentConfig,
+    tyro_config: HolosomaConfig,
     checkpoint_cfg: CheckpointConfig,
     *,
-    saved_config: ExperimentConfig,
+    saved_config: HolosomaConfig,
     saved_wandb_path: str | None,
     eval_cbs_cfg: EvalCallbacksConfig | None,
     run_args: list[str] | None = None,
@@ -126,7 +126,7 @@ def _run_eval_session(
     )
 
 
-def _eval_config(saved: ExperimentConfig) -> ExperimentConfig:
+def _eval_config(saved: HolosomaConfig) -> HolosomaConfig:
     """``saved`` with evaluation's defaults: the interactive run (keeping the saved seed), logger off,
     deterministic spawn, no time limit.
 
@@ -190,8 +190,8 @@ class EvalTask(Task):
 
     def __init__(
         self,
-        config: ExperimentConfig,
-        saved_config: ExperimentConfig,
+        config: HolosomaConfig,
+        saved_config: HolosomaConfig,
         saved_wandb_path: str | None,
         args: list[str] | None = None,
     ) -> None:
@@ -204,7 +204,7 @@ class EvalTask(Task):
         init_eval_logging()
         args = cls.with_selection(_alias_legacy_flags(args))
         if "--print-args" in args or "--to-config" in args:
-            parse_config(ExperimentConfig, args=args)  # prints the command line or document and exits
+            parse_config(HolosomaConfig, args=args)  # prints the command line or document and exits
         # The checkpoint supplies the base config, so find it (and any simulator selection) first.
         try:
             tokens = alias_legacy_flags(expand_config_args(args))
@@ -217,7 +217,7 @@ class EvalTask(Task):
         eval_config = replace_retired_simulator(_eval_config(saved_config), tokens)
         record: list[str] = []
         config = parse_config(
-            ExperimentConfig,
+            HolosomaConfig,
             default=eval_config,
             args=args,
             record=record,

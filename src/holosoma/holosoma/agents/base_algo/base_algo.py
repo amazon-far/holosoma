@@ -10,7 +10,7 @@ from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     from holosoma.agents.callbacks.base_callback import RLEvalCallback
-    from holosoma.config_types.experiment import ExperimentConfig
+    from holosoma.config_types.experiment import HolosomaConfig
 
 
 class BaseAlgo:
@@ -35,7 +35,7 @@ class BaseAlgo:
             self.gpu_local_rank = 0
             self.gpu_world_size = 1
         self.is_main_process = self.gpu_global_rank == 0
-        self._experiment_config: ExperimentConfig | None = None
+        self._experiment_config: HolosomaConfig | None = None
         self._wandb_run_path: str | None = None
         self.eval_callbacks: list[RLEvalCallback] = []
 
@@ -63,7 +63,7 @@ class BaseAlgo:
 
     def attach_checkpoint_metadata(
         self,
-        experiment_config: ExperimentConfig,
+        experiment_config: HolosomaConfig,
         wandb_run_path: str | None = None,
     ) -> None:
         """Attach metadata that should be saved with checkpoints."""

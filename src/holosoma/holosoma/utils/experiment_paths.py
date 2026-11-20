@@ -29,9 +29,9 @@ def get_experiment_dir(
     logger_config : LoggerConfig
         Logger configuration (for ``base_dir`` and, for W&B, ``group``).
     project : str
-        Project the run is filed under (``ExperimentConfig.project``).
+        Project the run is filed under (``HolosomaConfig.project``).
     name : str
-        Name the run is filed under (``ExperimentConfig.name``).
+        Name the run is filed under (``HolosomaConfig.name``).
     timestamp : str | None
         Timestamp string. If None, generates a new one.
     task_name : str

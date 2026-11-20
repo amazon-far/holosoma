@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.tasks.base import Task
 
 if TYPE_CHECKING:
     from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
 
 
-def replay(tyro_config: ExperimentConfig) -> None:
+def replay(tyro_config: HolosomaConfig) -> None:
     with tyro_config.create_task() as task:
         env = cast("WholeBodyTrackingManager", task)
         done = False

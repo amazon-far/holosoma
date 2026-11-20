@@ -42,7 +42,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 import tyro
 
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_types.scene import RigidObjectConfig, SceneConfig
 from holosoma.config_values import experiment as experiment_values
 from holosoma.simulator.shared.object_registry import ObjectType
@@ -79,7 +79,7 @@ def _build(simulator: str, num_envs: int):
     from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 
     argv = [f"simulator:sim-{simulator}", "robot:g1-29dof", "terrain:terrain_locomotion_plane", "scene:empty"]
-    config = tyro.cli(ExperimentConfig, default=experiment_values.sim, args=argv)
+    config = tyro.cli(HolosomaConfig, default=experiment_values.sim, args=argv)
     sim_cfg = dataclasses.replace(
         config.simulator,
         config=dataclasses.replace(

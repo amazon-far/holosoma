@@ -62,7 +62,7 @@ class NightlyConfig:
 
 # Unknown fields are rejected, so code still passing a moved or removed field fails loudly.
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class ExperimentConfig:
+class HolosomaConfig:
     """Top-level configuration for every workflow; ``task`` selects the workflow."""
 
     task: Annotated[TaskConfigType, UseRegistry(holosoma.config_values.task.TASK_REGISTRY)] = (
@@ -133,7 +133,7 @@ class ExperimentConfig:
     )
     nightly: NightlyConfig | None = None
 
-    def get_nightly_config(self) -> ExperimentConfig:
+    def get_nightly_config(self) -> HolosomaConfig:
         if self.nightly is None:
             raise ValueError("nightly config is missing.")
 
@@ -168,3 +168,7 @@ class ExperimentConfig:
         # Directly using yaml.safe_dump does not handle string enums properly,
         # so round-trip through JSON to coerce typing objects into primitives.
         return cast("dict[str, Any]", json.loads(json.dumps(dataclasses.asdict(self))))
+
+
+ExperimentConfig = HolosomaConfig
+"""Deprecated name for ``HolosomaConfig``."""

@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 # CONFIG_NAME is "holosoma_config.yaml" - the primary configuration file for Holosoma
 # This file contains all settings for training and evaluation of models
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import HolosomaConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.file_cache import get_cached_file_path
@@ -66,12 +66,12 @@ class CheckpointConfig:
     """Path to a local checkpoint file, or W&B URI in the format `wandb://<entity>/<project>/<run_id>[/<checkpoint_name>]`."""
 
 
-def load_saved_experiment_config(checkpoint_cfg: CheckpointConfig) -> tuple[ExperimentConfig, str | None]:
+def load_saved_experiment_config(checkpoint_cfg: CheckpointConfig) -> tuple[HolosomaConfig, str | None]:
     """Load checkpoint configuration from either W&B run or local checkpoint.
 
     Returns
     -------
-    (ExperimentConfig, str | None)
+    (HolosomaConfig, str | None)
         Loaded experiment config and the originating wandb run path, if available.
     """
 
@@ -99,15 +99,15 @@ def load_saved_experiment_config(checkpoint_cfg: CheckpointConfig) -> tuple[Expe
         return _experiment_config_from_saved(yaml.safe_load(f)), wandb_run_path
 
 
-def _load_config_from_checkpoint(checkpoint_path: Path) -> tuple[ExperimentConfig, str | None]:
-    """Attempt to load the serialized ExperimentConfig from a checkpoint file."""
+def _load_config_from_checkpoint(checkpoint_path: Path) -> tuple[HolosomaConfig, str | None]:
+    """Attempt to load the serialized HolosomaConfig from a checkpoint file."""
 
     checkpoint_contents = torch.load(checkpoint_path, map_location="cpu")
     config_data = checkpoint_contents["experiment_config"]
     return _experiment_config_from_saved(config_data), checkpoint_contents.get("wandb_run_path")
 
 
-def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConfig:
+def _experiment_config_from_saved(config_data: dict[str, Any]) -> HolosomaConfig:
     """Transition historical saved fields; CLI/YAML inputs keep the current schema."""
     data = _drop_retired_isaacgym_fields(config_data)
     simulator = data.get("simulator", {}).get("config", {})
@@ -151,18 +151,18 @@ def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConf
         if "name" in saved_logger:
             saved_logger.setdefault("display_name", saved_logger.pop("name"))
         data["logger"] = saved_logger
-    # ExperimentConfig rejects unknown fields; a saved file may carry fields this version dropped.
-    known = {field.name for field in dataclasses.fields(ExperimentConfig)}
+    # HolosomaConfig rejects unknown fields; a saved file may carry fields this version dropped.
+    known = {field.name for field in dataclasses.fields(HolosomaConfig)}
     unknown = sorted(set(data) - known)
     if unknown:
         logger.warning(f"Ignoring saved config fields this version does not have: {', '.join(unknown)}")
-    return ExperimentConfig(**{key: value for key, value in data.items() if key in known})
+    return HolosomaConfig(**{key: value for key, value in data.items() if key in known})
 
 
 _RUN_FIELDS = ("num_envs", "headless", "seed", "torch_deterministic")
 
 
-def replace_retired_simulator(eval_cfg: ExperimentConfig, args: list[str]) -> ExperimentConfig:
+def replace_retired_simulator(eval_cfg: HolosomaConfig, args: list[str]) -> HolosomaConfig:
     """Swap a saved Isaac Gym simulator for the one a ``simulator:<name>`` CLI token selects.
 
     tyro attaches a default that matches no registered preset to the most similar one, so a saved

@@ -284,7 +284,7 @@ def _resolve_config(config: Any) -> Any:
 def _root_subcommand_default(config_type: Any, argv: list[str]) -> Any:
     """Return the preset selected by a root-level subcommand token in ``argv``, if any.
 
-    A root alias like ``Annotated[ExperimentConfig, tyro.conf.arg(constructor=
+    A root alias like ``Annotated[HolosomaConfig, tyro.conf.arg(constructor=
     subcommand_type_from_defaults({'exp:name': preset, ...}))]`` carries each preset as
     the ``default`` of a ``tyro.conf.subcommand`` on the union members. When argv picks
     one (e.g. ``exp:g1-29dof-wbt``), that preset — not a bare instance — is the correct
