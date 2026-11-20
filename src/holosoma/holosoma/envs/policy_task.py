@@ -164,7 +164,6 @@ class PolicyTask(BaseTask):
         self.curriculum_manager.reset(env_ids)
 
     def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
-        self.command_manager.after_reset(env_ids)
         self._pre_compute_observations_callback()
 
     def reset_all(self) -> dict[str, Any]:

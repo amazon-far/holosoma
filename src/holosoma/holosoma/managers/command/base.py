@@ -40,9 +40,6 @@ class CommandTermBase(ABC):
     def step(self) -> None:
         """Per-step hook called during simulation rollout."""
 
-    def after_reset(self, env_ids: Tensor) -> None:  # noqa: B027
-        """Hook called after reset writes are synchronized, before observations are computed."""
-
     def on_evaluate(self) -> None:  # noqa: B027
         """Hook called once when the task switches to evaluation."""
 

@@ -791,6 +791,9 @@ class MotionCommand(CommandTermBase):
             # 4.3 set the object states in simulator
             self._env.simulator.set_actor_states([self.object_name], env_ids, object_states)
 
+        # A reset does not step, so refresh the targets the observations and terminations read.
+        self.update_relative_body_targets()
+
     def step(self) -> None:
         """Advance the clip once per control frame, after rewards and resets and before observations."""
         # 0. update time steps, all motion joint/body poses are updated automatically with the time steps.
@@ -826,10 +829,6 @@ class MotionCommand(CommandTermBase):
         ### must not decay/fold failure stats into the training sampler).
         if self.motion_cfg.use_adaptive_timesteps_sampler and not self._env.is_evaluating:
             self.adaptive_timesteps_sampler.update_bin_failed_count()
-
-    def after_reset(self, env_ids: torch.Tensor) -> None:
-        # A reset does not step, so refresh the targets the observations and terminations read.
-        self.update_relative_body_targets()
 
     def log_metrics(self) -> dict[str, Any]:
         self.update_metrics()

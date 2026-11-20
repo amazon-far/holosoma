@@ -176,10 +176,6 @@ class CommandManager:
     def _instances(self) -> list[CommandTermBase]:
         return list(dict.fromkeys(entry["instance"] for entry in self._class_entries))
 
-    def after_reset(self, env_ids: Tensor) -> None:
-        for term in self._instances():
-            term.after_reset(env_ids)
-
     def on_evaluate(self) -> None:
         for term in self._instances():
             term.on_evaluate()
