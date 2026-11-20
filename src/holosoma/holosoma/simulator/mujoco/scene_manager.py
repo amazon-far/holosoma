@@ -98,7 +98,7 @@ class MujocoSceneManager:
         """
         # TODO: expose to Mujoco-specific config
         self.world_spec.option.gravity = [0, 0, -9.81]
-        self.world_spec.option.timestep = 1.0 / simulator_config.sim.fps  # type: ignore[attr-defined]
+        self.world_spec.option.timestep = 1.0 / simulator_config.sim.fps
 
     def add_materials(self) -> None:
         """Add standard materials and textures to the world specification.
