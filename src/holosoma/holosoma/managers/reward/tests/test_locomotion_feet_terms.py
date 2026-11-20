@@ -47,6 +47,10 @@ class _StubSimulator:
         upper = 0.5 + torch.rand(NUM_DOF, generator=gen)
         self.dof_pos_limits = torch.stack([lower, upper], dim=1)
 
+    def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        unused = torch.zeros(NUM_DOF)
+        return self.dof_pos_limits, unused, unused
+
 
 class _StubEnv:
     def __init__(self, seed: int = 0) -> None:

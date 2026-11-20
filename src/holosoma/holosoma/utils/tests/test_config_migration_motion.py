@@ -108,6 +108,7 @@ def test_sparse_motion_params_preserve_reset_clamp_after_checkpoint_load(
         robot_root_states=torch.zeros(2, 13),
         scene=SimpleNamespace(env_origins=torch.zeros(2, 3)),
     )
+    simulator.get_dof_limits_properties = lambda: (simulator.dof_pos_limits, torch.zeros(count), torch.zeros(count))
     env: Any = SimpleNamespace(
         robot_config=config.robot,
         simulator=simulator,
