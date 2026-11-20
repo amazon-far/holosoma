@@ -14,13 +14,17 @@ from holosoma.managers.curriculum.base import CurriculumTermBase
 
 
 class AverageEpisodeLengthTracker(CurriculumTermBase):
-    """Track moving average of episode length for locomotion tasks."""
+    """Track moving average of episode length for locomotion tasks.
+
+    The averaging window is ``num_compute_average_epl`` episodes, scaled by ``num_envs / base_num_envs``
+    when ``base_num_envs`` is given.
+    """
 
     def __init__(self, cfg: Any, env: Any) -> None:
         super().__init__(cfg, env)
         params = cfg.params or {}
         base_num_compute_average_epl = float(params.get("num_compute_average_epl", 1000))
-        base_denominator = getattr(env, "BASE_NUM_ENVS", env.num_envs)
+        base_denominator = float(params.get("base_num_envs", env.num_envs))
         self.num_compute_average_epl = max(1, int(base_num_compute_average_epl * env.num_envs / base_denominator))
         self.average_episode_length = torch.tensor(0.0, device=env.device, dtype=torch.float)
         self._suppress_next_update = False

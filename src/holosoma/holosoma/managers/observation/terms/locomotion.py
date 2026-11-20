@@ -148,8 +148,6 @@ def sin_phase(env: PolicyTask) -> torch.Tensor:
 
     Returns:
         Tensor of shape [num_envs, 1]
-
-    Note: Requires env to have 'phase' attribute (e.g., PolicyTask)
     """
     gait_state = env.command_manager.get_state("locomotion_gait")
     if gait_state is None:
@@ -166,8 +164,6 @@ def cos_phase(env: PolicyTask) -> torch.Tensor:
 
     Returns:
         Tensor of shape [num_envs, 1]
-
-    Note: Requires env to have 'phase' attribute (e.g., PolicyTask)
     """
     gait_state = env.command_manager.get_state("locomotion_gait")
     if gait_state is None:

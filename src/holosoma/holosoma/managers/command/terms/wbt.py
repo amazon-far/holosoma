@@ -536,6 +536,8 @@ def get_filtered_body_names(body_list: list[str], pattern: str) -> list[str]:
 
 
 class MotionCommand(CommandTermBase):
+    resets_robot = True
+
     def __init__(self, cfg: Any, env: PolicyTask):
         super().__init__(cfg, env)
 
@@ -826,8 +828,6 @@ class MotionCommand(CommandTermBase):
         ### must not decay/fold failure stats into the training sampler).
         if self.motion_cfg.use_adaptive_timesteps_sampler and not self._env.is_evaluating:
             self.adaptive_timesteps_sampler.update_bin_failed_count()
-
-    resets_robot = True
 
     def after_reset(self, env_ids: torch.Tensor) -> None:
         # A reset does not step, so refresh the targets the observations and terminations read.

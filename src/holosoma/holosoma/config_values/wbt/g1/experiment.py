@@ -16,6 +16,11 @@ from holosoma.config_values import (
     terrain,
 )
 
+_terrain = replace(
+    terrain.terrain_locomotion_plane,
+    terrain_term=replace(terrain.terrain_locomotion_plane.terrain_term, measure_heights=False),
+)
+
 g1_29dof_wbt = ExperimentConfig(
     training=TrainingConfig(
         project="WholeBodyTracking",
@@ -61,7 +66,7 @@ g1_29dof_wbt = ExperimentConfig(
         asset=replace(robot.g1_29dof.asset, enable_self_collisions=True),
         init_state=replace(robot.g1_29dof.init_state, pos=[0.0, 0.0, 0.76]),
     ),
-    terrain=terrain.terrain_locomotion_plane,
+    terrain=_terrain,
     observation=observation.g1_29dof_wbt_observation,
     action=action.g1_29dof_joint_pos,
     termination=termination.g1_29dof_wbt_termination,
@@ -126,7 +131,7 @@ g1_29dof_wbt_fast_sac = ExperimentConfig(
         asset=replace(robot.g1_29dof.asset, enable_self_collisions=True),
         init_state=replace(robot.g1_29dof.init_state, pos=[0.0, 0.0, 0.76]),
     ),
-    terrain=terrain.terrain_locomotion_plane,
+    terrain=_terrain,
     observation=observation.g1_29dof_wbt_observation,
     action=action.g1_29dof_joint_pos,
     termination=termination.g1_29dof_wbt_termination,

@@ -20,6 +20,7 @@ from holosoma.simulator import mujoco_required_field
 from holosoma.simulator.shared.field_decorators import MUJOCO_FIELD_ATTR
 from holosoma.utils.sampler import DistributionLike, DistributionSpec, TermSampler
 from holosoma.utils.simulator_config import SimulatorType
+from holosoma.utils.torch_utils import torch_rand_float
 
 
 def _get_joint_action_term(env: Any) -> JointPositionActionTerm | None:
@@ -72,9 +73,6 @@ class PushRandomizerState(RandomizationTermBase):
         self.push_interval_s: torch.Tensor | None = None
         self.push_robot_counter: torch.Tensor | None = None
         self.push_robot_plot_counter: torch.Tensor | None = None
-        self.push_robot_vel_buf = torch.zeros(
-            env.num_envs, self._max_push_vel_tensor.numel(), dtype=torch.float, device=env.device
-        )
 
     def setup(self, sampler: TermSampler) -> None:
         env = self.env
@@ -153,14 +151,12 @@ class PushRandomizerState(RandomizationTermBase):
             return
         n = self._max_push_vel_tensor.numel()
         rand = torch.rand(len(env_ids), n, device=self.env.device) * 2 - 1
-        if self.push_robot_vel_buf.shape[1] != n:
-            self.push_robot_vel_buf = torch.zeros(self.env.num_envs, n, dtype=torch.float, device=self.env.device)
-        self.push_robot_vel_buf[env_ids] = rand * self._max_push_vel_tensor.unsqueeze(0)
+        push_vel = rand * self._max_push_vel_tensor.unsqueeze(0)
         root_states = self.env.simulator.robot_root_states
         if self.additive:
-            root_states[env_ids, 7 : 7 + n] += self.push_robot_vel_buf[env_ids]
+            root_states[env_ids, 7 : 7 + n] += push_vel
         else:
-            root_states[env_ids, 7 : 7 + n] = self.push_robot_vel_buf[env_ids]
+            root_states[env_ids, 7 : 7 + n] = push_vel
 
     def _resample_intervals(self, env_ids: torch.Tensor, sampler: TermSampler) -> None:
         if self.push_interval_s is None:
@@ -364,8 +360,6 @@ def randomize_spawn(
     The offset follows the terrain's ``spawn`` settings (``xy_offset_range``, ``query_terrain_height``).
     Put it first in ``reset_terms`` so later reset terms see the spawned state.
     """
-    from holosoma.utils.torch_utils import torch_rand_float
-
     idx = _ensure_env_ids_tensor(env, env_ids)
     if idx.numel() == 0:
         return

@@ -118,20 +118,35 @@ def _fold_task_subclass(data: dict[str, Any]) -> dict[str, Any]:
     if env_class not in (_LOCOMOTION_CLASS, _WBT_CLASS):
         return data
     data["env_class"] = _POLICY_TASK_CLASS
-    randomization = data.get("randomization")
-    if not isinstance(randomization, dict):
-        return data
     if env_class == _LOCOMOTION_CLASS:
-        reset_terms = randomization.get("reset_terms") or {}
-        if "randomize_spawn" not in reset_terms:
-            spawn = {"func": "holosoma.managers.randomization.terms.locomotion:randomize_spawn", "params": {}}
-            randomization["reset_terms"] = {"randomize_spawn": spawn, **reset_terms}
+        randomization = data.get("randomization")
+        if isinstance(randomization, dict):
+            reset_terms = randomization.get("reset_terms") or {}
+            if "randomize_spawn" not in reset_terms:
+                spawn = {"func": "holosoma.managers.randomization.terms.locomotion:randomize_spawn", "params": {}}
+                randomization["reset_terms"] = {"randomize_spawn": spawn, **reset_terms}
+        for term in _terms_named(data.get("curriculum"), ":AverageEpisodeLengthTracker"):
+            term["params"] = {"base_num_envs": 4096, **(term.get("params") or {})}
     else:
-        for terms in randomization.values():
-            for term in (terms or {}).values() if isinstance(terms, dict) else ():
-                if isinstance(term, dict) and str(term.get("func", "")).endswith(":PushRandomizerState"):
-                    term["params"] = {**(term.get("params") or {}), "additive": True}
+        for term in _terms_named(data.get("randomization"), ":PushRandomizerState"):
+            term["params"] = {**(term.get("params") or {}), "additive": True}
+        terrain_term = (data.get("terrain") or {}).get("terrain_term")
+        if isinstance(terrain_term, dict):
+            terrain_term.setdefault("measure_heights", False)
     return data
+
+
+def _terms_named(manager: Any, func_suffix: str) -> list[dict[str, Any]]:
+    """Saved term dicts in a manager config whose ``func`` ends with ``func_suffix``."""
+    if not isinstance(manager, dict):
+        return []
+    return [
+        term
+        for terms in manager.values()
+        if isinstance(terms, dict)
+        for term in terms.values()
+        if isinstance(term, dict) and str(term.get("func", "")).endswith(func_suffix)
+    ]
 
 
 def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConfig:

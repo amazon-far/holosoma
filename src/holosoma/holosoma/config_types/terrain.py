@@ -170,6 +170,10 @@ class TerrainTermCfg:
     spawn: SpawnCfg = field(default_factory=SpawnCfg)
     """Spawn behavior configuration."""
 
+    measure_heights: bool = True
+    """Raycast the base and foot heights above the terrain before each observation step. The locomotion
+    base-height and feet-phase rewards read them."""
+
     # Dictionary keys must match terrain generation function names (without '_terrain_func' suffix)
     # See terrain.py for available terrain types and their corresponding functions
     terrain_config: dict[str, float] = field(default_factory=dict)

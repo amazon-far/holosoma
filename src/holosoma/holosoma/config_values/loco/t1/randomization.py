@@ -71,8 +71,7 @@ t1_29dof_randomization = RandomizationManagerCfg(
     },
     reset_terms={
         "randomize_spawn": RandomizationTermCfg(
-            func="holosoma.managers.randomization.terms.locomotion:randomize_spawn",
-            params={},
+            func="holosoma.managers.randomization.terms.locomotion:randomize_spawn"
         ),
         "push_randomizer_state": RandomizationTermCfg(
             func="holosoma.managers.randomization.terms.locomotion:PushRandomizerState"

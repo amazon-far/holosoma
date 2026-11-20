@@ -28,9 +28,6 @@ _LEGACY_CHECKPOINT_REMOVAL_DATE = datetime.date(2027, 3, 1)
 class PolicyTask(BaseTask):
     """BaseTask specialization for policy training and evaluation."""
 
-    BASE_NUM_ENVS = 4096
-    """Env count the curriculum terms' per-env rates are normalized to."""
-
     def __init__(self, tyro_config: EnvConfig) -> None:
         for name in ("observation", "action", "reward", "termination", "command", "curriculum"):
             if getattr(tyro_config, name) is None:
