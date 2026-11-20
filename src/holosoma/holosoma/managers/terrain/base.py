@@ -70,9 +70,11 @@ class TerrainTermBase(ABC):
     def feet_heights(self) -> torch.Tensor:
         """Feet heights."""
 
-    @abstractmethod
-    def update_heights(self, env_ids: torch.Tensor | None = None) -> None:
-        """Update the base and feet heights."""
+    def update_base_heights(self, env_ids: torch.Tensor | None = None) -> None:  # noqa: B027
+        """Raycast the base heights for the robot's current pose."""
+
+    def update_feet_heights(self, env_ids: torch.Tensor | None = None) -> None:  # noqa: B027
+        """Raycast the feet heights for the robot's current pose."""
 
     @abstractmethod
     def draw_debug_viz(self) -> None:

@@ -320,8 +320,8 @@ class PolicyTask(BaseTask):
     # Hooks for subclasses
 
     def _pre_compute_observations_callback(self) -> None:
-        """Hook invoked after physics but before observation terms compute: refresh terrain heights."""
-        self.terrain_manager.update_heights()
+        """Hook invoked after physics but before observation terms compute (no-op by default)."""
+        return
 
     def _update_log_dict(self) -> None:
         """Append per-frame metrics to ``log_dict``: the average episode length when tracked, and command metrics."""

@@ -130,9 +130,6 @@ def _fold_task_subclass(data: dict[str, Any]) -> dict[str, Any]:
     else:
         for term in _terms_named(data.get("randomization"), ":PushRandomizerState"):
             term["params"] = {**(term.get("params") or {}), "additive": True}
-        terrain_term = (data.get("terrain") or {}).get("terrain_term")
-        if isinstance(terrain_term, dict):
-            terrain_term.setdefault("measure_heights", False)
     return data
 
 

@@ -655,4 +655,3 @@ def test_saved_task_subclass_configs_load_onto_policy_task_with_the_terms_that_r
     assert loaded.curriculum is not None
     tracker = loaded.curriculum.setup_terms["average_episode_tracker"]
     assert ("base_num_envs" in tracker.params) is spawn
-    assert loaded.terrain.terrain_term.measure_heights is spawn
