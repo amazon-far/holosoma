@@ -70,8 +70,9 @@ The command line applies on top of a starting config that each config type build
 - **Simulate.** The sim-to-sim defaults: `mujoco-sim2sim` with the bridge and virtual gantry on, and
   one env in the viewer at real time. With `exp:<preset>`, it is that experiment's world on the
   sim-to-sim variant of its simulator.
-  - The experiment's randomization and terminations are dropped, since they act on the policy's
-    managers.
+  - The experiment's randomization and terminations are kept. Terms that act on a policy's
+    managers (actuator gains, action delay, motion terminations) need `randomization:none` /
+    `termination:none` or a preset without them.
 - **Replay.** The `exp:` preset's world with kinematic playback on, and the motion its motion
   command tracks. It plays once in the viewer at real time, then stops.
   - The experiment's randomization and terminations are dropped, since playback is kinematic.

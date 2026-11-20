@@ -87,7 +87,10 @@ def test_simulation_base_puts_the_experiment_world_on_its_sim2sim_simulator() ->
 
     assert base.robot == experiment.g1_29dof.robot
     assert base.simulator.config.bridge.enabled and base.simulator.config.virtual_gantry.enabled
-    assert (base.randomization, base.termination) == (None, None)
+    assert (base.randomization, base.termination) == (
+        experiment.g1_29dof.randomization,
+        experiment.g1_29dof.termination,
+    )
     assert (base.run.num_envs, base.run.project) == (1, experiment.g1_29dof.run.project)
 
 

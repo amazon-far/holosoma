@@ -125,21 +125,12 @@ class SimulationExperimentConfig(ExperimentConfig):
 
     @classmethod
     def base(cls, first: Self, exp: TrainingExperimentConfig | None) -> Self:  # noqa: ARG003
-        """The simulation defaults, or ``exp``'s world on the sim-to-sim variant of its simulator.
-
-        The experiment's randomization and termination terms are dropped: they act on the policy's
-        managers, which a simulation has none of.
-        """
+        """The simulation defaults, or ``exp``'s world on the sim-to-sim variant of its simulator."""
         default = cls()
         if exp is None:
             return default
         simulator = holosoma.config_values.simulator.sim2sim(exp.simulator)
-        env = {
-            **part_fields(EnvironmentConfig, exp),
-            "simulator": simulator,
-            "randomization": None,
-            "termination": None,
-        }
+        env = {**part_fields(EnvironmentConfig, exp), "simulator": simulator}
         run = dataclasses.replace(default.run, project=exp.run.project, name=exp.run.name)
         return cls(**env, run=run)
 
