@@ -94,15 +94,6 @@ def native_masses(sim, backend):
         import warp as wp
 
         return wp.to_torch(sim.backend.mjw_model.body_mass)[:, ids].cpu().clone()
-    if backend == "isaacgym":
-        ids = [sim.gym.get_asset_rigid_body_names(sim.robot_asset).index(name) for name in names]
-        return torch.tensor(
-            [
-                [props[i].mass for i in ids]
-                for env, handle in zip(sim.envs, sim.robot_handles, strict=False)
-                for props in [sim.gym.get_actor_rigid_body_properties(env, handle)]
-            ]
-        )
     ids = [sim._robot.body_names.index(name) for name in names]
     return sim._robot.root_physx_view.get_masses()[:, ids].cpu().clone()
 
@@ -191,18 +182,6 @@ def check_dynamics_views(sim, backend):
             forces = wp.to_torch(sim.backend.mjw_data.actuator_force)[:, motors]
             accelerations = wp.to_torch(sim.backend.mjw_data.qacc)[:, model.jnt_dofadr[joints].tolist()]
         torch.testing.assert_close(sim.dof_acc[:], accelerations)
-    elif backend == "isaacgym":
-        from isaacgym import gymtorch
-
-        joints = [sim.gym.get_asset_dof_names(sim.robot_asset).index(name) for name in JOINTS]
-        bodies = [sim.gym.get_asset_rigid_body_names(sim.robot_asset).index(name) for name in BODIES]
-        forces = gymtorch.wrap_tensor(sim.gym.acquire_dof_force_tensor(sim.sim)).view(sim.num_envs, -1)[:, joints]
-        actor_name = sim.robot_config.asset.robot_type
-        native_jacobian = gymtorch.wrap_tensor(sim.gym.acquire_jacobian_tensor(sim.sim, actor_name))
-        native_mass = gymtorch.wrap_tensor(sim.gym.acquire_mass_matrix_tensor(sim.sim, actor_name))
-        # The fixed root has no Jacobian row; every remaining row and column uses config order.
-        torch.testing.assert_close(sim.jacobian, native_jacobian[:, [b - 1 for b in bodies if b != 0]][..., joints])
-        torch.testing.assert_close(sim.massmatrix, native_mass[:, joints][:, :, joints])
     else:
         joints = [sim._robot.joint_names.index(name) for name in JOINTS]
         forces = sim._robot.data.applied_torque[:, joints]
@@ -213,7 +192,7 @@ def check_dynamics_views(sim, backend):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     args = parser.parse_args()
     sim, app = build(args.simulator)  # keep the SimulationApp alive through the checks
     import torch

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -20,10 +20,12 @@ from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.logger import DisabledLoggerConfig
 from holosoma.config_values import experiment, simulator
 from holosoma.managers.command.terms.wbt import MotionCommand
-from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 from holosoma.utils.common import seeding
 from holosoma.utils.name_tags import expand_name_spec
 from holosoma.utils.safe_torch_import import torch
+
+if TYPE_CHECKING:
+    from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 
 pytest.importorskip("mujoco")
 
