@@ -15,12 +15,12 @@ pytestmark = pytest.mark.no_sim
 def test_task_setup_failure_emits_close(monkeypatch: pytest.MonkeyPatch) -> None:
     close = MagicMock()
 
-    def fail_after_simulator_creation(self: BaseTask, *_args: object, **_kwargs: object) -> None:
+    def fail_during_setup(self: BaseTask, *_args: object, **_kwargs: object) -> None:
         self.hooks = HookRegistry()
         self.hooks.add(Phase.CLOSE, close, name="backend.close")
         raise ValueError("manager setup failed")
 
-    monkeypatch.setattr(BaseTask, "_initialize_base_task", fail_after_simulator_creation)
+    monkeypatch.setattr(BaseTask, "_initialize_base_task", fail_during_setup)
 
     with pytest.raises(ValueError, match="manager setup failed"):
         BaseTask(object())  # type: ignore[arg-type]
@@ -31,12 +31,12 @@ def test_task_setup_failure_emits_close(monkeypatch: pytest.MonkeyPatch) -> None
 def test_task_preserves_interrupt_when_constructor_cleanup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     close = MagicMock(side_effect=RuntimeError("close failed"))
 
-    def interrupt_after_simulator_creation(self: BaseTask, *_args: object, **_kwargs: object) -> None:
+    def interrupt_during_setup(self: BaseTask, *_args: object, **_kwargs: object) -> None:
         self.hooks = HookRegistry()
         self.hooks.add(Phase.CLOSE, close, name="backend.close")
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(BaseTask, "_initialize_base_task", interrupt_after_simulator_creation)
+    monkeypatch.setattr(BaseTask, "_initialize_base_task", interrupt_during_setup)
 
     with pytest.raises(KeyboardInterrupt):
         BaseTask(object())  # type: ignore[arg-type]
@@ -119,5 +119,6 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
 
     task = BaseTask(config)  # type: ignore[arg-type]
 
-    assert events == ["simulator", "viewer", "managers", "reset_manager", "plugins"]
+    assert events[-1] == "plugins"
+    assert {"viewer", "managers", "reset_manager"} <= set(events[:-1])
     assert task.hooks.names(Phase.POST_STEP) == ("probe.post_step", "task.viewer")

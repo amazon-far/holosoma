@@ -117,7 +117,7 @@ def _check_playback(task, tmp: Path, cfg, result_file: str | None) -> int:
         if not ok:
             failures.append(name)
 
-    task.reset_all()
+    task.reset_envs_idx()
     # Engine clock may have accrued time during scene setup; the invariant is that it does not
     # advance during PLAYBACK frames (strict-FK backends never step physics there).
     engine_t0 = sim._physics_time()

@@ -53,7 +53,7 @@ def _playback_task(tmp_path, num_dof, *, ramp: bool = False, seconds: float = 0.
     clip = _write_clip(tmp_path, num_dof, frames=frames, ramp=ramp)
     cfg = MotionPlaybackPluginConfig(motion_files=[str(clip)], fps=control_hz)
     with classic_run_sim_config(plugin={"play": cfg}, kinematic_playback=True).create_task() as task:
-        task.reset_all()
+        task.reset_envs_idx()
         yield task, frames
 
 
