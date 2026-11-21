@@ -42,19 +42,7 @@ class LeggedRobotLocomotionManager(PolicyTask):
         self._max_push_vel = torch.zeros(2, dtype=torch.float32, device=self.device)
 
     def _setup_robot_body_indices(self) -> None:
-        super()._setup_robot_body_indices()
-        foot_body_names = [s for s in self.body_names if self.robot_config.foot_body_name in s]
-        foot_height_names = [s for s in self.body_names if self.robot_config.foot_height_name in s]
-
-        self.feet_indices = torch.zeros(len(foot_body_names), dtype=torch.long, device=self.device, requires_grad=False)
-        for i, name in enumerate(foot_body_names):
-            self.feet_indices[i] = self.simulator.find_rigid_body_indice(name)
-
-        self.feet_height_indices = torch.zeros(
-            len(foot_height_names), dtype=torch.long, device=self.device, requires_grad=False
-        )
-        for i, name in enumerate(foot_height_names):
-            self.feet_height_indices[i] = self.simulator.find_rigid_body_indice(name)
+        """Body selections belong to the consuming terms."""
 
     def set_is_evaluating(self, command: Any = None) -> None:
         logger.info("Setting Env is evaluating")
@@ -166,6 +154,8 @@ class LeggedRobotLocomotionManager(PolicyTask):
 
     def _randomize_spawn(self, env_ids: torch.Tensor) -> None:
         """Offset the default spawn on custom-origin terrains and randomize the base velocity."""
+        if self.robot_config.asset.fix_base_link:
+            return
         # Apply randomized XY offset if custom_origins
         if self.terrain_manager.get_state("locomotion_terrain").custom_origins:
             # Get spawn config from terrain term
@@ -188,7 +178,7 @@ class LeggedRobotLocomotionManager(PolicyTask):
                     grid_size=spawn_cfg.grid_size,
                     grid_spacing=spawn_cfg.grid_spacing,
                 )
-                robot_base_height = self.robot_config.init_state.pos[2]  # Robot base height above ground
+                robot_base_height = self.robot_config.init_state.position[2]  # Robot base height above ground
                 new_z = terrain_heights + robot_base_height
 
                 # Write new XYZ position all at once

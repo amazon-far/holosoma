@@ -130,9 +130,7 @@ def main() -> int:
     origins[:, 1] = -2.0
     origins[:, 2] = 0.25 + ids * 0.25
     init = config.robot.init_state
-    base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
-    )
+    base_init = torch.tensor(init.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(args.num_envs, origins, base_init)
     sim.prepare_sim()
     assert sim.sensor_manager is manager, "native setup replaced the public registry"

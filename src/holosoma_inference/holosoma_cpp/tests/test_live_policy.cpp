@@ -702,5 +702,15 @@ TEST(WbtPolicyHeading, TorsoHeadingUsesFkForRobotAndReferenceAndResets) {
 }
 
 }  // namespace
+
+TEST(WbtRobotConfig, CurrentDefaultsAndAsymmetricActionClipReachThePolicy) {
+  holosoma::live::WbtPolicy policy;
+  ASSERT_TRUE(policy.Initialize(Model("current_asymmetric_clip.onnx")));
+  std::array<float, kActionDim> action{};
+  ASSERT_TRUE(policy.ComputeAction(Obs(), Sequence(1, 10), action.data()));
+  for (int i = 0; i < kActionDim; ++i) EXPECT_FLOAT_EQ(policy.LastClippedAction()[i], i % 2 ? -5.0f : 10.0f);
+  EXPECT_FALSE(policy.Initialize(Model("current_invalid_clip.onnx")));
+}
+
 }  // namespace live
 }  // namespace holosoma

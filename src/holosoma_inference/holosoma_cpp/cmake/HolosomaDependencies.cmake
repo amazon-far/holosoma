@@ -91,25 +91,37 @@ if(NOT ONNXRuntime_FOUND)
   _holosoma_require_fetch("ONNX Runtime ${HOLOSOMA_ONNXRUNTIME_VERSION}")
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
     set(_ort_platform linux-x64)
-    set(_ort_sha a5ed5a3cac51fbb2e90da632ae43d19212faaa20e76484e62bcb7c23ddb3b3fd)
+    set(_ort_nuget_runtime linux-x64)
   elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
     set(_ort_platform linux-aarch64)
-    set(_ort_sha e16a27a8ed330bbc698df7330b0cf56e722f354e3bcc92118682c74ef3c3e3da)
+    set(_ort_nuget_runtime linux-arm64)
   elseif(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
     set(_ort_platform osx-arm64)
-    set(_ort_sha 6ebb5062a934537c352937821f9fe9718e7de1a2db1122a93dd363ffd53a7012)
+    set(_ort_nuget_runtime osx-arm64)
   else()
     message(FATAL_ERROR "No prebuilt ONNX Runtime for ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}; set ONNXRUNTIME_ROOT.")
   endif()
-  set(_ort_url_hash)
   if(HOLOSOMA_ONNXRUNTIME_VERSION STREQUAL "1.30.0")
-    set(_ort_url_hash URL_HASH SHA256=${_ort_sha})
+    # This release publishes the native SDK through NuGet rather than GitHub tarballs.
+    FetchContent_Declare(onnxruntime_prebuilt
+      URL https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.30.0/microsoft.ml.onnxruntime.1.30.0.nupkg
+      DOWNLOAD_NAME onnxruntime-1.30.0.zip
+      URL_HASH SHA256=30df119bd9164eaa187666d93147448fdd4a9a1a3caf83f1505daf7af2d1c5d2)
+  else()
+    FetchContent_Declare(onnxruntime_prebuilt
+      URL https://github.com/microsoft/onnxruntime/releases/download/v${HOLOSOMA_ONNXRUNTIME_VERSION}/onnxruntime-${_ort_platform}-${HOLOSOMA_ONNXRUNTIME_VERSION}.tgz)
   endif()
-  FetchContent_Declare(onnxruntime_prebuilt
-    URL https://github.com/microsoft/onnxruntime/releases/download/v${HOLOSOMA_ONNXRUNTIME_VERSION}/onnxruntime-${_ort_platform}-${HOLOSOMA_ONNXRUNTIME_VERSION}.tgz
-    ${_ort_url_hash})
-  # The release tarball has no CMakeLists.txt, so this only downloads and unpacks it.
+  # The native SDK has no CMakeLists.txt, so this only downloads and unpacks it.
   FetchContent_MakeAvailable(onnxruntime_prebuilt)
+  if(HOLOSOMA_ONNXRUNTIME_VERSION STREQUAL "1.30.0")
+    # NuGet omits the filename recorded in the library's ABI identity.
+    set(_ort_native_dir "${onnxruntime_prebuilt_SOURCE_DIR}/runtimes/${_ort_nuget_runtime}/native")
+    if(APPLE)
+      file(CREATE_LINK libonnxruntime.dylib "${_ort_native_dir}/libonnxruntime.1.dylib" SYMBOLIC)
+    else()
+      file(CREATE_LINK libonnxruntime.so "${_ort_native_dir}/libonnxruntime.so.1" SYMBOLIC)
+    endif()
+  endif()
   set(ONNXRUNTIME_ROOT "${onnxruntime_prebuilt_SOURCE_DIR}" CACHE PATH "ONNX Runtime root" FORCE)
   find_package(ONNXRuntime REQUIRED)
 endif()

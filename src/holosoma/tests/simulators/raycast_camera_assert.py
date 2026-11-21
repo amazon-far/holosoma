@@ -337,9 +337,7 @@ def main() -> int:
     import torch
 
     init = config.robot.init_state
-    base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
-    )
+    base_init = torch.tensor(init.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(_NUM_ENVS, torch.zeros(_NUM_ENVS, 3, device=device), base_init)
     sim.prepare_sim()
     sim.install_plugins()
@@ -347,8 +345,8 @@ def main() -> int:
     # Pin each robot upright at its env origin, then capture one frame from that state.
     env_ids = torch.arange(_NUM_ENVS, device=device)
     robot_states = sim.get_actor_states(["robot"], env_ids).clone()
-    robot_states[:, :3] = sim.env_origins + torch.tensor(list(init.pos), device=device)
-    robot_states[:, 3:7] = torch.tensor(list(init.rot), device=device)
+    robot_states[:, :3] = sim.env_origins + torch.tensor(list(init.position), device=device)
+    robot_states[:, 3:7] = torch.tensor(list(init.orientation_xyzw), device=device)
     robot_states[:, 7:] = 0.0
     sim.set_actor_states(["robot"], env_ids, robot_states)
     step(sim, max(2, steps_for_seconds(sim, 0.05)))

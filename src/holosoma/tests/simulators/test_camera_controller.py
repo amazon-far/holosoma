@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
@@ -18,9 +19,11 @@ from holosoma.simulator.shared.camera_controller import CameraController, Camera
 @pytest.fixture
 def mock_simulator() -> Mock:
     """Create mock simulator for testing."""
-    simulator = Mock(spec=["robot_root_states", "find_rigid_body_indice"])
+    simulator = Mock(spec=["robot_root_states", "find_rigid_body_indice", "robot_config", "body_names"])
     # Mock robot position at origin
     simulator.robot_root_states = np.array([[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]])
+    simulator.body_names = ["Trunk"]
+    simulator.robot_config = SimpleNamespace(body_tags={"#base": ["Trunk"]})
     # Mock body resolution to succeed
     simulator.find_rigid_body_indice = Mock(return_value=1)
     return simulator

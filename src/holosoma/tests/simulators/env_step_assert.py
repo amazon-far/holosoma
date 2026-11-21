@@ -81,7 +81,7 @@ def main() -> int:
             if len(obs_dict[name]) != NUM_ENVS
         )
 
-        actions = torch.zeros(NUM_ENVS, tyro_config.robot.actions_dim, device=DEVICE)
+        actions = torch.zeros(NUM_ENVS, len(tyro_config.robot.dof_names), device=DEVICE)
         n_dones = 0
         for step in range(NUM_STEPS):
             obs_dict, rewards, dones, infos = env.step({"actions": actions})
