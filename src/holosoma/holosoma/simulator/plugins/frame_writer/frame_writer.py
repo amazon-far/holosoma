@@ -205,11 +205,10 @@ class FrameWriterPlugin(CameraConsumerPlugin):
         if self.config.episodic:
             for env in sorted(self._episodes):
                 self._end_episode(env, interrupted)
-        else:
+        elif self._index is not None:  # start never ran: no output directory and nothing to record
             self._finalize(sorted(self._streams), self._out, interrupted)
-            if self._index is not None:
-                self._index.close()
-                self._index = None
+            self._index.close()
+            self._index = None
         logger.info(
             f"FrameWriterPlugin wrote {self._total_frames} frame(s) across {len(self._written_streams)} stream(s)."
         )

@@ -231,6 +231,23 @@ def test_mp4_rerun_into_the_same_directory_drops_the_earlier_outputs(tmp_path: P
     plugin._encoders[("head", "rgb", 0)].discard()
 
 
+@pytest.mark.parametrize("earlier_run", [False, True])
+def test_mp4_stop_before_start_writes_nothing(tmp_path: Path, earlier_run: bool) -> None:
+    # A run that ends before its first frame end (where start runs) has no output of its own: stop must
+    # neither fail on the missing output directory nor overwrite an earlier run's videos.json.
+    out = tmp_path / "out"
+    if earlier_run:
+        out.mkdir()
+        (out / "videos.json").write_text('{"earlier": "run"}\n')
+    sim = _FakeSimulator({"head": _cam()}, {("head", "rgb"): _rgb()})
+    _make(FrameWriterPluginConfig(output_dir=str(out), rgb_format="mp4"), sim)
+    sim.hooks.emit(Phase.CLOSE)
+    if earlier_run:
+        assert (out / "videos.json").read_text() == '{"earlier": "run"}\n'
+    else:
+        assert not out.exists()
+
+
 @requires_ffmpeg
 def test_mp4_fps_follows_camera_decimation(tmp_path: Path) -> None:
     # update_decimation=2 at a 50 Hz control rate renders at 25 Hz: frames 0.04 s apart.
