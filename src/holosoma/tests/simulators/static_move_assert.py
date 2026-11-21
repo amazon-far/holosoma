@@ -47,7 +47,7 @@ from holosoma.config_types.scene import RigidObjectConfig, SceneConfig
 from holosoma.simulator.shared.object_registry import ObjectType
 
 # steps_for_seconds re-exported (subset_write_assert imports it from here).
-from tests.simulators._sim_harness import launch_simulator, step, steps_for_seconds
+from tests.simulators._sim_harness import launch_simulator, run_and_hard_exit, step, steps_for_seconds
 
 SMALL_BOX = "holosoma/data/scene_objects/boxes/small_box.urdf"
 BOX_HALF = 0.05  # small_box is a 0.1 m cube.
@@ -197,4 +197,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_and_hard_exit(main)

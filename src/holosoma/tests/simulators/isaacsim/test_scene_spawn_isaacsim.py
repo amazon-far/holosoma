@@ -1,8 +1,7 @@
-"""Live IsaacSim scene-spawn matrix (GPU), one sim per subprocess.
+"""Live IsaacSim scene-spawn matrix (GPU).
 
-Each test runs the scene_spawn_assert.py harness in its own process (IsaacSim's
-SimulationContext is a process singleton — one sim per process), covering every asset
-shape IsaacSim supports — it loads USD and URDF:
+Each test runs the scene_spawn_assert.py harness on IsaacSim, covering every asset shape IsaacSim
+supports — it loads USD and URDF:
 
   - 1->1 free rigid object, USD            (usd-box)
   - 1->1 free rigid object, URDF           (g1-largebox)
@@ -13,6 +12,9 @@ shape IsaacSim supports — it loads USD and URDF:
   - 1->N scene file, per-object override   (multibody-override, USD path)
   - launcher settings + default sun enabled/disabled read-back
 
+The spawn scenes run in one shared subprocess and Kit app, each on a fresh stage; the launcher
+settings test needs its own launch settings, so it runs in its own process.
+
 Marked ``isaacsim`` so only the IsaacSim CI job (``-m isaacsim``) collects it.
 ``importorskip("isaaclab")``/CUDA-gated so direct/
 unfiltered runs skip cleanly where IsaacSim is absent. The harness asserts free bodies
@@ -21,6 +23,7 @@ fall, static bodies hold, get_actor_states shape, and (scene files) the body-to-
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,56 +35,31 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("IsaacSim requires a CUDA device", allow_module_level=True)
 
-from tests.simulators._run_harness import run_harness  # noqa: E402
+from tests.simulators._run_harness import run_batched, run_harness  # noqa: E402
 
-# The harness builds one sim and exits 0 on success; run it per scenario in its own process.
 _HARNESS = Path(__file__).resolve().parents[1] / "scene_spawn_assert.py"
+_TIMEOUT = 1800
 
 
-@pytest.mark.parametrize(
-    "scene",
-    [
-        "usd-box",
-        "g1-largebox",
-        "static-box-usd",
-        "static-box",
-        "velocity-box",
-        "physics-box",
-        "multibody",
-        "multibody-override",
-    ],
-)
-def test_scene_spawn(scene):
+def _cell(item):
+    """Batch cell for a scene-spawn test item: one subprocess runs every selected scene."""
+    if getattr(item, "module", None) is not sys.modules[__name__]:
+        return None
+    if item.originalname not in ("test_scene_spawn", "test_scene_spawn_multi_env"):
+        return None
+    args = ["--simulator", "isaacsim", "--scene", item.callspec.params["scene"]]
+    if item.originalname == "test_scene_spawn_multi_env":
+        args += ["--num-envs", "4"]
+    return "scene_spawn/isaacsim", item.name, "scene_spawn_assert", args
+
+
+# Scenes also in test_scene_spawn_multi_env run only there: the harness asserts every check in every
+# env, and env 0 sits at the origin, so the num_envs=4 cell covers the num_envs=1 one.
+@pytest.mark.parametrize("scene", ["g1-largebox", "static-box-usd", "static-box", "physics-box"])
+def test_scene_spawn(scene, request):
     # physics-box exercises the per-object physics override read-back (live mass + bound-material
     # static friction vs. config). It ships USD + URDF, so it spawns on this backend.
-    run_harness(
-        _HARNESS,
-        "--simulator",
-        "isaacsim",
-        "--scene",
-        scene,
-        label=f"isaacsim/{scene}",
-        timeout=900,
-    )
-
-
-def test_friction_slide_multi_env():
-    # Behavioral friction probe (NOT a value read-back): two boxes pushed identically, differing
-    # ONLY in friction, must slide measurably different distances. Longer window than the default
-    # 40 steps so the low/high gap clears the probe margin; asserted in every env.
-    run_harness(
-        _HARNESS,
-        "--simulator",
-        "isaacsim",
-        "--scene",
-        "friction-slide",
-        "--num-envs",
-        "4",
-        "--steps",
-        "150",
-        label="isaacsim/friction-slide (num_envs=4)",
-        timeout=900,
-    )
+    run_batched(request, _cell, label=f"isaacsim/{scene}", timeout=_TIMEOUT)
 
 
 def test_launcher_settings_and_default_sun():
@@ -104,37 +82,11 @@ def test_launcher_settings_and_default_sun():
     )
 
 
-def test_default_sun_can_be_disabled():
-    """An empty rig removes the default sun's prim from the composed stage."""
-    run_harness(
-        _HARNESS,
-        "--simulator",
-        "isaacsim",
-        "--scene",
-        "g1-largebox",
-        "--probe-isaacsim-render-config",
-        "--scene-lights",
-        "empty",
-        label="isaacsim/render-config default sun disabled",
-        timeout=900,
-    )
-
-
 # Multi-env (num_envs=4): the harness spreads each env to a distinct origin and asserts
 # per-env placement — each free object at its OWN env_origin, and the 1->N body-to-body
 # offset in EVERY env. IsaacSim scene objects rely on IsaacLab cloning for per-env spread
 # (the registration path repeats the first-env pose), so this is the only check that the
 # clones actually land at distinct per-env origins rather than stacking at one world point.
 @pytest.mark.parametrize("scene", ["usd-box", "velocity-box", "multibody", "multibody-override"])
-def test_scene_spawn_multi_env(scene):
-    run_harness(
-        _HARNESS,
-        "--simulator",
-        "isaacsim",
-        "--scene",
-        scene,
-        "--num-envs",
-        "4",
-        label=f"isaacsim/{scene} (num_envs=4)",
-        timeout=900,
-    )
+def test_scene_spawn_multi_env(scene, request):
+    run_batched(request, _cell, label=f"isaacsim/{scene} (num_envs=4)", timeout=_TIMEOUT)

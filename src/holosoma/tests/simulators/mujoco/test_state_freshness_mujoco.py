@@ -42,5 +42,6 @@ def test_state_freshness(tmp_path, label, args):
         str(result_file),
         label=f"mujoco/state-freshness ({label})",
         timeout=600,
+        reuse_process=True,
         result_file=result_file,
     )

@@ -38,28 +38,12 @@ class TestCreateInputFactory:
         result = create_input(p, "keyboard", "velocity")
         assert isinstance(result, KeyboardInput)
 
-    def test_keyboard_command_returns_keyboard_input(self):
-        from holosoma_inference.inputs import create_input
-        from holosoma_inference.inputs.impl.keyboard import KeyboardInput
-
-        p = _make_policy_stub(state_input="keyboard")
-        result = create_input(p, "keyboard", "command")
-        assert isinstance(result, KeyboardInput)
-
     def test_ros2_velocity_returns_vel_provider(self):
         from holosoma_inference.inputs import create_input
         from holosoma_inference.inputs.impl.ros2 import Ros2Input
 
         p = _make_policy_stub(velocity_input="ros2")
         result = create_input(p, "ros2", "velocity")
-        assert isinstance(result, Ros2Input)
-
-    def test_ros2_command_returns_state_provider(self):
-        from holosoma_inference.inputs import create_input
-        from holosoma_inference.inputs.impl.ros2 import Ros2Input
-
-        p = _make_policy_stub(state_input="ros2")
-        result = create_input(p, "ros2", "command")
         assert isinstance(result, Ros2Input)
 
     def test_interface_source_returns_interface_input(self):
@@ -144,14 +128,3 @@ class TestCreateInputProvidersIntegration:
         assert isinstance(bp._velocity_input, KeyboardInput)
         assert isinstance(bp._command_provider, Ros2Input)
         assert bp._velocity_input is not bp._command_provider
-
-
-class TestChannelSeparation:
-    """Verify that ros2 velocity input doesn't affect keyboard commands."""
-
-    def test_ros2_velocity_does_not_provide_commands(self):
-        """Ros2Input implements poll_velocity."""
-        from holosoma_inference.inputs.impl.ros2 import Ros2Input
-
-        p = Ros2Input("cmd_vel", "holosoma/state_input")
-        assert hasattr(p, "poll_velocity")

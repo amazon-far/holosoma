@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import io
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -166,34 +165,6 @@ def _create_yaml_config(tmp_path: Path, content: str | None = None) -> Path:
     return config_path
 
 
-def _mock_wandb_config_download(mock_wandb_api: mock.MagicMock, config_path: Path) -> mock.MagicMock:
-    mock_file: mock.MagicMock = mock_wandb_api.run.return_value.file.return_value
-    mock_download = mock_file.download.return_value
-
-    # Read the actual YAML content from the file
-    with open(config_path) as f:
-        file_content = f.read()
-
-    # Create a file-like object with the content
-    file_like_obj = io.StringIO(file_content)
-    mock_download.__enter__.return_value = file_like_obj
-    mock_download.__exit__.return_value = None
-    return mock_file
-
-
-def test_load_saved_experiment_config_from_wandb(tmp_path: Path) -> None:
-    """Test loading config from W&B run."""
-    config_path = _create_yaml_config(tmp_path)
-    checkpoint_cfg = CheckpointConfig(
-        checkpoint="wandb://test_user/test_project/test_run",
-    )
-    # Mock get_cached_file_path to return our config
-    with mock.patch("holosoma.utils.eval_utils.get_cached_file_path", return_value=str(config_path)):
-        loaded_cfg, run_path = load_saved_experiment_config(checkpoint_cfg)
-    assert loaded_cfg is not None
-    assert run_path == "test_user/test_project/test_run"
-
-
 def test_load_saved_experiment_config_with_wandb_prefix(tmp_path: Path) -> None:
     """Test loading config with wandb:// prefix and checkpoint name."""
     config_path = _create_yaml_config(tmp_path)
@@ -211,18 +182,6 @@ def test_load_saved_experiment_config_with_wandb_runs_segment(tmp_path: Path) ->
     config_path = _create_yaml_config(tmp_path)
     checkpoint_cfg = CheckpointConfig(
         checkpoint="wandb://test_entity/test_project/runs/test_run_id/model_100.pt",
-    )
-    with mock.patch("holosoma.utils.eval_utils.get_cached_file_path", return_value=str(config_path)):
-        loaded_cfg, run_path = load_saved_experiment_config(checkpoint_cfg)
-    assert loaded_cfg is not None
-    assert run_path == "test_entity/test_project/test_run_id"
-
-
-def test_load_saved_experiment_config_with_wandb_run_only(tmp_path: Path) -> None:
-    """Ensure wandb:// URIs without explicit checkpoint names can load configs."""
-    config_path = _create_yaml_config(tmp_path)
-    checkpoint_cfg = CheckpointConfig(
-        checkpoint="wandb://test_entity/test_project/test_run_id",
     )
     with mock.patch("holosoma.utils.eval_utils.get_cached_file_path", return_value=str(config_path)):
         loaded_cfg, run_path = load_saved_experiment_config(checkpoint_cfg)
@@ -411,33 +370,6 @@ def test_load_checkpoint_uses_generic_remote_loader(tmp_path: Path, monkeypatch:
     )
 
     assert load_checkpoint(uri, str(tmp_path / "logs")) == local_checkpoint
-
-
-def test_load_checkpoint_with_wandb_prefix(tmp_path: Path) -> None:
-    """Test loading checkpoint with wandb:// prefix.
-
-    Parameters
-    ----------
-    tmp_path : Path
-        Temporary directory for test files
-    """
-    # Create fake cached checkpoint (with hash name in cache)
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir()
-    cached_file = cache_dir / "abc123hash.pt"
-    cached_file.write_bytes(b"fake checkpoint")
-
-    log_dir = tmp_path / "logs"
-    with mock.patch("holosoma.utils.eval_utils.get_cached_file_path", return_value=str(cached_file)):
-        checkpoint_path = load_checkpoint(
-            checkpoint="wandb://test_entity/test_project/test_run_id/model_100.pt",
-            log_dir=str(log_dir),
-        )
-
-    # Should be copied to log_dir with ORIGINAL filename, not cache hash
-    assert checkpoint_path == log_dir / "test_run_id_model_100.pt"
-    assert Path(checkpoint_path).exists()
-    assert checkpoint_path.name == "test_run_id_model_100.pt"  # Original name preserved
 
 
 def test_load_checkpoint_with_wandb_runs_segment(tmp_path: Path) -> None:

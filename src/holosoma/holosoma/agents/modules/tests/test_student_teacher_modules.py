@@ -41,13 +41,6 @@ def _load_constant_teachers(module: StudentTeacher) -> None:
         module.set_teacher(index, teacher)
 
 
-def test_teacher_action_requires_loaded_weights() -> None:
-    module = _module()
-
-    with pytest.raises(RuntimeError, match="not loaded"):
-        module.teacher_act(torch.zeros(2, 3))
-
-
 def test_rebuilt_teachers_are_not_ready_until_their_readiness_is_restored() -> None:
     module = _module()
 

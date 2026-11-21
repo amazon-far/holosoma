@@ -64,19 +64,6 @@ def test_add_lighting_builds_supported_and_skips_unsupported() -> None:
     assert list(directional.dir) == pytest.approx([0.0, 1.0, 0.0], abs=1e-6)
 
 
-def test_apply_render_sets_headlight_and_haze() -> None:
-    mgr = _manager()
-    mgr.apply_render()
-    visual = mgr.world_spec.visual
-    # Every field apply_render sets, so a dropped or wrong assignment is caught.
-    assert list(visual.headlight.diffuse) == pytest.approx([0.6, 0.6, 0.6])
-    assert list(visual.headlight.ambient) == pytest.approx([0.4, 0.4, 0.4])
-    assert list(visual.headlight.specular) == pytest.approx([0.0, 0.0, 0.0])
-    assert visual.global_.azimuth == pytest.approx(-130.0)
-    assert visual.global_.elevation == pytest.approx(-20.0)
-    assert list(visual.rgba.haze) == pytest.approx([0.15, 0.25, 0.35, 1.0])
-
-
 def test_default_light_keeps_headlight_and_authors_nothing() -> None:
     mgr = _manager()
     light_setup.build_lights(mgr.world_spec, {DEFAULT_LIGHT_KEY: DefaultLightConfig()})

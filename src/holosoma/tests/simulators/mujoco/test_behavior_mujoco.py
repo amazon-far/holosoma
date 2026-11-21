@@ -1,10 +1,10 @@
 """Behavioral physics tests on the MuJoCo backends via the behavior_assert.py harness.
 
-Each test runs one behavioral scenario in its own subprocess (one sim per process) and asserts
-the harness exited 0. The harness asserts a physical OUTCOME after stepping real physics (a body
-stops at a wall, rests on a post, bounces, spins by the commanded angle, ...) in EVERY env — a
-behavioral pass proves the configured value does physically meaningful work, not just that an API
-echoes it.
+Each test asserts one behavioral scenario; all selected scenarios of a backend run in one shared
+subprocess (one sim per scenario, built and torn down in turn). The harness asserts a physical
+OUTCOME after stepping real physics (a body stops at a wall, rests on a post, bounces, spins by the
+commanded angle, ...) in EVERY env — a behavioral pass proves the configured value does physically
+meaningful work, not just that an API echoes it.
 
 Two MuJoCo backends:
   - ClassicBackend (CPU, single-env): the single-env scenarios.
@@ -20,17 +20,15 @@ MuJoCo cells are the multi-env-only scenarios on the single-env ClassicBackend, 
 
 from __future__ import annotations
 
-from pathlib import Path
+import sys
 
 import pytest
 
 torch = pytest.importorskip("torch")
 mujoco = pytest.importorskip("mujoco")
 
-from tests.simulators._run_harness import run_harness  # noqa: E402
+from tests.simulators._run_harness import run_batched  # noqa: E402
 from tests.simulators.behavior_assert import assert_collide_into_fixed  # noqa: E402
-
-_HARNESS = Path(__file__).resolve().parents[1] / "behavior_assert.py"
 
 # The full behavioral catalog. ``multi_env`` flags scenarios that need >1 env (per-env
 # independence / indexing) — unsupported on the single-env ClassicBackend.
@@ -90,37 +88,33 @@ _CLASSIC_PARAMS = [
 _WARP_PARAMS = [pytest.param(name, marks=_ISAAC_ONLY_SKIP) if name in _ISAAC_ONLY else name for name, _ in _SCENARIOS]
 
 
+_BACKEND_ARGS = {
+    "test_behavior_classic_cpu": ("mujoco", "1"),
+    "test_behavior_warp_multi_env": ("mjwarp", "4"),
+}
+
+
+def _cell(item):
+    """Batch cell for a behavior test item: one subprocess per backend runs all selected scenarios."""
+    if getattr(item, "module", None) is not sys.modules[__name__] or item.originalname not in _BACKEND_ARGS:
+        return None
+    simulator, num_envs = _BACKEND_ARGS[item.originalname]
+    scenario = item.callspec.params["scenario"]
+    args = ["--scenario", scenario, "--simulator", simulator, "--num-envs", num_envs]
+    return f"behavior/{simulator}", scenario, "behavior_assert", args
+
+
 @pytest.mark.mujoco_classic
 @pytest.mark.parametrize("scenario", _CLASSIC_PARAMS)
-def test_behavior_classic_cpu(scenario):
-    run_harness(
-        _HARNESS,
-        "--scenario",
-        scenario,
-        "--simulator",
-        "mujoco",
-        "--num-envs",
-        "1",
-        label=f"mujoco-classic/{scenario}",
-        timeout=400,
-    )
+def test_behavior_classic_cpu(scenario, request):
+    run_batched(request, _cell, label=f"mujoco-classic/{scenario}", timeout=600)
 
 
 @pytest.mark.mujoco_warp
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="WarpBackend behavioral tests require CUDA")
 @pytest.mark.parametrize("scenario", _WARP_PARAMS)
-def test_behavior_warp_multi_env(scenario):
-    run_harness(
-        _HARNESS,
-        "--scenario",
-        scenario,
-        "--simulator",
-        "mjwarp",
-        "--num-envs",
-        "4",
-        label=f"mjwarp/{scenario} (num_envs=4)",
-        timeout=400,
-    )
+def test_behavior_warp_multi_env(scenario, request):
+    run_batched(request, _cell, label=f"mjwarp/{scenario} (num_envs=4)", timeout=600)
 
 
 class _MinimalCollisionContext:

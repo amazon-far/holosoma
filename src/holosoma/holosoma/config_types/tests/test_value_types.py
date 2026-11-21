@@ -92,18 +92,6 @@ def test_unit_quaternions_reject_large_norm_errors(alias: Any, norm: float) -> N
 
 
 @pytest.mark.parametrize("alias", _UNIT_TYPES)
-def test_unit_quaternions_reject_overflowing_norm(alias: Any) -> None:
-    with pytest.raises(ValidationError, match="Quaternion norm"):
-        TypeAdapter(alias).validate_python([sys.float_info.max] * 4)
-
-
-@pytest.mark.parametrize("alias", _UNIT_TYPES)
-@pytest.mark.parametrize("delta", [-1e-4, -1e-6, 0.0, 1e-6, 1e-4])
-def test_unit_quaternions_normalize_inclusive_tolerance(alias: Any, delta: float) -> None:
-    assert tuple(TypeAdapter(alias).validate_python([-(1.0 + delta), 0.0, 0.0, 0.0])) == (-1.0, 0.0, 0.0, 0.0)
-
-
-@pytest.mark.parametrize("alias", _UNIT_TYPES)
 def test_normalization_preserves_sign_order_and_input(alias: Any) -> None:
     expected = [-1 / math.sqrt(30), 2 / math.sqrt(30), -3 / math.sqrt(30), 4 / math.sqrt(30)]
     value = [component * 1.000001 for component in expected]

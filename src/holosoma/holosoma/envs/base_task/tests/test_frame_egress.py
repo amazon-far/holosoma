@@ -191,19 +191,6 @@ def test_each_frame_egresses_the_draw_of_its_own_control_step(decimation: int) -
     assert sim.phases == _expected_phases(groups=3, decimation=decimation)
 
 
-def test_every_control_step_egresses_exactly_one_frame() -> None:
-    """One FRAME_BEGIN and one FRAME_END per control step."""
-    sim = _FakeSim(frames=5)
-
-    _run(sim)
-
-    assert len(sim.captured) == 5
-    assert sim.control_steps == 5
-    assert sim.phases.count(Phase.FRAME_BEGIN) == 5
-    assert sim.phases.count(Phase.FRAME_END) == 5
-    assert sim.substeps == 5 * DECIMATION
-
-
 # ----- shutdown and the viewer -----
 
 

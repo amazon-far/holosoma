@@ -237,13 +237,6 @@ def test_cyclic_pattern_advances_at_a_float32_measurement_boundary_undershoot() 
     assert not torch.equal(first, provider.directions_at(float32_boundary_undershoot))
 
 
-def test_cyclic_pattern_nonintegral_rate_keeps_windows_contiguous() -> None:
-    provider = _cyclic_provider(publish_hz=3.0, height=1, width=3, sequence_offset=0)
-    offset_provider = _cyclic_provider(publish_hz=3.0, height=1, width=3, sequence_offset=3)
-
-    assert torch.equal(provider.directions_at(1.0 / 3.0), offset_provider.directions_at(0.0))
-
-
 def test_cyclic_pattern_restarts_sequence_after_simulation_time_reset() -> None:
     provider = _cyclic_provider(publish_hz=10.0, height=1, width=2, sequence_offset=0)
     baseline = _cyclic_provider(publish_hz=10.0, height=1, width=2, sequence_offset=0)

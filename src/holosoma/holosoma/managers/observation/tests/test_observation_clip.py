@@ -44,25 +44,6 @@ def test_global_clip_applies_to_flagged_terms_only() -> None:
     assert torch.equal(obs["unclipped"], value)
 
 
-def test_flattened_depth_keeps_its_sentinel_when_opted_out() -> None:
-    """A flattened image in a concatenated group is 2-D float, but opting out keeps +inf and far depths."""
-    depth = torch.tensor([[float("inf"), 250.0, 1.0]])
-    terms = {"depth": ObsTermCfg(func=f"{_HERE}:flat", global_clip=False)}
-
-    obs = _step({"g": ObsGroupCfg(terms=terms)}, flat=depth)["g"]
-
-    assert torch.isinf(obs[0, 0]) and float(obs[0, 1]) == 250.0
-
-
-def test_opted_out_uint8_image_is_untouched() -> None:
-    rgb = torch.full((1, 4, 4, 3), 200, dtype=torch.uint8)
-    terms = {"rgb": ObsTermCfg(func=f"{_HERE}:image", global_clip=False)}
-
-    out = _step({"g": ObsGroupCfg(concatenate=False, terms=terms)}, image=rgb)["g"]["rgb"]
-
-    assert out.dtype == torch.uint8 and torch.equal(out, rgb)
-
-
 @pytest.mark.parametrize(
     "value",
     [

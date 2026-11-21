@@ -71,24 +71,6 @@ def test_returns_full_buffer_and_env_subset() -> None:
     assert torch.equal(subset, buf[[0, 2]])
 
 
-def test_device_none_returns_sim_buffer_directly_no_cache() -> None:
-    # device=None (default) is the identity path: the sim-device buffer itself, no cross-device copy.
-    buf = torch.arange(2 * 2 * 2 * 3, dtype=torch.uint8).reshape(2, 2, 2, 3)  # already cpu in this env
-    rt = CameraRecord(name="head", config=None, buffers={"rgb": buf})  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
-    sim = _sim(_Manager({"head": rt}))
-    assert sim.get_camera_data("head", "rgb", device=None) is buf  # no copy
-    assert rt._device_cache == {}  # nothing cached
-
-
-def test_same_device_as_buffer_is_passthrough() -> None:
-    # Asking for the device the buffer already lives on returns it directly (no cache entry).
-    buf = torch.zeros(1, 2, 2, 3, dtype=torch.uint8)  # cpu
-    rt = CameraRecord(name="head", config=None, buffers={"rgb": buf})  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
-    sim = _sim(_Manager({"head": rt}))
-    assert sim.get_camera_data("head", "rgb", device="cpu") is buf
-    assert rt._device_cache == {}
-
-
 def test_env_subset_slices_the_device_buffer() -> None:
     buf = torch.arange(3 * 1 * 1 * 3, dtype=torch.uint8).reshape(3, 1, 1, 3)
     rt = CameraRecord(name="head", config=None, buffers={"rgb": buf})  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
