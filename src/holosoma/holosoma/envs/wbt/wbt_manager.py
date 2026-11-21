@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
 
 class WholeBodyTrackingManager(PolicyTask):
+    _in_post_physics_step: bool = False
+
     def _init_buffers(self) -> None:
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
@@ -31,10 +33,20 @@ class WholeBodyTrackingManager(PolicyTask):
         motion_command.update_metrics()
         self.log_dict.update(motion_command.metrics)
 
+    def _post_physics_step(self) -> tuple[dict[str, Any], torch.Tensor, torch.Tensor, dict[str, Any]]:
+        # MotionCommand.step() refreshes the targets after this frame's resets, before anything reads them.
+        self._in_post_physics_step = True
+        try:
+            return super()._post_physics_step()
+        finally:
+            self._in_post_physics_step = False
+
     def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
-        # A reset does not step, so refresh the targets the observations and terminations read.
-        motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
-        motion_command.update_relative_body_targets()
+        # A reset outside step() is not followed by MotionCommand.step(), so refresh the targets
+        # the observations and terminations read.
+        if not self._in_post_physics_step:
+            motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
+            motion_command.update_relative_body_targets()
         super()._after_reset_synchronization(env_ids)
 
     def _reset_robot_states_callback(
@@ -98,7 +110,7 @@ class WholeBodyTrackingManager(PolicyTask):
             )
 
         # object
-        if motion_command.motion.has_object:  # type: ignore[has-type]
+        if motion_command.motion.has_object:
             real_object_pos_xyz = motion_command.simulator_object_pos_w.clone()
             real_object_quat_xyzw = motion_command.simulator_object_quat_w.clone()
             real_object_quat_wxyz = real_object_quat_xyzw[:, [3, 0, 1, 2]]
@@ -117,7 +129,7 @@ class WholeBodyTrackingManager(PolicyTask):
 
     def step_visualize_motion(self, actions: torch.Tensor) -> bool:
         motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
-        dt = 1.0 / float(motion_command.motion.fps)  # type: ignore[has-type]
+        dt = 1.0 / float(motion_command.motion.fps)
         motion_command.step()
         print("time_steps: ", motion_command.time_steps[0].item())
         self._draw_debug_vis()
@@ -140,7 +152,7 @@ class WholeBodyTrackingManager(PolicyTask):
         self.simulator.robot_root_states[env_ids, 7:10] = root_lin_vel
         self.simulator.robot_root_states[env_ids, 10:13] = root_ang_vel
 
-        if motion_command.motion.has_object:  # type: ignore[has-type]
+        if motion_command.motion.has_object:
             # set object root_states from motion command
             object_pos = motion_command.object_pos_w.clone()
             object_ori = motion_command.object_quat_w.clone()
@@ -151,7 +163,7 @@ class WholeBodyTrackingManager(PolicyTask):
             object_states[:, 3:7] = object_ori[:]
             object_states[:, 7:10] = object_lin_vel[:]
             object_states[:, 10:13] = torch.zeros_like(object_lin_vel[:])
-            object_name = motion_command.object_name  # type: ignore[has-type]
+            object_name = motion_command.object_name
             self.simulator.set_actor_states([object_name], env_ids, object_states)
 
         self.simulator.forward_kinematics()
@@ -159,7 +171,5 @@ class WholeBodyTrackingManager(PolicyTask):
 
         time.sleep(dt)
 
-        result: bool = (
-            motion_command.time_steps[0].item() >= motion_command.motion.time_step_total - 2  # type: ignore[has-type]
-        )
+        result: bool = motion_command.time_steps[0].item() >= motion_command.motion.time_step_total - 2
         return result

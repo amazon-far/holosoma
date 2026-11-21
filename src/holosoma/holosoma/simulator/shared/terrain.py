@@ -136,7 +136,8 @@ class Terrain(TerrainInterface):
         vertices, triangles = terrain_utils.convert_heightfield_to_trimesh(
             self._height_field_raw, self._horizontal_scale, self._vertical_scale, self._slope_threshold
         )
-        mesh: trimesh.Trimesh = trimesh.Trimesh(vertices=vertices, faces=triangles)
+        # The heightfield grid has no duplicate vertices, so trimesh's merge pass is skipped.
+        mesh: trimesh.Trimesh = trimesh.Trimesh(vertices=vertices, faces=triangles, process=False)
         mesh.vertices[..., :2] -= self._border_size
         return mesh
 

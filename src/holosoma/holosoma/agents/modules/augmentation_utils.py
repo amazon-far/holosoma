@@ -49,6 +49,7 @@ class SymmetryUtils:
         self.sub_observation_dims: dict[str, int] = {}
         self.joint_index_map: torch.Tensor = torch.empty(0)
         self.sign_flip_mask: torch.Tensor = torch.empty(0)
+        self._mirror_maps: dict[tuple[Any, ...], tuple[torch.Tensor, torch.Tensor] | None] = {}
 
         self._init_observation_config()
         self._init_robot_config()
@@ -261,7 +262,34 @@ class SymmetryUtils:
             Mirrored observation tensor with same shape as input.
             Y-axis components are typically negated, joint configurations are remapped.
         """
-        # Create a copy of the observation
+        key = (tuple(obs_list), observation.shape[-1], observation.dtype, observation.device)
+        if key not in self._mirror_maps:
+            self._mirror_maps[key] = self._signed_permutation(observation, obs_list)
+        signed_perm = self._mirror_maps[key]
+        if signed_perm is None:
+            return self._mirror_terms(observation, obs_list)
+        perm, sign = signed_perm
+        return observation[..., perm] * sign
+
+    def _signed_permutation(
+        self, observation: torch.Tensor, obs_list: Sequence[str]
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """``(perm, sign)`` with ``observation[..., perm] * sign == _mirror_terms(observation)``, or ``None``."""
+        width = observation.shape[-1]
+        # Two rows: with one, _mirror_terms writes a group back onto a view of itself.
+        probe = torch.arange(1, width + 1, dtype=torch.float64, device=observation.device).expand(2, width)
+        mirrored = self._mirror_terms(probe, obs_list)[0]
+        perm = (mirrored.abs() - 1).long().clamp(0, width - 1)
+        sign = mirrored.sign().to(observation.dtype)
+        check = torch.randn(4, width, dtype=observation.dtype, device=observation.device)
+        check[0] = torch.inf
+        check[1] = -torch.inf
+        if torch.equal(check[..., perm] * sign, self._mirror_terms(check, obs_list)):
+            return perm, sign
+        return None
+
+    def _mirror_terms(self, observation: torch.Tensor, obs_list: Sequence[str]) -> torch.Tensor:
+        """Mirror ``observation`` by applying each term's ``mirror_obs_*`` in turn."""
         mirrored_obs_all = observation.clone()
         B, _ = mirrored_obs_all.shape
 
