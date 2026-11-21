@@ -59,14 +59,14 @@ jobs:
       source_tree: ${{ steps.find.outputs.source_tree }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
       - name: Set up Docker Buildx
         if: github.event_name == 'push'
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@v4.2.0
       - name: Find merged pull request head
         id: merged-pr
         if: github.event_name == 'push'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        uses: actions/github-script@v9.0.0
         with:
           github-token: ${{ github.token }}
           result-encoding: string
@@ -212,7 +212,7 @@ jobs:
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     steps:
       - name: Create failure issue
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        uses: actions/github-script@v9.0.0
         env:
           BUILD_RESULT: ${{ needs.build-images.result }}
           DISCOVERY_RESULT: ${{ needs.find-tested-images.result }}
