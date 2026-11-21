@@ -20,7 +20,6 @@ from holosoma.simulator import mujoco_required_field
 from holosoma.simulator.shared.field_decorators import MUJOCO_FIELD_ATTR
 from holosoma.utils.sampler import DistributionLike, DistributionSpec, TermSampler
 from holosoma.utils.simulator_config import SimulatorType
-from holosoma.utils.torch_utils import torch_rand_float
 
 
 def _get_joint_action_term(env: Any) -> JointPositionActionTerm | None:
@@ -355,21 +354,33 @@ def randomize_spawn(
     base_vel_range: float = 0.5,
     **_: Any,
 ) -> None:
-    """Offset the reset spawn on custom-origin terrains, and draw the base velocity in ``±base_vel_range``.
+    """Randomize default spawns: offset XY on custom-origin terrains and draw the base velocity in ``±base_vel_range``.
 
     The offset follows the terrain's ``spawn`` settings (``xy_offset_range``, ``query_terrain_height``).
-    Put it first in ``reset_terms`` so later reset terms see the spawned state.
+
+    Envs reset to explicit ``target_states`` keep them. The term cannot see a reset's targets, so it infers
+    them: an env is randomized only while its root position and velocity still equal the default spawn the
+    task's reset writes (``robot.init_state`` at the env origin). Consequently a target equal to that default
+    is randomized too, and no reset term that runs before this one may write the root. Class-based reset
+    terms always run before function terms like this one.
     """
     idx = _ensure_env_ids_tensor(env, env_ids)
     if idx.numel() == 0:
         return
     root_states = env.simulator.robot_root_states
     terrain_state = env.terrain_manager.get_state("locomotion_terrain")
+    default_root = env.base_init_state.unsqueeze(0).repeat(idx.numel(), 1)
+    default_root[:, :3] += terrain_state.env_origins[idx]
+    at_default = (root_states[idx, :3] == default_root[:, :3]).all(dim=1) & (
+        root_states[idx, 7:13] == default_root[:, 7:13]
+    ).all(dim=1)
+    idx = idx[at_default]
+    if idx.numel() == 0:
+        return
     if terrain_state.custom_origins:
         spawn_cfg = env.terrain_manager.cfg.terrain_term.spawn
-        xy_offsets = torch_rand_float(
-            -spawn_cfg.xy_offset_range, spawn_cfg.xy_offset_range, (len(idx), 2), device=str(env.device)
-        )
+        xy_range = [-spawn_cfg.xy_offset_range, spawn_cfg.xy_offset_range]
+        xy_offsets = sampler.draw(xy_range, env_ids=idx, coords=(0, torch.arange(2)[None, :]), device=env.device)
         if spawn_cfg.query_terrain_height:
             new_xy = root_states[idx, :2] + xy_offsets
             terrain_heights = terrain_state.query_terrain_heights(
@@ -383,7 +394,10 @@ def randomize_spawn(
         else:
             root_states[idx, :2] += xy_offsets
     # [7:10]: lin vel, [10:13]: ang vel
-    root_states[idx, 7:13] = torch_rand_float(-base_vel_range, base_vel_range, (len(idx), 6), device=str(env.device))
+    vel_range = [-base_vel_range, base_vel_range]
+    root_states[idx, 7:13] = sampler.draw(
+        vel_range, env_ids=idx, coords=(1, torch.arange(6)[None, :]), device=env.device
+    )
 
 
 def randomize_push_schedule(
