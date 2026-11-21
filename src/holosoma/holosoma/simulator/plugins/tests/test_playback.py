@@ -19,9 +19,10 @@ import pytest
 import torch
 
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.playback import MotionPlaybackPlugin, PlaybackClip
 from holosoma.simulator.plugins.playback import playback as playback_module
+from holosoma.simulator.plugins.tests._task import plugin_task
 from holosoma.simulator.shared.scene_types import EnvOriginsScene
 
 pytestmark = pytest.mark.no_sim
@@ -31,7 +32,7 @@ NUM_DOF = 2
 
 def _make(cfg: MotionPlaybackPluginConfig, sim: Any) -> MotionPlaybackPlugin:
     # Construct via get_cls() (untyped), as the other plugin tests do with their fake simulators.
-    plugin: MotionPlaybackPlugin = cfg.get_cls()(cfg, sim)
+    plugin: MotionPlaybackPlugin = cfg.get_cls()(cfg, plugin_task(sim, num_envs=sim.num_envs))
     return plugin
 
 
