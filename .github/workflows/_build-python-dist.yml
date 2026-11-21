@@ -74,10 +74,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # GitHub's ONNX Runtime release assets are gone, so CMake links the wheels
+      # against our mirror (scripts/fetch_onnxruntime.sh) instead of downloading.
+      - name: Fetch ONNX Runtime
+        run: bash scripts/fetch_onnxruntime.sh "$RUNNER_TEMP/onnxruntime"
+
       - name: Build and test portable native wheels
         env:
           PACKAGE_DIR: ${{ inputs.package-dir }}
           CIBW_ARCHS: ${{ matrix.arch }}
+          # cibuildwheel mounts the host's root at /host in the manylinux container.
+          CIBW_ENVIRONMENT_LINUX: ONNXRUNTIME_ROOT=/host${{ runner.temp }}/onnxruntime
           # cibuildwheel also drops interpreters outside the package's requires-python.
           CIBW_BUILD: 'cp310-manylinux_* cp311-manylinux_* cp312-manylinux_* cp313-manylinux_*'
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28

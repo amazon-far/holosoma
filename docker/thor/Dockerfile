@@ -28,6 +28,12 @@
 # The -ros branch mirrors long-deps/common-deps/app-deps on top of a
 # ros-jazzy layer, so the Jazzy apt install (~1.5 GB) is also cached stably.
 
+# ─── Stage: onnxruntime ───────────────────────────────────────────────────────
+# Prebuilt ONNX Runtime for the native core. CI passes the mirror unpacked by
+# scripts/fetch_onnxruntime.sh with --build-context onnxruntime=<dir>; without
+# it this is empty and CMake downloads ONNX Runtime itself.
+FROM scratch AS onnxruntime
+
 # ─── Stage: l4t-cuda ──────────────────────────────────────────────────────────
 # CUDA 13 devel so nvcc + headers are available for any torch extension compile.
 # The SBSA apt repo is already configured in this base image.
@@ -103,6 +109,10 @@ RUN apt-get update \
 # ─── Stage: app-deps ──────────────────────────────────────────────────────────
 # Install project dependencies and editable metadata at the final source path.
 FROM common-deps AS app-deps
+
+# Kept in the image so later editable reinstalls find it too.
+COPY --from=onnxruntime / /opt/onnxruntime/
+ENV ONNXRUNTIME_ROOT=/opt/onnxruntime
 
 # Install against a placeholder module so source-only changes remain an
 # independent linked layer in the final target.
@@ -209,6 +219,9 @@ RUN apt-get update \
 # ─── Stage: app-deps-ros ──────────────────────────────────────────────────────
 FROM common-deps-ros AS app-deps-ros
 
+# Kept in the image so later editable reinstalls find it too.
+COPY --from=onnxruntime / /opt/onnxruntime/
+ENV ONNXRUNTIME_ROOT=/opt/onnxruntime
 COPY src/holosoma_inference/pyproject.toml src/holosoma_inference/README.md \
     /opt/holosoma-src/src/holosoma_inference/
 COPY src/holosoma_inference/holosoma_cpp /opt/holosoma-src/src/holosoma_inference/holosoma_cpp

@@ -112,6 +112,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
+      # GitHub's ONNX Runtime release assets are gone (see the script), so the
+      # native core links against our mirror instead of downloading at build time.
+      - name: Fetch ONNX Runtime
+        run: bash scripts/fetch_onnxruntime.sh "$RUNNER_TEMP/onnxruntime"
+
       - name: Generate image tags
         id: tags
         shell: bash
@@ -136,6 +141,8 @@ jobs:
           provenance: false
           sbom: false
           no-cache: ${{ inputs.no_cache }}
+          build-contexts: |
+            onnxruntime=${{ runner.temp }}/onnxruntime
           build-args: |
             ${{ matrix.build_args }}
           tags: ${{ steps.tags.outputs.dependency }}
@@ -154,6 +161,7 @@ jobs:
           no-cache: ${{ inputs.no_cache }}
           build-contexts: |
             ${{ matrix.dependency_target }}=docker-image://${{ steps.tags.outputs.dependency }}
+            onnxruntime=${{ runner.temp }}/onnxruntime
           build-args: |
             HOLOSOMA_COMMIT=${{ inputs.image_sha }}
             HOLOSOMA_SOURCE_TREE=${{ steps.source.outputs.tree }}

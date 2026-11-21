@@ -19,7 +19,9 @@ permissions:
 
 jobs:
   native:
-    runs-on: ubuntu-24.04
+    # A CodeBuild runner, not GitHub-hosted: its role reads the ONNX Runtime
+    # mirror, which replaces GitHub's now-missing release assets.
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -28,6 +30,10 @@ jobs:
           python-version: '3.12'
       - name: Native build dependencies
         run: sudo apt-get update && sudo apt-get install -y libeigen3-dev libyaml-cpp-dev libtinyxml2-dev
+      - name: Fetch ONNX Runtime
+        run: |
+          bash scripts/fetch_onnxruntime.sh "$RUNNER_TEMP/onnxruntime"
+          echo "ONNXRUNTIME_ROOT=$RUNNER_TEMP/onnxruntime" >> "$GITHUB_ENV"
       - name: Build and install the Python extension
         run: |
           uv venv .venv

@@ -4,6 +4,11 @@
 #   docker build -f src/holosoma_inference/holosoma_cpp/docker/Dockerfile.test -t holosoma-cpp-test .
 # Run the tests:
 #   docker run --rm holosoma-cpp-test
+#
+# CI passes the ONNX Runtime mirror unpacked by scripts/fetch_onnxruntime.sh
+# with --build-context onnxruntime=<dir>; without it CMake downloads it.
+FROM scratch AS onnxruntime
+
 FROM ubuntu:22.04
 
 COPY --from=ghcr.io/astral-sh/uv:0.8.15 /uv /usr/local/bin/uv
@@ -20,6 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # The native tests generate metadata-complete ONNX fixtures at build time.
 RUN uv pip install --system --python /usr/bin/python3 --no-cache \
     numpy==2.2.6 onnx==1.19.1
+
+COPY --from=onnxruntime / /opt/onnxruntime/
+ENV ONNXRUNTIME_ROOT=/opt/onnxruntime
 
 # The tests load the bundled ONNX models, so keep the repository layout.
 COPY src/holosoma_inference/holosoma_inference/models /ws/src/holosoma_inference/holosoma_inference/models
