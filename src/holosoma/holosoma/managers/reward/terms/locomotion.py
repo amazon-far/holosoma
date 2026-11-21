@@ -246,9 +246,9 @@ def base_height(
     Returns:
         Reward tensor [num_envs]
     """
-    terrain = env.terrain_manager.get_state("locomotion_terrain")
-    terrain.update_base_heights()
-    base_height_penalty = torch.square(terrain.base_heights - desired_base_height)
+    base_height_penalty = torch.square(
+        env.terrain_manager.get_state("locomotion_terrain").base_heights - desired_base_height
+    )
 
     # Apply stronger penalty for zero velocity commands if configured
     if zero_vel_penalty_scale != 1.0:
@@ -281,10 +281,8 @@ def feet_phase(env: PolicyTask, swing_height: float = 0.08, tracking_sigma: floa
         Reward tensor [num_envs]
     """
     # Get foot heights (relative to terrain)
-    terrain = env.terrain_manager.get_state("locomotion_terrain")
-    terrain.update_feet_heights()
-    foot_z_left = terrain.feet_heights[:, 0]
-    foot_z_right = terrain.feet_heights[:, 1]
+    foot_z_left = env.terrain_manager.get_state("locomotion_terrain").feet_heights[:, 0]
+    foot_z_right = env.terrain_manager.get_state("locomotion_terrain").feet_heights[:, 1]
 
     # Calculate expected foot heights based on phase
     gait_state = cast("LocomotionGait", env.command_manager.get_state("locomotion_gait"))

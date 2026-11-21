@@ -70,14 +70,6 @@ class TerrainTermBase(ABC):
     def feet_heights(self) -> torch.Tensor:
         """Feet heights."""
 
-    def update_base_heights(self, env_ids: torch.Tensor | None = None) -> None:
-        """Raycast the base heights for the robot's current pose; needed by the ``base_height`` reward."""
-        raise NotImplementedError(f"{type(self).__name__} does not measure base heights.")
-
-    def update_feet_heights(self, env_ids: torch.Tensor | None = None) -> None:
-        """Raycast the feet heights for the robot's current pose; needed by the ``feet_phase`` reward."""
-        raise NotImplementedError(f"{type(self).__name__} does not measure feet heights.")
-
     @abstractmethod
     def draw_debug_viz(self) -> None:
         """Draw debug visualization."""

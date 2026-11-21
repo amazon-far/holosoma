@@ -73,6 +73,8 @@ class TerrainLocomotion(TerrainTermBase):
         self._ray_directions_feet = torch.zeros(self.num_envs, num_feet, 3, device=self.device, requires_grad=False)
         self._ray_directions_feet[..., :] = torch.tensor([0.0, 0.0, -1.0], device=self.device)
         self._ray_hits_world_feet = torch.zeros(self.num_envs, num_feet, 3, device=self.device, requires_grad=False)
+        self._base_heights_generation = -1
+        self._feet_heights_generation = -1
 
     @property
     def env_origins(self) -> torch.Tensor:
@@ -84,21 +86,21 @@ class TerrainLocomotion(TerrainTermBase):
 
     @property
     def base_heights(self) -> torch.Tensor:
+        """Base heights above the terrain, raycast again when the simulation state has changed since the last read."""
+        generation = self.env.simulator.state.generation
+        if self._base_heights_generation != generation:
+            self._base_heights[:], self._ray_hits_world_base[:] = self._get_base_heights()
+            self._base_heights_generation = generation
         return self._base_heights
 
     @property
     def feet_heights(self) -> torch.Tensor:
+        """Feet heights above the terrain, raycast again when the simulation state has changed since the last read."""
+        generation = self.env.simulator.state.generation
+        if self._feet_heights_generation != generation and self._feet_height_indices.numel() > 0:
+            self._feet_heights[:], self._ray_hits_world_feet[:] = self._get_feet_heights()
+            self._feet_heights_generation = generation
         return self._feet_heights
-
-    def update_base_heights(self, env_ids: torch.Tensor | None = None) -> None:
-        idx = env_ids if env_ids is not None else slice(None)
-        self._base_heights[idx], self._ray_hits_world_base[idx] = self._get_base_heights(env_ids)
-
-    def update_feet_heights(self, env_ids: torch.Tensor | None = None) -> None:
-        if self._feet_height_indices.numel() == 0:
-            return
-        idx = env_ids if env_ids is not None else slice(None)
-        self._feet_heights[idx], self._ray_hits_world_feet[idx] = self._get_feet_heights(env_ids)
 
     def _get_env_origins(self) -> None:
         """Sets environment origins. On rough terrain the origins are defined by the terrain platforms.

@@ -114,6 +114,8 @@ class SimState:
         self._tensors: dict[str, torch.Tensor] = {}
         self._by_name: dict[str, _Registration] = {}
         self._registrations: list[_Registration] = []
+        self.generation = 0
+        """Count of simulation-state changes: increases whenever every tensor is marked stale."""
 
     @overload
     def register(
@@ -208,6 +210,7 @@ class SimState:
 
     def mark_stale(self) -> None:
         """Mark every tensor stale, so the next access re-reads it."""
+        self.generation += 1
         for registration in self._registrations:
             registration.valid = False
 
