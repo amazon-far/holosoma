@@ -791,7 +791,7 @@ class MotionCommand(CommandTermBase):
             # 4.3 set the object states in simulator
             self._env.simulator.set_actor_states([self.object_name], env_ids, object_states)
 
-        # A reset does not step, so refresh the targets the observations and terminations read.
+        # Observations and terminations read the targets before the next step refreshes them.
         self.update_relative_body_targets()
 
     def step(self) -> None:

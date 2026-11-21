@@ -147,7 +147,7 @@ class PushRandomizerState(RandomizationTermBase):
 
     def push(self, env_ids: torch.Tensor) -> None:
         """Push ``env_ids`` by a random base velocity."""
-        if len(env_ids) == 0:
+        if env_ids.numel() == 0:
             return
         n = self._max_push_vel_tensor.numel()
         rand = torch.rand(len(env_ids), n, device=self.env.device) * 2 - 1

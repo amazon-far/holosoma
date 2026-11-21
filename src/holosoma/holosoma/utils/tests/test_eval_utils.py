@@ -639,19 +639,19 @@ def test_saved_isaacgym_simulator_can_be_overridden_on_the_cli(backend: str, tmp
 
 
 @pytest.mark.parametrize(
-    ("fixture_name", "spawn", "additive_push"),
-    [("g1_29dof_mujoco", True, False), ("g1_29dof_wbt_w_object_mjwarp_g1_head", False, True)],
+    ("fixture_name", "locomotion"),
+    [("g1_29dof_mujoco", True), ("g1_29dof_wbt_w_object_mjwarp_g1_head", False)],
 )
 def test_saved_task_subclass_configs_load_onto_policy_task_with_the_terms_that_replace_them(
-    fixture_name: str, spawn: bool, additive_push: bool, tmp_path: Path
+    fixture_name: str, locomotion: bool, tmp_path: Path
 ) -> None:
     loaded = _load_through("checkpoint", _previous_schema(fixture_name), tmp_path)
 
     assert loaded.env_class == "holosoma.envs.policy_task.PolicyTask"
     assert loaded.randomization is not None
-    assert (next(iter(loaded.randomization.reset_terms), None) == "randomize_spawn") is spawn
+    assert (next(iter(loaded.randomization.reset_terms), None) == "randomize_spawn") is locomotion
     push = loaded.randomization.setup_terms["push_randomizer_state"]
-    assert bool(push.params.get("additive", False)) is additive_push
+    assert bool(push.params.get("additive", False)) is not locomotion
     assert loaded.curriculum is not None
     tracker = loaded.curriculum.setup_terms["average_episode_tracker"]
-    assert ("base_num_envs" in tracker.params) is spawn
+    assert ("base_num_envs" in tracker.params) is locomotion

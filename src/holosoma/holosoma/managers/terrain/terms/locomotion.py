@@ -95,7 +95,7 @@ class TerrainLocomotion(TerrainTermBase):
         self._base_heights[idx], self._ray_hits_world_base[idx] = self._get_base_heights(env_ids)
 
     def update_feet_heights(self, env_ids: torch.Tensor | None = None) -> None:
-        if not len(self._feet_height_indices):
+        if self._feet_height_indices.numel() == 0:
             return
         idx = env_ids if env_ids is not None else slice(None)
         self._feet_heights[idx], self._ray_hits_world_feet[idx] = self._get_feet_heights(env_ids)
