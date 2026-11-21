@@ -50,7 +50,7 @@ def _fresh_isaacsim(sim):
         "dof_vel": data.joint_vel[:, sim.dof_ids],
         "robot_root_states": root,
         "base_quat": root[:, 3:7],
-        "_rigid_body_pos": data.body_pos_w[:, sim.body_ids, :],
+        "rigid_body_pos_w": data.body_pos_w[:, sim.body_ids, :],
         "contact_forces": sim.contact_sensor.data.net_forces_w[:, sim._contact_to_robot_body_ids],
     }
 
@@ -76,7 +76,7 @@ def _fresh_mujoco(sim):
         "dof_vel": qvel[:, sim.dof_qvel_addrs].clone(),
         "robot_root_states": root,
         "base_quat": root[:, 3:7],
-        "_rigid_body_pos": sim.backend.refresh_rigid_body_states()[0].clone(),
+        "rigid_body_pos_w": sim.backend.refresh_rigid_body_states()[0].clone(),
         "contact_forces": sim.backend.compute_contact_forces()[:, sim._body_ids_t].clone(),
     }
 
@@ -96,7 +96,7 @@ def _reference_bodies_isaacsim(sim):
 
     SimulationManager.get_physics_sim_view().update_articulations_kinematic()
     poses = sim._robot.root_physx_view.get_link_transforms()[0, sim.body_ids].cpu()  # xyzw quaternions
-    return {"_rigid_body_pos": poses[:, :3], "_rigid_body_rot": poses[:, 3:7]}
+    return {"rigid_body_pos_w": poses[:, :3], "rigid_body_quat_w": poses[:, 3:7]}
 
 
 def _reference_bodies_mujoco(sim):
@@ -120,10 +120,10 @@ def _reference_bodies_mujoco(sim):
     for i, body in enumerate(ids):
         mujoco.mj_objectVelocity(sim.root_model, data, mujoco.mjtObj.mjOBJ_XBODY, body, velocity[i], 0)
     return {
-        "_rigid_body_pos": data.xpos[ids],
-        "_rigid_body_rot": data.xquat[ids][:, [1, 2, 3, 0]],
-        "_rigid_body_vel": velocity[:, 3:],
-        "_rigid_body_ang_vel": velocity[:, :3],
+        "rigid_body_pos_w": data.xpos[ids],
+        "rigid_body_quat_w": data.xquat[ids][:, [1, 2, 3, 0]],
+        "rigid_body_lin_vel_w": velocity[:, 3:],
+        "rigid_body_ang_vel_w": velocity[:, :3],
     }
 
 
@@ -158,12 +158,12 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
         if phase == "POST_STEP":
             # The root link is the robot's first body: its pose must be the integrated root pose, not the
             # pose the step started from.
-            lag = (sim.state.get("_rigid_body_pos")[:, 0] - sim.robot_root_states[:, :3]).abs().max().item()
+            lag = (sim.state.get("rigid_body_pos_w")[:, 0] - sim.robot_root_states[:, :3]).abs().max().item()
             if lag > ATOL:
                 worst["root body position differs from robot_root_states after a step"] = max(
                     worst.get("root body position differs from robot_root_states after a step", 0.0), lag
                 )
-            positions = fresh["_rigid_body_pos"].float()
+            positions = fresh["rigid_body_pos_w"].float()
             if previous:
                 motions.append((positions - previous[0]).abs().max().item())
             previous[:] = [positions.clone()]
@@ -188,7 +188,7 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
         for name, reference in references.items():
             expected = torch.as_tensor(reference, dtype=torch.float32)
             served = sim.state.get(name)[0].float().cpu()
-            if name == "_rigid_body_rot":  # q and -q are the same rotation
+            if name == "rigid_body_quat_w":  # q and -q are the same rotation
                 served = served * torch.sign((served * expected).sum(-1, keepdim=True))
             check_close(f"{name} after FK differs from an independent reference", served, expected)
         compare("FK after an in-place write")
@@ -201,7 +201,7 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
         # The root link is the robot's first body.
         check_close(
             "root body angular velocity after a velocity-only write and FK",
-            sim._rigid_body_ang_vel[:, 0],
+            sim.rigid_body_ang_vel_w[:, 0],
             root_ang_vel.cpu(),
         )
         compare("FK after a velocity-only write")

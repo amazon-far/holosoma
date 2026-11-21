@@ -98,10 +98,10 @@ def penalty_feet_ori(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     Returns:
         Reward tensor [num_envs]
     """
-    left_quat = env.simulator._rigid_body_rot[:, env.feet_indices[0]]
+    left_quat = env.simulator.rigid_body_quat_w[:, env.feet_indices[0]]
     gravity = gravity_vector(env)
     left_gravity = quat_rotate_inverse(left_quat, gravity, w_last=True)
-    right_quat = env.simulator._rigid_body_rot[:, env.feet_indices[1]]
+    right_quat = env.simulator.rigid_body_quat_w[:, env.feet_indices[1]]
     right_gravity = quat_rotate_inverse(right_quat, gravity, w_last=True)
     return (
         torch.sum(torch.square(left_gravity[:, :2]), dim=1) ** 0.5
@@ -198,8 +198,8 @@ def penalty_close_feet_xy(env: LeggedRobotLocomotionManager, close_feet_threshol
     Returns:
         Reward tensor [num_envs]
     """
-    left_foot_xy = env.simulator._rigid_body_pos[:, env.feet_indices[0], :2]
-    right_foot_xy = env.simulator._rigid_body_pos[:, env.feet_indices[1], :2]
+    left_foot_xy = env.simulator.rigid_body_pos_w[:, env.feet_indices[0], :2]
+    right_foot_xy = env.simulator.rigid_body_pos_w[:, env.feet_indices[1], :2]
 
     # Get base orientation
     base_forward = quat_apply(env.base_quat, base_forward_vector(env), w_last=True)

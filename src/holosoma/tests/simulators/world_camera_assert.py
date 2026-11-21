@@ -65,6 +65,7 @@ def main() -> int:
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
+    parser.add_argument("--origin-offset", type=float, default=0.0, help="shift every env origin along +Y (m)")
     parser.add_argument("--headless", choices=["true", "false"], default="true")
     parser.add_argument("--result-file", default=None, help="write OK/FAIL here before teardown")
     args = parser.parse_args()
@@ -97,6 +98,7 @@ def main() -> int:
     env_origins = torch.zeros(n, 3, device=device)
     if n > 1:
         env_origins[:, 0] = torch.arange(n, device=device, dtype=torch.float32) * 10.0
+    env_origins[:, 1] += args.origin_offset
     init = config.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32

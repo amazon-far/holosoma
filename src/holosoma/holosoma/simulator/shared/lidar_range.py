@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from typing import Protocol
 
 from holosoma.config_types.sensor import LidarSensorConfig
@@ -15,16 +16,18 @@ class LidarReturnRecord(Protocol):
     """Minimal sensor-record surface shared by LiDAR backend adapters."""
 
     config: LidarSensorConfig
+    buffers: dict[str, torch.Tensor]
 
-    def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
-        """Store one output tensor for the current scan."""
+    def writing(self, output: str, env_ids: torch.Tensor | None = None) -> AbstractContextManager[torch.Tensor]:
+        """Write one output's buffer in place for the current scan."""
 
 
-def points_from_ranges(directions: torch.Tensor, ranges: torch.Tensor) -> torch.Tensor:
-    """Convert reported radial ranges into sensor-frame XYZ, preserving configured sentinels."""
-    points = ranges.unsqueeze(-1) * directions.unsqueeze(0)
-    # Scalar sentinel: a full_like fill would allocate and write a second [..., 3] buffer.
-    return torch.where(torch.isfinite(ranges).unsqueeze(-1), points, float("nan")).to(torch.float32)
+def points_from_ranges(directions: torch.Tensor, ranges: torch.Tensor, out: torch.Tensor | None = None) -> torch.Tensor:
+    """Convert reported radial ranges into sensor-frame XYZ, preserving configured sentinels; into ``out`` if given."""
+    if out is None:
+        out = torch.empty((*ranges.shape, 3), dtype=torch.float32, device=ranges.device)
+    torch.mul(ranges.unsqueeze(-1), directions.unsqueeze(0), out=out)
+    return out.masked_fill_(~torch.isfinite(ranges).unsqueeze(-1), float("nan"))
 
 
 def finalize_lidar_returns(
@@ -34,14 +37,20 @@ def finalize_lidar_returns(
     *,
     geom_ids: torch.Tensor | None = None,
 ) -> None:
-    """Apply range clipping and store backend-neutral output buffers for one LiDAR scan."""
-    result = clip_sensor_ranges(
-        distances,
-        near=sensor_record.config.near,
-        far=sensor_record.config.far,
-        behavior=sensor_record.config.range_clipping_behavior,
-    )
-    sensor_record.set_buffer("ranges", result.ranges)
-    sensor_record.set_buffer("points", points_from_ranges(directions, result.ranges))
+    """Apply range clipping and write the backend-neutral outputs of one LiDAR scan into their buffers."""
+    if (geom_ids is not None) != ("geom_ids" in sensor_record.buffers):
+        raise ValueError("LiDAR geom_ids must be reported exactly when registered as an output")
+    config = sensor_record.config
+    with sensor_record.writing("ranges") as ranges:
+        hit_mask = clip_sensor_ranges(
+            distances.to(ranges.dtype),
+            near=config.near,
+            far=config.far,
+            behavior=config.range_clipping_behavior,
+            out=ranges,
+        ).hit_mask
+    with sensor_record.writing("points") as points:
+        points_from_ranges(directions, ranges, out=points)
     if geom_ids is not None:
-        sensor_record.set_buffer("geom_ids", torch.where(result.hit_mask, geom_ids, -1).to(torch.int32))
+        with sensor_record.writing("geom_ids") as ids:
+            torch.where(hit_mask, geom_ids.to(torch.int32), ids.new_tensor(-1), out=ids)

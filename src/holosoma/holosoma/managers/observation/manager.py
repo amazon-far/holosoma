@@ -67,6 +67,11 @@ class ObservationManager:
             self._history_buffers[group_name] = {}
 
             for term_name, term_cfg in group_cfg.terms.items():
+                if not term_cfg.copy and group_cfg.history_length > 1:
+                    raise ValueError(
+                        f"Observation term {group_name}.{term_name} sets copy=False, but its group keeps a "
+                        f"history of {group_cfg.history_length}, which needs a copy per step"
+                    )
                 func = resolve_callable(term_cfg.func, context="observation term")
                 if isinstance(func, type) and issubclass(func, ObservationTermBase):
                     self._terms[group_name][term_name] = func(term_cfg, self.env)

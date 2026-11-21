@@ -47,6 +47,15 @@ class _PerformanceLog:
         )
 
 
+def simulation_env_origins(task: BaseTask) -> torch.Tensor:
+    """Return environment origins: a single environment at the world origin, so its poses are world
+    coordinates; several keep the terrain's origins so they do not overlap.
+    """
+    if task.num_envs == 1:
+        return torch.zeros(1, 3, device=task.device)
+    return BaseTask._get_env_origins(task)
+
+
 class SimulationTask(BaseTask):
     """BaseTask specialization that advances the simulation until the simulator requests shutdown.
 
@@ -54,14 +63,25 @@ class SimulationTask(BaseTask):
     randomization and termination terms configured on ``RunSimConfig``, but owns no policy managers.
     """
 
-    def _get_env_origins(self) -> torch.Tensor:
-        """Place a single environment at the world origin, so its poses are world coordinates.
+    def _init_buffers(self) -> None:
+        super()._init_buffers()
+        self._empty_reset_env_ids = torch.empty(0, device=self.device, dtype=torch.long)
 
-        Several environments keep the terrain's origins so they do not overlap.
-        """
-        if self.num_envs == 1:
-            return torch.zeros(1, 3, device=self.device)
-        return super()._get_env_origins()
+    def _check_termination(self) -> None:
+        if self.termination_manager.has_terms:
+            super()._check_termination()
+            return
+        self.reset_buf.zero_()
+        self.time_out_buf.zero_()
+
+    def _get_reset_env_ids(self) -> torch.Tensor:
+        if self.termination_manager.has_terms:
+            return super()._get_reset_env_ids()
+        # Avoids CUDA nonzero's host sync: with no termination terms nothing resets.
+        return self._empty_reset_env_ids
+
+    def _get_env_origins(self) -> torch.Tensor:
+        return simulation_env_origins(self)
 
     def run(self) -> None:
         """Start episodes and advance control frames until the simulator requests shutdown."""

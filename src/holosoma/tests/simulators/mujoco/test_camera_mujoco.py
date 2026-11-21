@@ -263,13 +263,16 @@ def test_camera_actor_mount_warp(tmp_path):
 
 
 @pytest.mark.mujoco_classic
-def test_camera_world_mount_classic(tmp_path):
+@pytest.mark.parametrize("origin_offset", ["0", "7"])
+def test_camera_world_mount_classic(tmp_path, origin_offset):
     # target_kind="world": a free-floating camera fixed in the env frame does NOT follow the robot.
-    result_file = tmp_path / "world_mujoco.txt"
+    result_file = tmp_path / f"world_mujoco_{origin_offset}.txt"
     run_harness(
         _WORLD_HARNESS,
         "--simulator",
         "mujoco",
+        "--origin-offset",
+        origin_offset,
         "--result-file",
         str(result_file),
         label="mujoco/camera-world-mount",

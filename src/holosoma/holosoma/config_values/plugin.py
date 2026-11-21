@@ -11,6 +11,7 @@ Imported at CLI-build time; stays ROS-free (a preset's impl loads only when its 
 from holosoma.config_types.plugin import (
     CameraVizPluginConfig,
     ClockPublishPluginConfig,
+    CosimRenderPluginConfig,
     FrameWriterPluginConfig,
     GantryControlPluginConfig,
     LidarVizPluginConfig,
@@ -40,6 +41,10 @@ gantry_control = PLUGIN_REGISTRY.add("gantry_control", GantryControlPluginConfig
 # Robot-attached frame pose/velocity as nav_msgs/Odometry. Defaults to the robot root for backward
 # compatibility; body_name + position/orientation can select an offset frame on any robot body.
 odometry = PLUGIN_REGISTRY.add("odometry", ROS2OdometryPluginConfig())
+
+# Co-simulation head: share state with a renderer process and take remote cameras' images from it, e.g.
+#   plugin.cosim:cosim-render --plugin.cosim.endpoint ipc:///tmp/$USER/cosim.sock --sensor.cam.remote cosim
+cosim_render = PLUGIN_REGISTRY.add("cosim-render", CosimRenderPluginConfig())
 
 # Kinematic motion playback: drive the robot (and optionally one scene object) from a recorded
 # motion NPZ. Rendering-only replay of external trajectories; combine with

@@ -74,11 +74,12 @@ def test_subset_order_broadcast_and_config_independence(manager: SensorManager) 
 
 def test_pose_update_preserves_last_frame_and_cadence(manager: SensorManager) -> None:
     record = manager.get_sensor("sensor")
-    frame = torch.ones(3, 1, 1)
-    record.set_buffer("output", frame)
+    record.allocate("output", (3, 1, 1), torch.float32, "cpu")
+    record.set_buffer("output", torch.ones(3, 1, 1))
+    frame = record.buffers["output"]
     record.step_counter = 7
     manager.set_mount_pose("sensor", torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.00005]))
-    assert record.buffers["output"] is frame
+    assert record.buffers["output"] is frame and torch.equal(frame, torch.ones(3, 1, 1))
     assert record.step_counter == 7
     assert record.effective_decimation == 3
     torch.testing.assert_close(manager.get_mount_pose("sensor")[:, 6], torch.ones(3))

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import numpy as np
@@ -287,7 +288,7 @@ def test_cyclic_pattern_rejects_invalid_snapshot_shape_or_offset(
 
 def test_default_range_clipping_preserves_nan_point_no_return_semantics() -> None:
     directions = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
-    distances = torch.tensor([[2.0, float("inf")], [0.1, 5.0]])
+    distances = torch.tensor([[2.0, float("inf")], [0.1, 5.0]], dtype=torch.float64)  # as classic MuJoCo reports
     result = clip_sensor_ranges(distances, near=0.2, far=4.0, behavior="none")
     points = points_from_ranges(directions, result.ranges)
     assert torch.equal(result.hit_mask, torch.tensor([[True, False], [False, False]]))
@@ -327,7 +328,7 @@ def test_range_clipping_reports_explicit_endpoint_or_zero_sentinels(
     expected_points: list[list[list[float]]],
 ) -> None:
     directions = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
-    distances = torch.tensor([[2.0, float("inf")], [0.1, 5.0]])
+    distances = torch.tensor([[2.0, float("inf")], [0.1, 5.0]], dtype=torch.float64)  # as classic MuJoCo reports
     result = clip_sensor_ranges(distances, near=0.2, far=4.0, behavior=behavior)
     assert torch.equal(result.hit_mask, torch.tensor([[True, False], [False, False]]))
     assert torch.equal(result.ranges, torch.tensor(expected_ranges))
@@ -375,11 +376,15 @@ def test_range_finalizer_never_attributes_synthetic_points_to_geometry(
             far=4.0,
             range_clipping_behavior=behavior,
         ),
-        buffers={},
+        buffers={
+            "ranges": torch.zeros(2, 2),
+            "points": torch.zeros(2, 2, 3),
+            "geom_ids": torch.zeros(2, 2, dtype=torch.int32),
+        },
     )
-    record.set_buffer = record.buffers.__setitem__
+    record.writing = lambda output, _env_ids=None: nullcontext(record.buffers[output])
     directions = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
-    distances = torch.tensor([[2.0, float("inf")], [0.1, 5.0]])
+    distances = torch.tensor([[2.0, float("inf")], [0.1, 5.0]], dtype=torch.float64)  # as classic MuJoCo reports
     geom_ids = torch.tensor([[7, -1], [8, 9]], dtype=torch.int32)
 
     finalize_lidar_returns(record, directions, distances, geom_ids=geom_ids)
