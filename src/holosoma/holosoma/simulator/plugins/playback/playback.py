@@ -441,7 +441,7 @@ class MotionPlaybackPlugin:
     def settling(self, env_id: int) -> bool:
         """Whether ``env_id``'s current frame is a ``settle_frames`` hold at the start of an episode.
 
-        Writers that want only the clip's own frames skip these (``FrameWriterPlugin.skip_settle_frames``).
+        Writers that want only the clip's own frames skip these, as ``FrameWriterPlugin`` does with ``episodic``.
         """
         return self._slot_of(env_id).settling
 

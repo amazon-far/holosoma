@@ -277,10 +277,15 @@ class MotionPlaybackPluginConfig(PluginConfig):
     frame; envs beyond the playlist length are never written. The run ends when every env is done."""
 
     settle_frames: int = 0
-    """Frames to hold the clip at its first frame after each episode boundary before the clip
-    starts advancing (>= 0, default 0 = no hold). Gives Isaac time to materialize per-episode
-    changes applied on ``EPISODE_START`` (MDL/texture compile, prim activation, dome/HDR swap) and
-    lets RTX path-tracing reconverge before each episode's rendered frames begin."""
+    """Frames to hold the clip at its first frame at the start of every episode, each env's first
+    included, before the clip starts advancing (>= 0, default 0 = no hold). Gives Isaac time to
+    materialize per-episode changes applied on ``EPISODE_START`` (MDL/texture compile, prim
+    activation, dome/HDR swap) and lets RTX path-tracing reconverge before each episode's rendered
+    frames begin. The held frames are still rendered and egressed: a consumer that wants only the
+    clip's own frames skips those where ``MotionPlaybackPlugin.settling(env_id)`` is true, as the
+    episodic frame writer does. The non-episodic frame writer, the ROS2 egress and the video
+    recorder keep them, so their output starts with ``settle_frames`` copies of the clip's first
+    frame."""
 
     objects: list[str] = field(default_factory=list)
     """Scene-object names (``--scene.rigid_objects`` keys) to drive, in the same order as their
@@ -591,9 +596,10 @@ class FrameWriterPluginConfig(PluginConfig):
     a name already used in the run gets ``_env<k>``. Inside, streams are named without the env
     (``<camera>_<modality>.mp4`` or ``<camera>_<modality>/000000.png``), and the episode's ``index.jsonl``
     header records the episode name and the env that rendered it. Frames of an env with no open episode
-    (playback has nothing for it) are not written, nor are motion playback's ``settle_frames`` holds after a
-    clip switch: the first frame rendered after a switch can still show the previous clip, so with
-    ``settle_frames >= 1`` it is dropped and each episode holds exactly its clip's frames."""
+    (playback has nothing for it) are not written, nor are motion playback's ``settle_frames`` holds at the
+    start of each episode, the env's first included: the first frame rendered after a clip switch or the
+    startup randomization can still show the earlier scene, so with ``settle_frames >= 1`` it is dropped and
+    each episode holds exactly its clip's frames."""
 
     rgb_format: Literal["png", "jpeg", "mp4"] = "png"
     """RGB output: ``png`` (default, lossless) or ``jpeg`` image sequences (names match the ROS2
