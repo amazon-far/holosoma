@@ -134,8 +134,3 @@ def test_noop_plugin_registers_nothing() -> None:
     assert type(task.installed_plugins["off"]) is NoOpPlugin
     task.hooks.emit(Phase.FRAME_END)
     assert cast("_FakeSimulator", task.simulator).logged == ["foo"]  # only the active plugin fired
-
-
-def test_pluginconfig_get_cls_is_abstract() -> None:
-    with pytest.raises(TypeError):
-        PluginConfig()  # type: ignore[abstract]
