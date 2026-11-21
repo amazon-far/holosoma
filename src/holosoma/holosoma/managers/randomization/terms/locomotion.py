@@ -354,29 +354,16 @@ def randomize_spawn(
     base_vel_range: float = 0.5,
     **_: Any,
 ) -> None:
-    """Randomize default spawns: offset XY on custom-origin terrains and draw the base velocity in ``±base_vel_range``.
+    """Randomize the reset spawn: offset XY on custom-origin terrains and draw the base velocity in ``±base_vel_range``.
 
-    The offset follows the terrain's ``spawn`` settings (``xy_offset_range``, ``query_terrain_height``).
-
-    Envs reset to explicit ``target_states`` keep them. The term cannot see a reset's targets, so it infers
-    them: an env is randomized only while its root position and velocity still equal the default spawn the
-    task's reset writes (``robot.init_state`` at the env origin). Consequently a target equal to that default
-    is randomized too, and no reset term that runs before this one may write the root. Class-based reset
-    terms always run before function terms like this one.
+    The offset follows the terrain's ``spawn`` settings (``xy_offset_range``, ``query_terrain_height``). It runs
+    after the task's reset writes the robot state, so resets to explicit ``target_states`` are randomized too.
     """
     idx = _ensure_env_ids_tensor(env, env_ids)
     if idx.numel() == 0:
         return
     root_states = env.simulator.robot_root_states
     terrain_state = env.terrain_manager.get_state("locomotion_terrain")
-    default_root = env.base_init_state.unsqueeze(0).repeat(idx.numel(), 1)
-    default_root[:, :3] += terrain_state.env_origins[idx]
-    at_default = (root_states[idx, :3] == default_root[:, :3]).all(dim=1) & (
-        root_states[idx, 7:13] == default_root[:, 7:13]
-    ).all(dim=1)
-    idx = idx[at_default]
-    if idx.numel() == 0:
-        return
     if terrain_state.custom_origins:
         spawn_cfg = env.terrain_manager.cfg.terrain_term.spawn
         xy_range = [-spawn_cfg.xy_offset_range, spawn_cfg.xy_offset_range]
