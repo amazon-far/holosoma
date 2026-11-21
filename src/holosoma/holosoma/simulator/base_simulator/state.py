@@ -4,7 +4,9 @@ A backend binds each state quantity once, in ``prepare_sim``, with :meth:`SimSta
 returns the current value: a function returning a tensor (or a tuple of tensors, one per name), or a
 :class:`Columns` spec, a column selection of a backend tensor. The registry copies each value into a
 float32 buffer on ``device``, allocated on the first read, on the first access after the simulation
-state changed, and ``write`` flushes in-place changes back to the simulation, row by row.
+state changed, and ``write`` flushes in-place changes back to the simulation, row by row. Other
+components may register read-only quantities derived from simulator state, such as terrain heights,
+the same way after setup.
 
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
 simulation state. In-place writes reach the simulation before its next physics step, FK pass or any
@@ -114,8 +116,6 @@ class SimState:
         self._tensors: dict[str, torch.Tensor] = {}
         self._by_name: dict[str, _Registration] = {}
         self._registrations: list[_Registration] = []
-        self.generation = 0
-        """Count of simulation-state changes: increases whenever every tensor is marked stale."""
 
     @overload
     def register(
@@ -210,7 +210,6 @@ class SimState:
 
     def mark_stale(self) -> None:
         """Mark every tensor stale, so the next access re-reads it."""
-        self.generation += 1
         for registration in self._registrations:
             registration.valid = False
 

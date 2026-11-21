@@ -60,21 +60,21 @@ class TerrainLocomotion(TerrainTermBase):
         return self._terrain.mesh
 
     def setup(self) -> None:
-        self._base_heights = torch.zeros(self.num_envs, device=self.device, requires_grad=False)
         self._base_height_points, self._ray_directions, self._num_base_height_points = self._init_base_height_points()
-        self._ray_hits_world_base = torch.zeros(
-            self.num_envs, self._num_base_height_points, 3, device=self.device, requires_grad=False
-        )
         self._offset_pos = torch.tensor(list(ATTACHMENT_POS), device=self.device)
 
         self._feet_height_indices = body_indices(self.env, self.env.robot_config.foot_height_name)
         num_feet = len(self._feet_height_indices)
-        self._feet_heights = torch.zeros(self.num_envs, num_feet, device=self.device, requires_grad=False)
         self._ray_directions_feet = torch.zeros(self.num_envs, num_feet, 3, device=self.device, requires_grad=False)
         self._ray_directions_feet[..., :] = torch.tensor([0.0, 0.0, -1.0], device=self.device)
-        self._ray_hits_world_feet = torch.zeros(self.num_envs, num_feet, 3, device=self.device, requires_grad=False)
-        self._base_heights_generation = -1
-        self._feet_heights_generation = -1
+
+        # The simulator's state registry raycasts again on the first read after the simulation changed.
+        state = self.env.simulator.state
+        state.register(("terrain_base_heights", "terrain_base_ray_hits"), self._get_base_heights)
+        if num_feet > 0:
+            state.register(("terrain_feet_heights", "terrain_feet_ray_hits"), self._get_feet_heights)
+        else:
+            self._no_feet = torch.zeros(self.num_envs, 0, device=self.device)
 
     @property
     def env_origins(self) -> torch.Tensor:
@@ -86,21 +86,15 @@ class TerrainLocomotion(TerrainTermBase):
 
     @property
     def base_heights(self) -> torch.Tensor:
-        """Base heights above the terrain, raycast again when the simulation state has changed since the last read."""
-        generation = self.env.simulator.state.generation
-        if self._base_heights_generation != generation:
-            self._base_heights[:], self._ray_hits_world_base[:] = self._get_base_heights()
-            self._base_heights_generation = generation
-        return self._base_heights
+        """Base heights above the terrain for the current simulation state."""
+        return self.env.simulator.state.get("terrain_base_heights")
 
     @property
     def feet_heights(self) -> torch.Tensor:
-        """Feet heights above the terrain, raycast again when the simulation state has changed since the last read."""
-        generation = self.env.simulator.state.generation
-        if self._feet_heights_generation != generation and self._feet_height_indices.numel() > 0:
-            self._feet_heights[:], self._ray_hits_world_feet[:] = self._get_feet_heights()
-            self._feet_heights_generation = generation
-        return self._feet_heights
+        """Feet heights above the terrain for the current simulation state."""
+        if self._feet_height_indices.numel() == 0:
+            return self._no_feet
+        return self.env.simulator.state.get("terrain_feet_heights")
 
     def _get_env_origins(self) -> None:
         """Sets environment origins. On rough terrain the origins are defined by the terrain platforms.
@@ -263,8 +257,8 @@ class TerrainLocomotion(TerrainTermBase):
     def draw_debug_viz(self) -> None:
         env_id = 0
         for j in range(self._num_base_height_points):
-            position = self._ray_hits_world_base[env_id, j].detach().cpu().numpy()
+            position = self.env.simulator.state.get("terrain_base_ray_hits")[env_id, j].detach().cpu().numpy()
             draw.draw_sphere(self.env.simulator, position, 0.02, (1, 0, 0), env_id)
         for j in range(len(self._feet_height_indices)):
-            position = self._ray_hits_world_feet[env_id, j].detach().cpu().numpy()
+            position = self.env.simulator.state.get("terrain_feet_ray_hits")[env_id, j].detach().cpu().numpy()
             draw.draw_sphere(self.env.simulator, position, 0.02, (0, 1, 0), env_id)
