@@ -71,7 +71,6 @@ base_setup_terms = {
         params={
             "push_interval_s": [1.0, 3.0],
             "max_push_vel": [0.5, 0.5, 0.2, 0.52, 0.52, 0.78],
-            "additive": True,
             "enabled": True,
         },
     ),

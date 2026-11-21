@@ -46,9 +46,8 @@ def _get_joint_action_term(env: Any) -> JointPositionActionTerm | None:
 class PushRandomizerState(RandomizationTermBase):
     """Stateful randomizer that owns push scheduling buffers and counters, and applies the pushes.
 
-    A push draws a base velocity uniformly within ``±max_push_vel`` per component: 2 components push
-    the planar linear velocity, 6 the full twist. With ``additive`` the draw is added to the current
-    velocity; otherwise it replaces it.
+    A push draws a base velocity uniformly within ``±max_push_vel`` per component. With 2 components it
+    replaces the planar linear velocity; with 6 it is added to the full twist.
     """
 
     def __init__(self, cfg: Any, env: Any):
@@ -62,7 +61,6 @@ class PushRandomizerState(RandomizationTermBase):
         self._max_push_vel_tensor = torch.empty(0, dtype=torch.float32, device=env.device)
         self._set_max_push_tensor(vector_max)
         self.enabled: bool = bool(params.get("enabled", True))
-        self.additive: bool = bool(params.get("additive", False))
         logger.info(
             f"[Randomization] PushRandomizerState initialized (enabled={self.enabled}, "
             f"max_push_vel={self._max_push_vel_tensor.tolist()}, "
@@ -152,7 +150,7 @@ class PushRandomizerState(RandomizationTermBase):
         rand = torch.rand(len(env_ids), n, device=self.env.device) * 2 - 1
         push_vel = rand * self._max_push_vel_tensor.unsqueeze(0)
         root_states = self.env.simulator.robot_root_states
-        if self.additive:
+        if n == 6:
             root_states[env_ids, 7 : 7 + n] += push_vel
         else:
             root_states[env_ids, 7 : 7 + n] = push_vel

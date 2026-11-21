@@ -127,9 +127,6 @@ def _fold_task_subclass(data: dict[str, Any]) -> dict[str, Any]:
                 randomization["reset_terms"] = {"randomize_spawn": spawn, **reset_terms}
         for term in _terms_named(data.get("curriculum"), ":AverageEpisodeLengthTracker"):
             term["params"] = {"base_num_envs": 4096, **(term.get("params") or {})}
-    else:
-        for term in _terms_named(data.get("randomization"), ":PushRandomizerState"):
-            term["params"] = {**(term.get("params") or {}), "additive": True}
     return data
 
 

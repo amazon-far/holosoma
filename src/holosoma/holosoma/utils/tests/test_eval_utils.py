@@ -650,8 +650,6 @@ def test_saved_task_subclass_configs_load_onto_policy_task_with_the_terms_that_r
     assert loaded.env_class == "holosoma.envs.policy_task.PolicyTask"
     assert loaded.randomization is not None
     assert (next(iter(loaded.randomization.reset_terms), None) == "randomize_spawn") is locomotion
-    push = loaded.randomization.setup_terms["push_randomizer_state"]
-    assert bool(push.params.get("additive", False)) is not locomotion
     assert loaded.curriculum is not None
     tracker = loaded.curriculum.setup_terms["average_episode_tracker"]
     assert ("base_num_envs" in tracker.params) is locomotion
