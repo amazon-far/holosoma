@@ -173,6 +173,13 @@ class CommandManager:
                 func = self._step_funcs[term_name]
                 func(self.env, **term_cfg.params)
 
+    def log_metrics(self) -> dict[str, Any]:
+        """The terms' per-frame values to log, merged."""
+        merged: dict[str, Any] = {}
+        for term in dict.fromkeys(entry["instance"] for entry in self._class_entries):
+            merged.update(term.log_metrics())
+        return merged
+
     def get_state(self, term_name: str) -> CommandTermBase | None:
         """Retrieve a stateful command term by name.
 

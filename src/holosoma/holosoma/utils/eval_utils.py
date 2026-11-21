@@ -107,9 +107,45 @@ def _load_config_from_checkpoint(checkpoint_path: Path) -> tuple[ExperimentConfi
     return _experiment_config_from_saved(config_data), checkpoint_contents.get("wandb_run_path")
 
 
+_LOCOMOTION_CLASS = "holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager"
+_WBT_CLASS = "holosoma.envs.wbt.wbt_manager.WholeBodyTrackingManager"
+_POLICY_TASK_CLASS = "holosoma.envs.policy_task.PolicyTask"
+
+
+def _fold_task_subclass(data: dict[str, Any]) -> dict[str, Any]:
+    """Move a config saved with the locomotion or WBT task class onto PolicyTask with the terms that replace it."""
+    env_class = data.get("env_class", _LOCOMOTION_CLASS)
+    if env_class not in (_LOCOMOTION_CLASS, _WBT_CLASS):
+        return data
+    data["env_class"] = _POLICY_TASK_CLASS
+    if env_class == _LOCOMOTION_CLASS:
+        randomization = data.get("randomization")
+        if isinstance(randomization, dict):
+            reset_terms = randomization.get("reset_terms") or {}
+            if "randomize_spawn" not in reset_terms:
+                spawn = {"func": "holosoma.managers.randomization.terms.locomotion:randomize_spawn", "params": {}}
+                randomization["reset_terms"] = {"randomize_spawn": spawn, **reset_terms}
+        for term in _terms_named(data.get("curriculum"), ":AverageEpisodeLengthTracker"):
+            term["params"] = {"base_num_envs": 4096, **(term.get("params") or {})}
+    return data
+
+
+def _terms_named(manager: Any, func_suffix: str) -> list[dict[str, Any]]:
+    """Saved term dicts in a manager config whose ``func`` ends with ``func_suffix``."""
+    if not isinstance(manager, dict):
+        return []
+    return [
+        term
+        for terms in manager.values()
+        if isinstance(terms, dict)
+        for term in terms.values()
+        if isinstance(term, dict) and str(term.get("func", "")).endswith(func_suffix)
+    ]
+
+
 def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConfig:
     """Transition historical saved fields; CLI/YAML inputs keep the current schema."""
-    data = _drop_retired_isaacgym_fields(config_data)
+    data = _fold_task_subclass(_drop_retired_isaacgym_fields(config_data))
     simulator = data.get("simulator", {}).get("config", {})
     if "mujoco_warp" in simulator:
         native = simulator["sim"].setdefault("mujoco", {})

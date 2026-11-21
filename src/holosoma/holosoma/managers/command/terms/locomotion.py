@@ -134,6 +134,7 @@ class LocomotionGait(CommandTermBase):
         self.gait_freq: torch.Tensor | None = None
         self.phase_dt: torch.Tensor | None = None
         self.mean_gait_freq: float = 1.0 / self.gait_period
+        self._in_eval_mode = False
 
     def setup(self) -> None:
         env = self.env
@@ -145,7 +146,7 @@ class LocomotionGait(CommandTermBase):
         self.gait_freq = torch.zeros((num_envs, 1), dtype=torch.float32, device=device)
         self.phase_dt = torch.zeros((num_envs, 1), dtype=torch.float32, device=device)
 
-        self._initialize_indices(None, evaluating=env.is_evaluating)
+        self.set_eval_mode(env.is_evaluating)
 
     def reset(self, env_ids: torch.Tensor | None) -> None:
         self._initialize_indices(env_ids, evaluating=self.env.is_evaluating)
@@ -155,6 +156,8 @@ class LocomotionGait(CommandTermBase):
             return
 
         env = self.env
+        if env.is_evaluating and not self._in_eval_mode:
+            self.set_eval_mode(True)
         phase_tp1 = env.episode_length_buf.unsqueeze(1) * self.phase_dt + self.phase_offset
         self.phase.copy_(torch.fmod(phase_tp1 + torch.pi, 2 * torch.pi) - torch.pi)
 
@@ -172,7 +175,9 @@ class LocomotionGait(CommandTermBase):
             )
 
     def set_eval_mode(self, evaluating: bool) -> None:
+        """Re-initialize every env's phase offset and frequency for evaluation or training."""
         self._initialize_indices(None, evaluating=evaluating)
+        self._in_eval_mode = evaluating
 
     def resample_frequency(self, env_ids: torch.Tensor) -> None:
         if self.gait_freq is None or self.phase_dt is None:

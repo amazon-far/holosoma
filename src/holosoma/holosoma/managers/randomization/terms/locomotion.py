@@ -44,7 +44,11 @@ def _get_joint_action_term(env: Any) -> JointPositionActionTerm | None:
 
 
 class PushRandomizerState(RandomizationTermBase):
-    """Stateful randomizer that owns push scheduling buffers and counters."""
+    """Stateful randomizer that owns push scheduling buffers and counters, and applies the pushes.
+
+    A push draws a base velocity uniformly within ``±max_push_vel`` per component. With 2 components it
+    replaces the planar linear velocity; with 6 it is added to the full twist.
+    """
 
     def __init__(self, cfg: Any, env: Any):
         super().__init__(cfg, env)
@@ -138,6 +142,19 @@ class PushRandomizerState(RandomizationTermBase):
     def max_push_vel(self) -> torch.Tensor:
         return self._max_push_vel_tensor
 
+    def push(self, env_ids: torch.Tensor) -> None:
+        """Push ``env_ids`` by a random base velocity."""
+        if env_ids.numel() == 0:
+            return
+        n = self._max_push_vel_tensor.numel()
+        rand = torch.rand(len(env_ids), n, device=self.env.device) * 2 - 1
+        push_vel = rand * self._max_push_vel_tensor.unsqueeze(0)
+        root_states = self.env.simulator.robot_root_states
+        if n == 6:
+            root_states[env_ids, 7 : 7 + n] += push_vel
+        else:
+            root_states[env_ids, 7 : 7 + n] = push_vel
+
     def _resample_intervals(self, env_ids: torch.Tensor, sampler: TermSampler) -> None:
         if self.push_interval_s is None:
             return
@@ -150,8 +167,8 @@ class PushRandomizerState(RandomizationTermBase):
 
     def _set_max_push_tensor(self, values: Sequence[float]) -> None:
         tensor = torch.as_tensor(values, dtype=torch.float32, device=self.env.device).flatten()
-        if tensor.numel() == 0:
-            raise ValueError("max_push_vel must contain at least one value.")
+        if tensor.numel() not in (2, 6):
+            raise ValueError(f"max_push_vel needs 2 (planar) or 6 (twist) components, got {tensor.numel()}.")
         self._max_push_vel_tensor = tensor.clone()
 
 
@@ -327,6 +344,47 @@ def setup_dof_pos_bias(
     env.default_dof_pos = env.default_dof_pos_base + default_dof_pos_bias
 
 
+def randomize_spawn(
+    env: Any,
+    env_ids: Sequence[int] | torch.Tensor | None,
+    *,
+    sampler: TermSampler,
+    base_vel_range: float = 0.5,
+    **_: Any,
+) -> None:
+    """Randomize the reset spawn: offset XY on custom-origin terrains and draw the base velocity in ``±base_vel_range``.
+
+    The offset follows the terrain's ``spawn`` settings (``xy_offset_range``, ``query_terrain_height``). It runs
+    after the task's reset writes the robot state, so resets to explicit ``target_states`` are randomized too.
+    """
+    idx = _ensure_env_ids_tensor(env, env_ids)
+    if idx.numel() == 0:
+        return
+    root_states = env.simulator.robot_root_states
+    terrain_state = env.terrain_manager.get_state("locomotion_terrain")
+    if terrain_state.custom_origins:
+        spawn_cfg = env.terrain_manager.cfg.terrain_term.spawn
+        xy_range = [-spawn_cfg.xy_offset_range, spawn_cfg.xy_offset_range]
+        xy_offsets = sampler.draw(xy_range, env_ids=idx, coords=(0, torch.arange(2)[None, :]), device=env.device)
+        if spawn_cfg.query_terrain_height:
+            new_xy = root_states[idx, :2] + xy_offsets
+            terrain_heights = terrain_state.query_terrain_heights(
+                new_xy,
+                use_grid_sampling=spawn_cfg.use_grid_sampling,
+                grid_size=spawn_cfg.grid_size,
+                grid_spacing=spawn_cfg.grid_spacing,
+            )
+            new_z = terrain_heights + env.robot_config.init_state.pos[2]
+            root_states[idx, :3] = torch.cat([new_xy, new_z.unsqueeze(1)], dim=1)
+        else:
+            root_states[idx, :2] += xy_offsets
+    # [7:10]: lin vel, [10:13]: ang vel
+    vel_range = [-base_vel_range, base_vel_range]
+    root_states[idx, 7:13] = sampler.draw(
+        vel_range, env_ids=idx, coords=(1, torch.arange(6)[None, :]), device=env.device
+    )
+
+
 def randomize_push_schedule(
     env: Any,
     env_ids: Sequence[int] | torch.Tensor | None,
@@ -343,7 +401,6 @@ def randomize_push_schedule(
         raise AttributeError("PushRandomizerState is not registered with the randomization manager.")
 
     state.configure(enabled=enabled, push_interval_s=push_interval_s, max_push_vel=max_push_vel)
-    env._max_push_vel = state.max_push_vel.clone()
 
     if not state.enabled:
         return
@@ -943,5 +1000,4 @@ def apply_pushes(
 
     state.zero_counters(push_robot_env_ids)
     state.resample(push_robot_env_ids, sampler)
-    env._max_push_vel = state.max_push_vel.clone()
-    env._push_robots(push_robot_env_ids)
+    state.push(push_robot_env_ids)

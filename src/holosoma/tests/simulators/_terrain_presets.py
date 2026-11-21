@@ -46,8 +46,5 @@ class FlatMeshTerrain(TerrainTermBase):
     def setup(self) -> None:
         pass
 
-    def update_heights(self, env_ids: torch.Tensor | None = None) -> None:
-        pass
-
     def draw_debug_viz(self) -> None:
         pass

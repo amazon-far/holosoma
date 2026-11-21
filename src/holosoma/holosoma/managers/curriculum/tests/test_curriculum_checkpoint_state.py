@@ -17,7 +17,6 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from holosoma.config_types.curriculum import CurriculumManagerCfg, CurriculumTermCfg
-from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
 from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.curriculum.manager import CurriculumManager
 from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker, PenaltyCurriculum
@@ -75,7 +74,7 @@ def _curriculum_cfg(*, penalty_key: str = "penalty_curriculum", enabled: bool = 
     )
 
 
-class _Env(LeggedRobotLocomotionManager):
+class _Env(PolicyTask):
     """Just enough of a locomotion env for its curriculum manager and checkpoint methods."""
 
     def __init__(self, **cfg_kwargs: Any) -> None:

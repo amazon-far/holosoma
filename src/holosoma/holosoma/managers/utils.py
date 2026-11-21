@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
+from holosoma.utils.safe_torch_import import torch
+
 
 def resolve_callable(path: Any | str, context: str = "term") -> Any:
     """Resolve a callable (function or class) from a string path.
@@ -54,3 +56,11 @@ def resolve_callable(path: Any | str, context: str = "term") -> Any:
         return getattr(module, callable_name)
     except (ImportError, AttributeError) as exc:
         raise ValueError(f"Failed to import {context} '{path}': {exc}") from exc
+
+
+def body_indices(env: Any, pattern: str) -> torch.Tensor:
+    """Simulator indices of the robot bodies whose names contain ``pattern``, in body order."""
+    names = [name for name in env.body_names if pattern in name]
+    return torch.tensor(
+        [env.simulator.find_rigid_body_indice(name) for name in names], dtype=torch.long, device=env.device
+    )

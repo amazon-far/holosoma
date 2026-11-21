@@ -16,7 +16,7 @@ from holosoma.config_values import (
 )
 
 g1_29dof = ExperimentConfig(
-    env_class="holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager",
+    env_class="holosoma.envs.policy_task.PolicyTask",
     training=TrainingConfig(project="hv-g1-manager", name="g1_29dof_manager"),
     algo=replace(algo.ppo, config=replace(algo.ppo.config, num_learning_iterations=25000, use_symmetry=True)),
     simulator=simulator.isaacsim,
@@ -36,7 +36,7 @@ g1_29dof = ExperimentConfig(
 )
 
 g1_29dof_fast_sac = ExperimentConfig(
-    env_class="holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager",
+    env_class="holosoma.envs.policy_task.PolicyTask",
     training=TrainingConfig(project="hv-g1-manager", name="g1_29dof_fast_sac_manager"),
     algo=replace(algo.fast_sac, config=replace(algo.fast_sac.config, num_learning_iterations=50000, use_symmetry=True)),
     simulator=simulator.isaacsim,

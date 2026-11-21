@@ -11,6 +11,7 @@ from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.managers.action import ActionManager
 from holosoma.managers.command import CommandManager
 from holosoma.managers.curriculum import CurriculumManager
+from holosoma.managers.curriculum.terms.locomotion import convert_legacy_checkpoint_state
 from holosoma.managers.observation import ObservationManager
 from holosoma.managers.reward import RewardManager
 from holosoma.utils.safe_torch_import import torch
@@ -89,6 +90,8 @@ class PolicyTask(BaseTask):
         """Restore environment-specific state from a checkpoint."""
         if not state:
             return
+        if "curriculum" not in state:
+            state = convert_legacy_checkpoint_state(self.curriculum_manager, state)
         curriculum_state = state.get("curriculum")
         if not curriculum_state:
             return
@@ -122,6 +125,11 @@ class PolicyTask(BaseTask):
         Called by agent during pre_evaluate_policy
         """
         self.is_evaluating = True
+
+    @property
+    def average_episode_length(self) -> float:
+        avg = self._get_average_episode_tracker().get_average()
+        return float(avg.detach().cpu().item())
 
     # ------------------------------------------------------------------
     # Reset hooks
@@ -231,11 +239,12 @@ class PolicyTask(BaseTask):
         return
 
     def _update_log_dict(self) -> None:
-        """Append per-frame metrics to ``log_dict``: the average episode length when it is tracked."""
+        """Append per-frame metrics to ``log_dict``: the average episode length when tracked, and command metrics."""
         tracker = self.curriculum_manager.get_term("average_episode_tracker")
         if tracker is not None:
             avg = cast("AverageEpisodeLengthTracker", tracker).get_average()
             self.log_dict["average_episode_length"] = avg.detach().cpu()
+        self.log_dict.update(self.command_manager.log_metrics())
 
     def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
         tracker = self.curriculum_manager.get_term("average_episode_tracker")
