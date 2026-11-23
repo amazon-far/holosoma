@@ -512,6 +512,23 @@ def _load_through(boundary: str, data: dict[str, Any], tmp_path: Path) -> Experi
 
 
 @pytest.mark.parametrize("boundary", ["checkpoint", "wandb"])
+def test_saved_all_membership_is_discarded_and_resolved_from_current_names(boundary: str, tmp_path: Path) -> None:
+    saved = ExperimentConfig().to_serializable_dict()
+    saved["robot"]["body_tags"]["#all"] = ["obsolete_body"]
+    saved["robot"]["joint_tags"]["#all"] = ["obsolete_joint"]
+    saved["robot"]["joint_tags"]["#whole"] = ["#all"]
+    saved["robot"]["init_state"]["default_joint_positions"] = {"#whole": 0.0}
+    original = copy.deepcopy(saved)
+
+    loaded = _load_through(boundary, saved, tmp_path)
+
+    assert loaded.robot.default_dof_positions() == dict.fromkeys(loaded.robot.dof_names, 0.0)
+    assert loaded.to_serializable_dict()["robot"]["joint_tags"]["#whole"] == ["#all"]
+    assert "#all" not in loaded.robot.body_tags and "#all" not in loaded.robot.joint_tags
+    assert saved == original
+
+
+@pytest.mark.parametrize("boundary", ["checkpoint", "wandb"])
 @pytest.mark.parametrize("fixture_name", sorted(_SURVIVING_BACKEND_FIXTURES))
 def test_previous_schema_configs_load_with_backend_settings_intact(
     fixture_name: str, boundary: str, tmp_path: Path

@@ -13,7 +13,9 @@ using json = nlohmann::json;
 
 void ExpandEntry(const std::string &entry, const json &tags, const std::set<std::string> &names,
                  std::vector<std::string> &chain, std::set<std::string> &expanded) {
-  if (!entry.empty() && entry.front() == '#') {
+  if (entry == "#all") {
+    expanded.insert(names.begin(), names.end());
+  } else if (!entry.empty() && entry.front() == '#') {
     if (std::find(chain.begin(), chain.end(), entry) != chain.end())
       throw std::invalid_argument("joint tag cycle at " + entry);
     if (!tags.contains(entry)) throw std::invalid_argument("Unknown joint tag " + entry);
@@ -55,11 +57,10 @@ std::vector<float> ResolveDefaultDofPositions(const json &robot, const std::vect
   const auto defaults =
       current ? init.at("default_joint_positions") : init.value("default_joint_angles", json::object());
   if (!defaults.is_object()) throw std::invalid_argument("default_joint_positions must be a mapping");
-  if (!defaults.empty() && order.empty()) throw std::invalid_argument("Default joint positions require dof_names");
-
   json tags = robot.value("joint_tags", json::object());
   if (!tags.is_object()) throw std::invalid_argument("joint_tags must be a mapping");
-  if (!order.empty() && !tags.contains("#all")) tags["#all"] = order;
+  // Older metadata can contain a generated membership list. #all always selects the current names.
+  tags.erase("#all");
   for (const auto &tag : tags.items()) {
     if (tag.key().size() < 2 || tag.key().front() != '#')
       throw std::invalid_argument("joint tag names require a leading '#'");

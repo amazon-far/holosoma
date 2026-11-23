@@ -130,12 +130,38 @@ def test_joint_value_map_expands_nested_tags_in_dof_order_without_modifying_inpu
     assert (table, tags, names) == before
 
 
-def test_joint_value_map_all_is_automatic_and_can_be_overridden() -> None:
+def test_joint_value_map_all_is_reserved_and_covers_every_dof() -> None:
     assert expand_joint_value_map({"#all": 0.1}, {}, ["a", "b"]) == {"a": 0.1, "b": 0.1}
-    assert expand_joint_value_map({"#all": 0.1, "b": 0.2}, {"#all": ["a"]}, ["a", "b"]) == {
-        "a": 0.1,
-        "b": 0.2,
-    }
+    with pytest.raises(ValueError, match="'#all' is reserved and cannot be declared"):
+        expand_joint_value_map({"#all": 0.1}, {"#all": ["a"]}, ["a", "b"])
+    with pytest.raises(ValueError, match="both cover DOF 'b'"):
+        expand_joint_value_map({"#all": 0.1, "b": 0.2}, {}, ["a", "b"])
+
+
+@pytest.mark.parametrize("kind", ["body", "joint"])
+def test_all_expands_current_names_through_composed_tags_without_storing_membership(kind: str) -> None:
+    tags = {"#whole": ["#all"]}
+    assert expand_name_spec(["b", "#whole"], tags, ["a", "b"], kind=kind) == ["b", "a"]
+    assert expand_name_spec(["#whole"], tags, ["b", "c", "a"], kind=kind) == ["b", "c", "a"]
+    assert expand_name_spec(["#whole"], tags, [], kind=kind) == []
+    assert tags == {"#whole": ["#all"]}
+
+
+def test_all_preserves_multiplicity_for_ordered_specs() -> None:
+    assert expand_name_spec(["b", "#all"], {}, ["a", "b"], dedupe=False) == ["b", "a", "b"]
+    with pytest.raises(ValueError, match="'b'.*more than once"):
+        expand_unique_name_spec(["b", "#all"], {}, ["a", "b"], what="pairs.left")
+
+
+def test_all_requires_a_name_universe() -> None:
+    with pytest.raises(ValueError, match="'#all' requires the known bodies"):
+        expand_name_spec(["#all"], {})
+
+
+@pytest.mark.parametrize("members", [[], ["a"], ["a", "b"]])
+def test_all_cannot_be_declared_even_when_it_matches_the_universe(members: list[str]) -> None:
+    with pytest.raises(ValueError, match="'#all' is reserved and cannot be declared"):
+        expand_name_spec(["#all"], {"#all": members}, ["a", "b"])
 
 
 def test_joint_value_map_repeated_references_within_one_assignment_are_deduplicated() -> None:
@@ -198,6 +224,7 @@ def test_joint_value_map_rejects_bare_string_dof_names() -> None:
 
 def test_joint_value_map_accepts_zero_dof_robot() -> None:
     assert expand_joint_value_map({}, {}, []) == {}
+    assert expand_joint_value_map({"#all": 0.1}, {}, []) == {}
 
 
 def test_generic_assignments_preserve_values_and_first_seen_order() -> None:

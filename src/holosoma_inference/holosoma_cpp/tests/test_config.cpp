@@ -152,3 +152,26 @@ TEST(RobotConfigDefaults, ResolvesNestedTagsWithZeroForUnspecifiedJoints) {
   EXPECT_THROW(holosoma::ResolveDefaultDofPositions(invalid, {"a", "b", "c"}), std::invalid_argument);
   EXPECT_THROW(holosoma::ResolveDefaultDofPositions(robot, {"b", "a", "c"}), std::invalid_argument);
 }
+
+TEST(RobotConfigDefaults, AllUsesCurrentNamesAndDiscardsSavedMembership) {
+  const nlohmann::json robot{{"dof_names", {"b", "added", "a"}},
+                             {"joint_tags", {{"#all", {"obsolete"}}, {"#whole", {"#all"}}}},
+                             {"init_state", {{"default_joint_positions", {{"#whole", 0.25f}}}}}};
+  EXPECT_EQ(holosoma::ResolveDefaultDofPositions(robot, {"b", "added", "a"}),
+            (std::vector<float>{0.25f, 0.25f, 0.25f}));
+  EXPECT_EQ(robot["joint_tags"]["#all"], nlohmann::json::array({"obsolete"}));
+  auto overlap = robot;
+  overlap["init_state"]["default_joint_positions"]["a"] = 0.25f;
+  EXPECT_THROW(holosoma::ResolveDefaultDofPositions(overlap, {"b", "added", "a"}), std::invalid_argument);
+}
+
+TEST(RobotConfigDefaults, AllNeedsNoDeclarationAndCanSelectZeroDofs) {
+  const nlohmann::json robot{{"dof_names", {"b", "a"}},
+                             {"init_state", {{"default_joint_positions", {{"#all", 0.25f}}}}}};
+  EXPECT_EQ(holosoma::ResolveDefaultDofPositions(robot, {"b", "a"}), (std::vector<float>{0.25f, 0.25f}));
+  auto empty = robot;
+  empty["dof_names"] = nlohmann::json::array();
+  EXPECT_EQ(holosoma::ResolveDefaultDofPositions(empty, {}), (std::vector<float>{}));
+  empty["init_state"]["default_joint_positions"] = {{"missing", 0.25f}};
+  EXPECT_THROW(holosoma::ResolveDefaultDofPositions(empty, {}), std::invalid_argument);
+}

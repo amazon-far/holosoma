@@ -15,6 +15,7 @@ import pydantic
 import pytest
 import torch
 
+from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.robot import (
     RobotAssetConfig,
     RobotConfig,
@@ -22,6 +23,8 @@ from holosoma.config_types.robot import (
 )
 from holosoma.config_values.robot import ROBOT_REGISTRY, g1_29dof, t1_29dof_waist_wrist
 from holosoma.utils.name_tags import expand_joint_value_map, expand_name_spec
+from holosoma.utils.robot_name_resolver import RobotNameResolver
+from holosoma.utils.robot_properties import resolve_dof_properties
 from holosoma.utils.rotations import quat_rotate
 
 pytestmark = pytest.mark.no_sim
@@ -69,6 +72,65 @@ def _synthetic_robot(dof_names: list[str], **overrides: Any) -> RobotConfig:
     }
     kwargs.update(overrides)
     return _minimal_robot(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("field", "names", "resolver_method"),
+    [
+        ("dof_names", ["right", "left"], "resolve_joint_names"),
+        ("dof_names", ["right", "added", "left"], "resolve_joint_names"),
+        ("dof_names", ["right"], "resolve_joint_names"),
+        ("body_names", ["tip", "base"], "resolve_body_names"),
+        ("body_names", ["tip", "added", "base"], "resolve_body_names"),
+        ("body_names", ["tip"], "resolve_body_names"),
+    ],
+    ids=["joint-reorder", "joint-add", "joint-remove", "body-reorder", "body-add", "body-remove"],
+)
+def test_all_tracks_replaced_robot_names(field: str, names: list[str], resolver_method: str) -> None:
+    robot = _minimal_robot(
+        dof_names=["left", "right"],
+        body_names=["base", "tip"],
+        body_tags={"#whole": ["#all"]},
+        joint_tags={"#whole": ["#all"]},
+        dof_armature={"#all": 0.2},
+        init_state=RobotInitState(position=[0.0, 0.0, 0.5], default_joint_positions={"#all": 0.25}),
+    )
+    overrides: dict[str, Any] = {field: names}
+    changed = dataclasses.replace(robot, **overrides)
+    resolver = RobotNameResolver(changed, "cpu")
+    assert getattr(resolver, resolver_method)(["#all"]) == names
+    assert getattr(resolver, resolver_method)(["#whole"]) == names
+    assert resolve_dof_properties(changed).armature == dict.fromkeys(changed.dof_names, 0.2)
+    assert changed.default_dof_positions() == dict.fromkeys(changed.dof_names, 0.25)
+    assert robot.dof_names == ["left", "right"] and robot.body_names == ["base", "tip"]
+    assert robot.joint_tags == changed.joint_tags == {"#whole": ["#all"]}
+    assert robot.body_tags == changed.body_tags == {"#whole": ["#all"]}
+
+
+@pytest.mark.parametrize("field", ["body_tags", "joint_tags"])
+def test_robot_tag_tables_cannot_declare_all(field: str) -> None:
+    members = g1_29dof.body_names if field == "body_tags" else g1_29dof.dof_names
+    with pytest.raises(pydantic.ValidationError, match="'#all' is reserved and cannot be declared"):
+        _replace_robot(g1_29dof, **{field: {"#all": members}})
+
+
+def test_serialized_experiment_omits_all_definitions_and_keeps_assignment_references() -> None:
+    robot = _replace_robot(
+        g1_29dof,
+        init_state=dataclasses.replace(g1_29dof.init_state, default_joint_positions={"#all": 0.0}),
+    )
+    saved = dataclasses.replace(ExperimentConfig(), robot=robot).to_serializable_dict()["robot"]
+    assert "#all" not in saved["body_tags"] and "#all" not in saved["joint_tags"]
+    assert saved["init_state"]["default_joint_positions"] == {"#all": 0.0}
+    assert saved["dof_joint_friction"] == {"#all": 0.0}
+    assert RobotConfig(**saved).default_dof_positions() == dict.fromkeys(robot.dof_names, 0.0)
+
+
+def test_zero_dof_robot_accepts_all_with_no_generated_tag() -> None:
+    robot = _minimal_robot(init_state=RobotInitState(position=[0.0, 0.0, 0.5], default_joint_positions={"#all": 0.0}))
+    assert RobotNameResolver(robot, "cpu").resolve_joint_names(["#all"]) == []
+    assert robot.default_dof_positions() == {}
+    assert robot.joint_tags == {}
 
 
 # --------------------------------------------------------------------------------------------
@@ -385,8 +447,6 @@ def test_invalid_physical_values_are_rejected(field: str, value: float) -> None:
 
 
 def test_sparse_tagged_properties_preserve_authored_maps_and_order_independence() -> None:
-    from holosoma.utils.robot_properties import resolve_dof_properties
-
     robot = _replace_robot(g1_29dof, dof_effort_limits={"#knees": 12.0}, dof_pos_limits=None)
     before = dataclasses.asdict(robot)
     resolved = resolve_dof_properties(robot)

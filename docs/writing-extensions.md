@@ -95,6 +95,11 @@ one-dimensional hinge/revolute or slide/prismatic joint. Names must match the as
 enumerate them differently. Tags select these names to express common behavior across robots, for example
 `joint_tags={"#waist": ["waist_pitch_joint"]}`.
 
+`#all` is reserved and always selects every current body or DOF in canonical order.
+Use it in selections or assignment keys, including inside another tag.
+Do not declare it in `body_tags` or `joint_tags`.
+Saved configurations omit its membership list, and checkpoint loading discards older stored definitions.
+
 Use exact names or tags in default positions and physical-property maps:
 
 ```python

@@ -1,7 +1,8 @@
 """Assert fixed-base spawn, stepping, root-pose writes, joint-state writes, and prismatic actuation.
 
 The welded root stays stationary during stepping while articulated joints respond to gravity and torque.
-Explicit root-pose writes move the robot and preserve its joint state."""
+Explicit root-pose writes move the robot and preserve its joint state.
+Nonzero root velocity raises before the pose changes."""
 
 from __future__ import annotations
 
@@ -182,13 +183,12 @@ def _root_write_refused(arm: _Arm, label: str, exc: NotImplementedError) -> list
 
 
 def _check_same_pose(arm: _Arm) -> list[str]:
-    """Writing the current pose back (quaternion negated: the same rotation; with a velocity the welded base
-    must ignore) is a no-op everywhere."""
+    """Writing the current pose back (quaternion negated: the same rotation) with zero velocity is a no-op."""
     torch, sim = arm.torch, arm.sim
     root_before, base_before, tip_before = arm.root(), arm.body_pos(arm.base_idx), arm.body_pos(arm.tip_idx)
     target = root_before.clone()
     target[:, 3:7] = -root_before[:, 3:7]  # -q == q; root_pose_changed must treat it as the same pose
-    target[:, 7:10] = torch.tensor([0.3, 0.0, 0.0], device=sim.sim_device)
+    target[:, 7:13] = 0.0
     try:
         sim.set_actor_root_state_tensor_robots(arm.env_ids, target)
     except NotImplementedError as exc:
@@ -201,6 +201,31 @@ def _check_same_pose(arm: _Arm) -> list[str]:
     if not torch.allclose(tip, tip_before, atol=TIP_STILL_ATOL):
         fails.append(f"same-pose write moved the tip: {_fmt(tip_before)} -> {_fmt(tip)}")
     print(f"  SAME-POSE root={_fmt(arm.root()[0, :3])} vel={_fmt(arm.root()[0, 7:])} ok={not fails}")
+    return fails
+
+
+def _check_root_velocity_rejected(arm: _Arm) -> list[str]:
+    """MuJoCo and IsaacSim reject nonzero root velocity without applying the requested pose change."""
+    sim = arm.sim
+    root_before, base_before = arm.root(), arm.body_pos(arm.base_idx)
+    fails: list[str] = []
+    for column, velocity in enumerate([0.3, -0.3, 1e-12, -0.5, 0.5, -1e-12], start=7):
+        target = root_before.clone()
+        target[:, 2] += TELEPORT_DZ
+        target[:, column] = velocity
+        try:
+            if arm.is_isaacsim:
+                sim._state_adapter.write_robot_root_states(target, arm.env_ids)
+            else:
+                sim._write_root_states(arm.env_ids, target)
+        except ValueError as exc:
+            if "nonzero root velocity" not in str(exc):
+                fails.append(f"root velocity column {column} raised an unexpected error: {exc}")
+        else:
+            fails.append(f"root velocity column {column} accepted nonzero velocity {velocity}")
+        sim.refresh_sim_tensors()
+        fails.extend(_base_unchanged(arm, root_before, base_before, f"rejected velocity column {column}"))
+    print(f"  VELOCITY rejected all six root velocity components ok={not fails}")
     return fails
 
 
@@ -289,7 +314,7 @@ def _check_mixed_write(arm: _Arm) -> list[str]:
     tip_before = arm.body_pos(arm.tip_idx)
     target = before.clone()
     target[:, 2] += MIXED_DZ
-    target[:n, 7:10] = torch.tensor([1.0, 0.0, 0.0], device=sim.sim_device)  # robot rows: a velocity to ignore
+    target[:n, 7:13] = 0.0
     try:
         sim.set_actor_states(names, arm.env_ids, target)
     except NotImplementedError as exc:
@@ -321,9 +346,7 @@ def _check_mixed_write(arm: _Arm) -> list[str]:
 
 def _check_unified_write(arm: _Arm) -> list[str]:
     torch, sim, spawn = arm.torch, arm.sim, arm.spawn
-    target = spawn.clone()  # back to the spawn pose ...
-    target[:, 7:10] = torch.tensor([1.0, 0.0, 0.0], device=sim.sim_device)  # ... with a velocity that must
-    target[:, 10:13] = torch.tensor([0.0, 0.0, 0.5], device=sim.sim_device)  # be ignored for a welded base
+    target = spawn.clone()  # back to the spawn pose with zero velocity
     try:
         sim.set_actor_states(["robot"], arm.env_ids, target)
     except NotImplementedError as exc:
@@ -398,6 +421,7 @@ _CHECKS: list[tuple[str, Callable[[_Arm], list[str]]]] = [
     ("SPAWN", _check_spawn),
     ("STAYS-PUT", _check_stays_put),
     ("SAME-POSE", _check_same_pose),
+    ("VELOCITY", _check_root_velocity_rejected),
     ("TELEPORT", _check_teleport),
     ("MIXED", _check_mixed_write),
     ("UNIFIED-WRITE", _check_unified_write),

@@ -182,13 +182,14 @@ class RobotConfig:
     body_tags: dict[str, list[str]] = field(default_factory=dict)
     """Named sets of robot bodies, declared and referenced with a leading ``#``
     (``{"#feet": ["left_ankle_roll_link", "right_ankle_roll_link"]}``). Entries are exact ``body_names``
-    entries or other ``#tags``. ``#all`` (every body) is defined automatically unless given. Used by
+    entries or other ``#tags``. ``#all`` always selects every current body and cannot be declared. Used by
     tag-aware term parameters, e.g. a termination term's ``bodies=["#root", "#hip_links"]`` or the
     mass-randomization ``link_bodies``; see ``holosoma.utils.name_tags``."""
 
     joint_tags: dict[str, list[str]] = field(default_factory=dict)
-    """Named sets of robot DOFs, same syntax as ``body_tags`` over ``dof_names``, ``#all`` included
-    automatically. Used by action/controller parameters, ``default_joint_positions`` keys, or
+    """Named sets of robot DOFs, same syntax as ``body_tags`` over ``dof_names``.
+    ``#all`` always selects every current DOF and cannot be declared. Used by action/controller parameters,
+    ``default_joint_positions`` keys, or
     algorithm configs such as the symmetry augmentation's
     ``#mirror_left`` / ``#mirror_right`` pairs."""
 
@@ -221,10 +222,6 @@ class RobotConfig:
         if unknown_bridge:
             raise ValueError(f"RobotConfig.bridge names {unknown_bridge} are not in dof_names.")
 
-        # '#all' is always available; a declared '#all' wins.
-        object.__setattr__(self, "body_tags", {"#all": list(self.body_names), **self.body_tags})
-        if self.dof_names:
-            object.__setattr__(self, "joint_tags", {"#all": list(self.dof_names), **self.joint_tags})
         validate_tag_table(self.body_tags, self.body_names, kind="body")
         validate_tag_table(self.joint_tags, self.dof_names, kind="joint")
         resolve_dof_properties(self)

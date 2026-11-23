@@ -1,7 +1,7 @@
 """``IsaacSimStateAdapter.write_robot_root_states``: the single IsaacSim robot root writer (no sim).
 
 Pure torch over a recording stand-in for the IsaacLab ``Articulation``. Pins the xyzw -> wxyz conversion of
-the written pose, the fixed-base rule (velocity columns ignored; a pose equal to the current root pose --
+the written pose, the fixed-base rule (nonzero velocity rejected; a pose equal to the current root pose --
 ``q`` and ``-q`` alike -- writes nothing; a pose change writes the pose once, compared in wxyz against
 ``robot.data.root_state_w``) and the floating-base path (pose and velocity both written). Both
 ``set_actor_root_state_tensor_robots`` and ``set_actor_states(["robot"], ...)`` end here.
@@ -15,8 +15,8 @@ from typing import Any, cast
 import pytest
 import torch
 
-from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.base_simulator.state import SimState
+from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 
 pytestmark = pytest.mark.no_sim
 
@@ -72,12 +72,35 @@ def _adapter(*, fixed_base: bool) -> tuple[IsaacSimStateAdapter, _Articulation]:
     return adapter, robot
 
 
-def test_fixed_base_same_pose_with_velocity_writes_nothing() -> None:
+def test_fixed_base_same_pose_with_zero_velocity_writes_nothing() -> None:
     adapter, robot = _adapter(fixed_base=True)
     states = _current_xyzw(ENV_IDS)
-    states[:, 7:] = torch.tensor(VELOCITY)
 
     adapter.write_robot_root_states(states, ENV_IDS)
+
+    assert robot.pose_writes == []
+    assert robot.velocity_writes == []
+    assert adapter.is_dirty() is False
+
+
+@pytest.mark.parametrize("column", range(7, 13), ids=["vx", "vy", "vz", "wx", "wy", "wz"])
+@pytest.mark.parametrize("velocity", [-1e-12, 1e-12], ids=["negative", "positive"])
+@pytest.mark.parametrize("move_pose", [False, True], ids=["same-pose", "changed-pose"])
+@pytest.mark.parametrize("via_object", [False, True], ids=["root-writer", "object-writer"])
+def test_fixed_base_nonzero_velocity_raises_before_any_write(
+    column: int, velocity: float, move_pose: bool, via_object: bool
+) -> None:
+    adapter, robot = _adapter(fixed_base=True)
+    states = _current_xyzw(ENV_IDS)
+    if move_pose:
+        states[:, 2] += 0.5
+    states[1, column] = velocity
+
+    with pytest.raises(ValueError, match="nonzero root velocity"):
+        if via_object:
+            adapter.write_object_states("robot", states, ENV_IDS)
+        else:
+            adapter.write_robot_root_states(states, ENV_IDS)
 
     assert robot.pose_writes == []
     assert robot.velocity_writes == []
@@ -99,7 +122,6 @@ def test_fixed_base_pose_change_writes_the_pose_once_in_wxyz_and_no_velocity() -
     adapter, robot = _adapter(fixed_base=True)
     states = _current_xyzw(ENV_IDS)
     states[:, 2] += 0.5
-    states[:, 7:] = torch.tensor(VELOCITY)
 
     adapter.write_robot_root_states(states, ENV_IDS)
 

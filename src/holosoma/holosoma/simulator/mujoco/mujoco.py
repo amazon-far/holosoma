@@ -1190,6 +1190,10 @@ class MuJoCo(BaseSimulator):
     def _write_root_states(self, env_ids: EnvIds, root_states: torch.Tensor) -> None:
         """Write world-frame robot root states, one row per entry of ``env_ids``."""
         if self.robot_config.asset.fix_base_link:
+            if torch.any(root_states[:, 7:13] != 0):
+                raise ValueError(
+                    "Cannot set nonzero root velocity for a fixed-base robot (robot.asset.fix_base_link=True)."
+                )
             current = self._static_body_state("robot", env_ids)
             if root_pose_changed(root_states[:, :7], current[:, :7]):
                 self.backend.set_static_body_world_pose(

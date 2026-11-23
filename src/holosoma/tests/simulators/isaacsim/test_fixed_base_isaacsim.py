@@ -3,7 +3,7 @@
 Runs the fixed_base_robot_assert.py harness (the ``test-arm-fixed`` 3-DOF arm with a prismatic
 joint, ``fix_base_link=True``): spawn pose == env origin + configured pose with zero velocity, the
 base stays put under gravity while the arm moves, root writes teleport the base like a static
-scene object (velocity ignored), DOF writes and prismatic torques take effect, and N envs spread
+scene object with zero velocity, DOF writes and prismatic torques take effect, and N envs spread
 to their origins. Marked ``isaacsim`` and ``importorskip("isaaclab")``/CUDA-gated like the other
 IsaacSim harness wrappers.
 """

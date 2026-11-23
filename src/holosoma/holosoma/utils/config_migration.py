@@ -342,6 +342,11 @@ def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
     robot = out.get("robot")
     if not isinstance(robot, dict):
         return out
+    # Saved tag tables can contain a generated membership list. Resolve #all from current names.
+    for field in ("body_tags", "joint_tags"):
+        tags = robot.get(field)
+        if isinstance(tags, dict):
+            tags.pop("#all", None)
     _migrate_dof_property_lists(robot)
 
     init_raw = robot.get("init_state")

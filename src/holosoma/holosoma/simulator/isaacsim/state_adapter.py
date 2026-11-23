@@ -183,10 +183,14 @@ class IsaacSimStateAdapter:
     def write_robot_root_states(self, states: torch.Tensor, env_ids: torch.Tensor) -> None:
         """Write ``[len(env_ids), 13]`` xyzw robot root states; the single robot root writer.
 
-        Floating base: pose and velocity go to the sim. Fixed base: the velocity columns are ignored
+        Floating base: pose and velocity go to the sim. Fixed base: nonzero velocity raises ValueError,
         and the pose is written (a kinematic teleport) only when it differs from the robot's current
-        root pose; a same-pose write is a no-op. Does not mark the adapter dirty.
+        root pose; a zero-velocity same-pose write is a no-op. Does not mark the adapter dirty.
         """
+        if self._robot_fixed_base and torch.any(states[:, 7:13] != 0):
+            raise ValueError(
+                "Cannot set nonzero root velocity for a fixed-base robot (robot.asset.fix_base_link=True)."
+            )
         states_wxyz = fullstate_xyzw_to_wxyz(states)
         if self._robot_fixed_base:
             current = self._robot.data.root_state_w[env_ids, :7]  # wxyz, reflects the last write

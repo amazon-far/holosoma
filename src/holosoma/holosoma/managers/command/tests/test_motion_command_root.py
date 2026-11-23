@@ -354,7 +354,7 @@ def test_motion_file_requires_unique_selected_body_before_transition_writes(tmp_
 
 
 def test_legacy_checkpoint_load_then_reset_preserves_old_first_body(tmp_path: Path) -> None:
-    fixture = Path(__file__).parents[3] / "utils/tests/data/legacy_g1_29dof_experiment_config.yaml"
+    fixture = Path(__file__).parents[3] / "utils/tests/data/legacy_experiments/g1_29dof_isaacsim.yaml"
     raw: dict[str, Any] = yaml.safe_load(fixture.read_text())
     old_root = raw["robot"]["body_names"][0]
     # A conflicting tag and torso reference must not override the former runtime column-zero choice.

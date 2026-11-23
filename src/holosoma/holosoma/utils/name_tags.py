@@ -2,7 +2,8 @@
 
 Declare tags in ``RobotConfig.body_tags`` or ``joint_tags``, for example
 ``{"#legs": ["#left_leg", "#right_leg"]}``. Expansion preserves first-seen order and rejects
-unknown tags, cycles, and names outside a supplied universe. Regex and glob syntax are unsupported.
+unknown tags, cycles, and names outside a supplied universe. ``#all`` selects the supplied universe
+and cannot be declared in a tag table. Regex and glob syntax are unsupported.
 """
 
 from __future__ import annotations
@@ -61,6 +62,8 @@ def expand_name_spec(
         ``spec`` or a tag's entry list is a bare string (wrap the name in a list), or an entry is not a
         string.
     """
+    if "#all" in tags:
+        raise ValueError(f"{kind} tag '#all' is reserved and cannot be declared. Use a different tag for a subset.")
     out: list[str] = []
     seen: set[str] = set()
     universe_set = set(universe) if universe is not None else None
@@ -74,7 +77,15 @@ def expand_name_spec(
         for entry in entries:
             if not isinstance(entry, str):
                 raise TypeError(f"{kind} spec entries must be strings, got {entry!r} in {list(spec)!r}")
-            if is_tag(entry):
+            if entry == "#all":
+                if universe is None:
+                    raise ValueError(f"{kind} tag '#all' requires the known {_plural(kind)}.")
+                for name in universe:
+                    if dedupe and name in seen:
+                        continue
+                    seen.add(name)
+                    out.append(name)
+            elif is_tag(entry):
                 if entry in chain:
                     raise ValueError(f"{kind} tag cycle: {' -> '.join((*chain, entry))}")
                 if entry not in tags:
@@ -119,6 +130,8 @@ def validate_tag_table(tags: Mapping[str, Sequence[str]], universe: Sequence[str
     :func:`expand_name_spec`.
     """
     for tag, entries in tags.items():
+        if tag == "#all":
+            raise ValueError(f"{kind} tag '#all' is reserved and cannot be declared. Use a different tag for a subset.")
         if not is_tag(tag) or len(tag) == len(TAG_PREFIX):
             raise ValueError(
                 f"{kind} tag names are declared with a leading '{TAG_PREFIX}' ('{TAG_PREFIX}feet'): got {tag!r}"
@@ -197,15 +210,14 @@ def expand_joint_value_map(
     """Resolve finite joint values into canonical DOF order without changing the inputs.
 
     Reject invalid names, overlapping assignments, and missing coverage when required=True.
-    The #all tag defaults to every DOF.
+    The reserved #all selector covers every current DOF and cannot be declared in joint_tags.
     """
     if isinstance(dof_names, str):
         raise TypeError(f"{what} dof_names must be a list of names, got the string {dof_names!r}")
     duplicates = sorted(name for name, count in Counter(dof_names).items() if count > 1)
     if duplicates:
         raise ValueError(f"{what} dof_names has duplicate entries: {duplicates}")
-    tags = {"#all": list(dof_names), **joint_tags} if dof_names else dict(joint_tags)
-    validate_tag_table(tags, dof_names, kind="joint")
+    validate_tag_table(joint_tags, dof_names, kind="joint")
 
     validated: dict[str, float] = {}
     for key, raw_value in table.items():
@@ -215,7 +227,7 @@ def expand_joint_value_map(
         validated[key] = value
     values = expand_name_assignments(
         validated,
-        lambda spec: expand_name_spec(spec, tags, dof_names, kind="joint"),
+        lambda spec: expand_name_spec(spec, joint_tags, dof_names, kind="joint"),
         what=what,
         kind="DOF",
     )
