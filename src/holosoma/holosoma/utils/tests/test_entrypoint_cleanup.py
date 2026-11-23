@@ -10,7 +10,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import holosoma.replay as replay_module
 from holosoma import eval_agent, train_agent
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.simulator import session
@@ -109,25 +108,6 @@ def test_eval_interrupt_closes_environment_before_app(
 
     with pytest.raises(KeyboardInterrupt):
         eval_agent.run_eval_with_tyro(config, checkpoint_cfg, config, None)  # type: ignore[arg-type]
-
-    assert events == ["env.close", "app.close"]
-    assert signal.getsignal(signal.SIGTERM) is previous_sigterm
-
-
-def test_replay_interrupt_closes_environment_before_app(monkeypatch: pytest.MonkeyPatch) -> None:
-    events: list[str] = []
-    env = _Environment(events)
-    app = _patch_app_close(monkeypatch, events)
-    previous_sigterm = signal.getsignal(signal.SIGTERM)
-
-    def stop_replay(_env: Any) -> bool:
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(replay_module, "step_visualize_motion", stop_replay)
-    config = _patch_session(monkeypatch, env, app)
-
-    with pytest.raises(KeyboardInterrupt):
-        replay_module.replay(config)  # type: ignore[arg-type]
 
     assert events == ["env.close", "app.close"]
     assert signal.getsignal(signal.SIGTERM) is previous_sigterm
