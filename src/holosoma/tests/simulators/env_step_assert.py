@@ -24,6 +24,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 from holosoma.config_values import experiment
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
+from holosoma.managers.curriculum.terms.locomotion import average_episode_length
 from holosoma.utils.common import seeding
 from holosoma.utils.safe_torch_import import torch
 from tests.simulators._sim_harness import run_and_hard_exit
@@ -88,8 +89,8 @@ def main() -> int:
             failures.append(f"no episode finished in {NUM_STEPS} zero-action steps")
 
         env.reset_envs_idx()
-        if env.average_episode_length != 0.0:
-            failures.append(f"average_episode_length is {env.average_episode_length} after a reset, expected 0.0")
+        if average_episode_length(env) != 0.0:
+            failures.append(f"average_episode_length is {average_episode_length(env)} after a reset, expected 0.0")
 
         # Report before leaving the session: closing the Isaac Sim app ends the process.
         return _report(args, failures, n_dones)

@@ -77,7 +77,7 @@ class AverageEpisodeLengthTracker(CurriculumTermBase):
         mask_tensor.index_copy_(0, active_ids, zeros_bool)
 
     def step(self) -> None:
-        return
+        self.env.log_dict["average_episode_length"] = self.average_episode_length.detach().cpu()
 
     def update(self, env_ids: torch.Tensor, episode_lengths: torch.Tensor) -> None:
         if self._suppress_next_update:
@@ -117,6 +117,16 @@ class AverageEpisodeLengthTracker(CurriculumTermBase):
         if avg is not None:
             self.average_episode_length = torch.as_tensor(float(avg), device=self.env.device, dtype=torch.float)
         self._suppress_next_update = bool(state.get("suppress_next_update", False))
+
+
+def average_episode_length(env: Any) -> float:
+    """The average episode length tracked by ``env``'s ``AverageEpisodeLengthTracker`` curriculum term."""
+    tracker = next(
+        (term for _, term in env.curriculum_manager.iter_terms() if isinstance(term, AverageEpisodeLengthTracker)), None
+    )
+    if tracker is None:
+        raise RuntimeError("AverageEpisodeLengthTracker is not registered with the curriculum manager.")
+    return float(tracker.get_average().detach().cpu().item())
 
 
 class PenaltyCurriculum(CurriculumTermBase):
@@ -190,7 +200,7 @@ class PenaltyCurriculum(CurriculumTermBase):
         if not self.penalty_reward_names or not self.original_weights:
             return
 
-        average_length = float(self.env.average_episode_length)
+        average_length = average_episode_length(self.env)
 
         # Update current scale based on episode length
         if average_length < self.level_down_threshold:
@@ -346,7 +356,7 @@ def update_reward_penalty(env: Any, env_ids: Any, **_: Any) -> None:
     if not cfg or not penalty_names or not hasattr(env, "reward_manager"):
         return
 
-    average_length = float(env.average_episode_length)
+    average_length = average_episode_length(env)
     degree = cfg["degree"]
 
     # Update current scale based on episode length
