@@ -70,6 +70,8 @@ class PushRandomizerState(RandomizationTermBase):
         self.push_interval_s: torch.Tensor | None = None
         self.push_robot_counter: torch.Tensor | None = None
         self.push_robot_plot_counter: torch.Tensor | None = None
+        self.push_count: torch.Tensor | None = None
+        """Pushes each env has had this episode; keys each push's draw so pushes within an episode differ."""
 
     def setup(self, sampler: TermSampler) -> None:
         env = self.env
@@ -79,6 +81,7 @@ class PushRandomizerState(RandomizationTermBase):
         self.push_interval_s = torch.zeros(num_envs, dtype=torch.float32, device=device)
         self.push_robot_counter = torch.zeros(num_envs, dtype=torch.int, device=device)
         self.push_robot_plot_counter = torch.zeros(num_envs, dtype=torch.int, device=device)
+        self.push_count = torch.zeros(num_envs, dtype=torch.long, device=device)
 
         all_ids = torch.arange(num_envs, device=device, dtype=torch.long)
         self._resample_intervals(all_ids, sampler)
@@ -91,6 +94,8 @@ class PushRandomizerState(RandomizationTermBase):
             return
         self.push_robot_counter[idx] = 0
         self.push_robot_plot_counter[idx] = 0
+        if self.push_count is not None:
+            self.push_count[idx] = 0
 
     def step(self, sampler: TermSampler) -> None:
         if not self.enabled:
@@ -142,18 +147,20 @@ class PushRandomizerState(RandomizationTermBase):
     def max_push_vel(self) -> torch.Tensor:
         return self._max_push_vel_tensor
 
-    def push(self, env_ids: torch.Tensor) -> None:
-        """Push ``env_ids`` by a random base velocity."""
-        if env_ids.numel() == 0:
+    def push(self, env_ids: torch.Tensor, sampler: TermSampler) -> None:
+        """Push ``env_ids`` by a random base velocity drawn from ``sampler``."""
+        if env_ids.numel() == 0 or self.push_count is None:
             return
         n = self._max_push_vel_tensor.numel()
-        rand = torch.rand(len(env_ids), n, device=self.env.device) * 2 - 1
-        push_vel = rand * self._max_push_vel_tensor.unsqueeze(0)
-        root_states = self.env.simulator.robot_root_states
+        coords = (self.push_count[env_ids, None], torch.arange(n)[None, :])
+        unit = sampler.draw([-1.0, 1.0], env_ids=env_ids, coords=coords, device=self.env.device)
+        push_vel = unit * self._max_push_vel_tensor.unsqueeze(0)
+        self.push_count[env_ids] += 1
+        sim = self.env.simulator
         if n == 6:
-            root_states[env_ids, 7 : 7 + n] += push_vel
+            sim.robot_root_states[env_ids, 7 : 7 + n] += push_vel
         else:
-            root_states[env_ids, 7 : 7 + n] = push_vel
+            sim.robot_root_states[env_ids, 7 : 7 + n] = push_vel
 
     def _resample_intervals(self, env_ids: torch.Tensor, sampler: TermSampler) -> None:
         if self.push_interval_s is None:
@@ -1000,4 +1007,4 @@ def apply_pushes(
 
     state.zero_counters(push_robot_env_ids)
     state.resample(push_robot_env_ids, sampler)
-    state.push(push_robot_env_ids)
+    state.push(push_robot_env_ids, sampler)

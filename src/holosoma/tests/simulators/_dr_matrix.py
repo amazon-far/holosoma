@@ -307,7 +307,7 @@ def run_push_dr(env) -> None:
         env, idx, sampler=_sampler(env), push_interval_s=[1.0, 1.0], max_push_vel=[5.0, 5.0], enabled=True
     )
     vel_before = env.simulator.robot_root_states[:, 7:9].clone()
-    env.randomization_manager.get_state("push_randomizer_state").push(idx)
+    env.randomization_manager.get_state("push_randomizer_state").push(idx, _sampler(env))
     vel_after = env.simulator.robot_root_states[:, 7:9]
     assert (vel_after - vel_before).abs().max() > 1e-3, "push did not change root velocity"
 
