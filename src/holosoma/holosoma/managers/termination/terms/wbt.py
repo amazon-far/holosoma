@@ -7,7 +7,7 @@ from typing import Any
 from holosoma.config_types.termination import TerminationTermCfg
 from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.command.terms.wbt import MotionCommand
-from holosoma.managers.observation.terms.wbt import gravity_vector
+from holosoma.managers.observation.terms.common import gravity_vector
 from holosoma.managers.termination.base import TerminationTermBase
 from holosoma.utils.rotations import (
     quat_error_magnitude,

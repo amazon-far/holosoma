@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from holosoma.managers.observation.terms.locomotion import get_projected_gravity
+from holosoma.managers.observation.terms.common import get_projected_gravity
 from holosoma.utils.safe_torch_import import torch
 
 
