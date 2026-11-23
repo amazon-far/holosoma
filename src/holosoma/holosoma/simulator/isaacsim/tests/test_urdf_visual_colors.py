@@ -97,7 +97,7 @@ def test_named_material_references_and_uncoloured_links(tmp_path: Path) -> None:
 
 
 def test_links_preserve_each_visual_color_in_document_order(tmp_path: Path) -> None:
-    # A grey mesh plus a red marker on one link (a FAR-pi alpha-style URDF) must keep both colours.
+    # A grey mesh plus a red marker on one link must keep both colours.
     urdf = tmp_path / "r.urdf"
     urdf.write_text(
         """<robot name="r">
