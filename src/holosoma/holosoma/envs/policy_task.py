@@ -239,12 +239,11 @@ class PolicyTask(BaseTask):
         return
 
     def _update_log_dict(self) -> None:
-        """Append per-frame metrics to ``log_dict``: the average episode length when tracked, and command metrics."""
+        """Append per-frame metrics to ``log_dict``: the average episode length when it is tracked."""
         tracker = self.curriculum_manager.get_term("average_episode_tracker")
         if tracker is not None:
             avg = cast("AverageEpisodeLengthTracker", tracker).get_average()
             self.log_dict["average_episode_length"] = avg.detach().cpu()
-        self.log_dict.update(self.command_manager.log_metrics())
 
     def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
         tracker = self.curriculum_manager.get_term("average_episode_tracker")

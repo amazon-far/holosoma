@@ -796,6 +796,8 @@ class MotionCommand(CommandTermBase):
 
     def step(self) -> None:
         """Advance the clip once per control frame, after rewards and resets and before observations."""
+        self.update_metrics()
+        self._env.log_dict.update(self.metrics)
         # 0. update time steps, all motion joint/body poses are updated automatically with the time steps.
         advance_mask = torch.ones_like(self.time_steps, dtype=torch.bool)
 
@@ -829,10 +831,6 @@ class MotionCommand(CommandTermBase):
         ### must not decay/fold failure stats into the training sampler).
         if self.motion_cfg.use_adaptive_timesteps_sampler and not self._env.is_evaluating:
             self.adaptive_timesteps_sampler.update_bin_failed_count()
-
-    def log_metrics(self) -> dict[str, Any]:
-        self.update_metrics()
-        return self.metrics
 
     def update_relative_body_targets(self) -> None:
         """Recompute the tracked bodies' target poses for the current motion frame and robot pose.

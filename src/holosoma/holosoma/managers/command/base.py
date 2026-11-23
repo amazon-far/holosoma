@@ -39,7 +39,3 @@ class CommandTermBase(ABC):
     @abstractmethod
     def step(self) -> None:
         """Per-step hook called during simulation rollout."""
-
-    def log_metrics(self) -> dict[str, Any]:
-        """Per-frame values to log."""
-        return {}
