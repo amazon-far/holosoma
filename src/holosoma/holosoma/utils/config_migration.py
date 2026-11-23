@@ -154,8 +154,7 @@ def _nested_dataclass(type_hint: Any) -> type | None:
 
 
 def _field_annotations(cls: type) -> dict[str, Any]:
-    """Field name -> annotation, resolved. Pydantic dataclasses carry resolved annotations on every supported
-    Python (``typing.get_type_hints`` cannot evaluate ``list[str]`` on 3.8); plain dataclasses give raw types."""
+    """Return resolved Pydantic annotations or the declared types of plain dataclass fields."""
     fields = getattr(cls, "__pydantic_fields__", None)
     if fields:
         return {name: info.annotation for name, info in fields.items()}
