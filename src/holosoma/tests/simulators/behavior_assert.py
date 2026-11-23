@@ -1438,7 +1438,9 @@ def main() -> int:
     # Twin scenarios spawn the one-link `onelink-box` robot (not g1) carrying a per-scenario
     # link_physics that mirrors the twin object's PhysicsConfig. A non-twin scenario keeps --robot.
     twin_link_physics = _twin_robot_link_physics()
-    robot_key = "onelink-box" if args.scenario in twin_link_physics else args.robot
+    robot_key = args.robot
+    if args.scenario in twin_link_physics:
+        robot_key = "onelink-box-articulation" if args.simulator == "isaacsim" else "onelink-box"
 
     config = _build_run_sim_config(args.simulator, scene_key, robot_key, args.terrain, args.record)
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"

@@ -9,6 +9,9 @@ robots.
 ``link_physics`` to it and compares its physical outcome against an object twin carrying the same
 ``PhysicsConfig``.
 
+``onelink-box-articulation`` declares the passive joint and extra body in the IsaacSim URDF.
+The MuJoCo XML has no joints and uses ``onelink-box``.
+
 ``g1-29dof-reordered`` is G1 with its DOF order rotated away from the asset's joint order, for
 ``dof_order_assert``.
 :data:`test_arm_fixed` is a 3-DOF fixed-base arm (``asset.fix_base_link=True``): hinge, hinge,
@@ -88,6 +91,11 @@ def _onelink_robot(link_physics: PhysicsConfig | None) -> RobotConfig:
 # Bare one-link robot, no link_physics (asset-authored physics). Used as the base for
 # material-carrying variants.
 onelink_box = _onelink_robot(link_physics=None)
+onelink_box_articulation = dataclasses.replace(
+    onelink_box,
+    dof_names=["dummy_joint"],
+    body_names=["baseLink", "dummy"],
+)
 
 
 # --------------------------------------------------------------------------------------------
@@ -178,6 +186,7 @@ test_arm_action = ActionManagerCfg(
 # so the registry needs only the bare preset.
 TEST_ROBOT_PRESETS = {
     "onelink-box": onelink_box,
+    "onelink-box-articulation": onelink_box_articulation,
     "g1-29dof-reordered": _g1_29dof_reordered(),
     "test-arm-fixed": test_arm_fixed,
 }
