@@ -45,7 +45,7 @@ def test_robot_registered_static_when_asked_keeps_band_and_slot() -> None:
     robot = reg.objects[reg.name_to_index["robot"]]
     assert robot.is_static is True
     assert (robot.type, robot.position_in_type) == (ObjectType.ROBOT.value, 0)
-    # Band/index computation is untouched: the robot still leads every env block.
+    # The robot occupies the first slot in each environment block.
     assert reg.get_object_indices("robot", torch.tensor([0, 1])).tolist() == [0, 4]
     assert reg.get_names_by_type(ObjectType.ROBOT) == ["robot"]
     assert reg.get_names_by_type(ObjectType.SCENE) == ["wall", "table"]

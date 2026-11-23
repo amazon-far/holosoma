@@ -1,10 +1,4 @@
-"""The MuJoCo video recorder puts the camera where the shared camera config says (pure, no simulator).
-
-IsaacGym and IsaacSim place the recording camera at ``CameraParameters.position`` directly; MuJoCo drives an
-``MjvCamera`` through lookat / distance / azimuth / elevation, whose angles describe the VIEW direction rather
-than the camera position. Without the 180 degree azimuth flip the MuJoCo video looked at the robot from the
-opposite side of the target (mirrored relative to the other backends).
-"""
+"""MuJoCo video camera placement matches CameraParameters.position and target through the native view angles."""
 
 from __future__ import annotations
 

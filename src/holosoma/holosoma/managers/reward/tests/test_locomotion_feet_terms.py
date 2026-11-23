@@ -8,16 +8,15 @@ from typing import Any
 
 import pytest
 
-from holosoma.managers.observation.terms.locomotion import base_forward_vector, gravity_vector
+from holosoma.managers.observation.terms.locomotion import gravity_vector
 from holosoma.managers.reward.terms.locomotion import (
-    _expected_foot_height,
     feet_phase,
     limits_dof_pos,
     penalty_close_feet_xy,
     penalty_feet_ori,
     penalty_stumble,
 )
-from holosoma.utils.rotations import quat_apply, quat_rotate_inverse
+from holosoma.utils.rotations import quat_rotate_inverse
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
@@ -81,47 +80,22 @@ def _env() -> Any:
     return _StubEnv()
 
 
-# Pre-refactor two-foot formulas (env.feet_indices[0] / [1]), kept here as the reference.
-
-
-def _old_penalty_feet_ori(env: Any, left: int, right: int) -> torch.Tensor:
-    gravity = gravity_vector(env)
-    left_gravity = quat_rotate_inverse(env.simulator._rigid_body_rot[:, left], gravity, w_last=True)
-    right_gravity = quat_rotate_inverse(env.simulator._rigid_body_rot[:, right], gravity, w_last=True)
-    return (
-        torch.sum(torch.square(left_gravity[:, :2]), dim=1) ** 0.5
-        + torch.sum(torch.square(right_gravity[:, :2]), dim=1) ** 0.5
-    )
-
-
-def _old_penalty_close_feet_xy(env: Any, left: int, right: int, close_feet_threshold: float) -> torch.Tensor:
-    left_foot_xy = env.simulator._rigid_body_pos[:, left, :2]
-    right_foot_xy = env.simulator._rigid_body_pos[:, right, :2]
-    base_forward = quat_apply(env.base_quat, base_forward_vector(env), w_last=True)
-    base_yaw = torch.atan2(base_forward[:, 1], base_forward[:, 0])
-    feet_distance = torch.abs(
-        torch.cos(base_yaw) * (left_foot_xy[:, 1] - right_foot_xy[:, 1])
-        - torch.sin(base_yaw) * (left_foot_xy[:, 0] - right_foot_xy[:, 0])
-    )
-    return (feet_distance < close_feet_threshold).float()
-
-
-def _old_feet_phase(env: Any, swing_height: float, tracking_sigma: float) -> torch.Tensor:
-    foot_z_left = env.feet_heights[:, 0]
-    foot_z_right = env.feet_heights[:, 1]
-    rz_left = _expected_foot_height(env.phase[:, 0], swing_height)
-    rz_right = _expected_foot_height(env.phase[:, 1], swing_height)
-    total_error = torch.square(foot_z_left - rz_left) + torch.square(foot_z_right - rz_right)
-    return torch.exp(-total_error / tracking_sigma)
-
-
-def test_penalty_feet_ori_two_feet_equals_old_formula() -> None:
+@pytest.mark.parametrize("feet", [["#feet"], ["#feet4"]], ids=["two-feet", "four-feet"])
+def test_penalty_feet_ori_sums_selected_foot_tilts(feet: list[str]) -> None:
     env = _env()
+    indices = FEET_BY_SPEC[tuple(feet)]
+    # Every unselected body tilts 90 degrees. Only selected feet contribute.
+    quarter_turn = torch.tensor([2**-0.5, 0.0, 0.0, 2**-0.5])
+    env.simulator._rigid_body_rot[:] = quarter_turn
+    env.simulator._rigid_body_rot[:, indices] = torch.tensor([0.0, 0.0, 0.0, 1.0])
+    env.simulator._rigid_body_rot[1, indices[0]] = quarter_turn
+    env.simulator._rigid_body_rot[2, indices] = quarter_turn
+    env.simulator._rigid_body_rot[4, indices[0]] = torch.tensor([0.0, 0.0, 2**-0.5, 2**-0.5])
 
-    out = penalty_feet_ori(env)
+    out = penalty_feet_ori(env, feet=feet)
 
-    assert env.resolve_calls == [("#feet",)]
-    assert torch.equal(out, _old_penalty_feet_ori(env, 2, 5))
+    assert env.resolve_calls == [tuple(feet)]
+    torch.testing.assert_close(out, torch.tensor([0.0, 1.0, float(len(indices)), 0.0, 0.0]))
 
 
 def test_penalty_feet_ori_sole_axes_selects_the_projected_components() -> None:
@@ -143,25 +117,25 @@ def test_penalty_feet_ori_rejects_invalid_sole_axes(sole_axes: tuple[Any, ...]) 
         penalty_feet_ori(_env(), sole_axes=sole_axes)
 
 
-def test_penalty_feet_ori_sums_over_four_feet() -> None:
+@pytest.mark.parametrize(
+    "yaw_quat", [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 2**-0.5, 2**-0.5]], ids=["forward-x", "forward-y"]
+)
+def test_penalty_close_feet_uses_lateral_distance_and_strict_threshold(yaw_quat: list[float]) -> None:
     env = _env()
+    env.base_quat[:] = torch.tensor(yaw_quat)
+    env.simulator._rigid_body_pos.zero_()
+    # Distances bracket the threshold, including equality and negative separation.
+    distance = torch.tensor([0.05, 0.099, 0.1, 0.101, -0.05])
+    lateral_axis = 1 if yaw_quat[2] == 0 else 0
+    env.simulator._rigid_body_pos[:, 5, lateral_axis] = distance
+    env.simulator._rigid_body_pos[:, 5, 1 - lateral_axis] = 2.0
+    # Keep the equality case free of roundoff from the longitudinal projection.
+    env.simulator._rigid_body_pos[2, 5, 1 - lateral_axis] = 0.0
 
-    out = penalty_feet_ori(env, feet=["#feet4"])
-
-    assert out.shape == (NUM_ENVS,)
-    expected = _old_penalty_feet_ori(env, 1, 2) + _old_penalty_feet_ori(env, 5, 6)
-    assert torch.allclose(out, expected, atol=1e-6)
-
-
-def test_penalty_close_feet_xy_two_feet_equals_old_formula() -> None:
-    env = _env()
-    threshold = 1.0  # near the median seeded foot distance so both outcomes appear
-
-    out = penalty_close_feet_xy(env, close_feet_threshold=threshold)
+    out = penalty_close_feet_xy(env, close_feet_threshold=0.1)
 
     assert env.resolve_calls == [("#feet",)]
-    assert torch.equal(out, _old_penalty_close_feet_xy(env, 2, 5, threshold))
-    assert out.any() and not out.all()  # the reference comparison constrains both sides of the threshold
+    assert out.tolist() == [1.0, 1.0, 0.0, 0.0, 1.0]
 
 
 @pytest.mark.parametrize("feet", [["#feet4"], ["front_foot"]])
@@ -191,25 +165,17 @@ def test_penalty_stumble_any_over_resolved_feet() -> None:
     assert out.tolist() == [True, False, False, True, True]
 
 
-def test_feet_phase_two_feet_equals_old_formula() -> None:
+@pytest.mark.parametrize("num_feet", [2, 4])
+def test_feet_phase_scores_known_gait_keyframes_and_sums_feet(num_feet: int) -> None:
     env = _env()
+    env.phase = torch.tensor([-torch.pi, -torch.pi / 2, 0.0, torch.pi / 2, torch.pi]).unsqueeze(1).repeat(1, num_feet)
+    env.feet_heights = torch.full((NUM_ENVS, num_feet), 0.02)
 
-    out = feet_phase(env, swing_height=0.09, tracking_sigma=0.008)
+    out = feet_phase(env, swing_height=0.08, tracking_sigma=0.01)
 
-    assert torch.equal(out, _old_feet_phase(env, 0.09, 0.008))
-
-
-def test_feet_phase_sums_squared_error_over_feet() -> None:
-    env = _env()
-    env.feet_heights = torch.rand(NUM_ENVS, 4) * 0.1
-    env.phase = torch.rand(NUM_ENVS, 4) * 2 * torch.pi - torch.pi
-
-    out = feet_phase(env, swing_height=0.05, tracking_sigma=0.01)
-
-    expected = torch.exp(
-        -torch.sum(torch.square(env.feet_heights - _expected_foot_height(env.phase, 0.05)), dim=1) / 0.01
-    )
-    assert torch.allclose(out, expected)
+    # The gait heights are 0, 0.04, 0.08, 0.04, 0 at these phases.
+    expected = torch.exp(-num_feet * torch.tensor([0.04, 0.04, 0.36, 0.04, 0.04]))
+    torch.testing.assert_close(out, expected)
 
 
 @pytest.mark.parametrize("feet_shape", [(NUM_ENVS, 0), (NUM_ENVS, 3), (0,)])
@@ -222,8 +188,7 @@ def test_feet_phase_shape_mismatch_names_the_feet_height_tag(feet_shape: tuple[i
 
 
 def test_limits_dof_pos_reads_dof_pos_limits() -> None:
-    # The stub carries the hard limits under the simulator's one name, dof_pos_limits (the old alias is checked
-    # absent on a live simulator in test_fixed_base_arm_e2e_mujoco).
+    # Derive the reward interval from the simulator's hard position limits.
     env = _env()
     limits = env.simulator.dof_pos_limits
     soft = 0.9

@@ -10,7 +10,6 @@ gets a motor at load), distinct scalar DOF qpos/qvel addresses in any config ord
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 import pytest
@@ -21,7 +20,6 @@ else:
     # no_sim lane runs in an env without the mujoco package (isaacsim conda); skip when unavailable.
     mujoco = pytest.importorskip("mujoco")
 
-from loguru import logger
 
 from holosoma.simulator.mujoco.robot_addressing import (
     add_missing_dof_motors,
@@ -31,7 +29,8 @@ from holosoma.simulator.mujoco.robot_addressing import (
     validate_dof_addressing,
     validate_robot_joint_types,
 )
-from holosoma.simulator.mujoco.scene_manager import ActorSpecMeta, MujocoSceneManager
+from holosoma.simulator.mujoco.scene_manager import ActorSpecMeta
+from holosoma.simulator.mujoco.tests._robot_spec import compile_robot_spec
 
 pytestmark = pytest.mark.no_sim
 
@@ -61,29 +60,14 @@ def _compile_robot(robot_xml: str) -> tuple[mujoco.MjModel, ActorSpecMeta, dict[
     robot_spec = mujoco.MjSpec.from_string(robot_xml)
     root_body = robot_spec.worldbody.bodies[0]
     root_body.add_freejoint()
-    validate_robot_joint_types(robot_spec, _ROBOT)
-    # _capture_spec_meta reads no instance state, so call it unbound (self=None).
-    meta = MujocoSceneManager._capture_spec_meta(None, robot_spec, _PREFIX, str(root_body.name))  # type: ignore[arg-type]
+    model, meta = compile_robot_spec(robot_spec, _PREFIX)
     clean_to_prefixed, _ = build_name_maps(meta)
-    world = mujoco.MjSpec()
-    world.copy_during_attach = True
-    frame = world.worldbody.add_frame()
-    world.attach(robot_spec, frame=frame, prefix=_PREFIX)
-    return world.compile(), meta, clean_to_prefixed
+    return model, meta, clean_to_prefixed
 
 
 def _check_actuators(actuators: str, extra: str = "") -> list[int]:
     model, meta, clean_to_prefixed = _compile_robot(_mjcf(_LINKS, actuators, extra))
     return validate_dof_actuators(model, meta, meta.dof_joint_names, clean_to_prefixed)
-
-
-@pytest.fixture
-def warnings() -> Iterator[list[str]]:
-    """Capture loguru WARNING messages (loguru does not feed pytest's caplog)."""
-    msgs: list[str] = []
-    sink_id = logger.add(lambda m: msgs.append(m.record["message"]), level="WARNING")
-    yield msgs
-    logger.remove(sink_id)
 
 
 # --- validate_robot_joint_types ---------------------------------------------------------------------
@@ -120,12 +104,6 @@ def test_joint_types_accept_unnamed_freejoint_root() -> None:
         )
     )
     assert [j.name for j in spec.joints if j.type == mujoco.mjtJoint.mjJNT_FREE] == [""]
-    validate_robot_joint_types(spec, _ROBOT)
-
-
-def test_joint_types_accept_hinge_and_slide() -> None:
-    spec = mujoco.MjSpec.from_string(_mjcf(_LINKS))
-    spec.worldbody.bodies[0].add_freejoint()  # what _ensure_single_root_body does (unnamed)
     validate_robot_joint_types(spec, _ROBOT)
 
 
@@ -190,12 +168,8 @@ def test_missing_motors_are_added_per_dof_and_pass_validation() -> None:
 
     assert [a.name for a in spec.actuators] == ["j1", "j0", "j2"]  # authored motor untouched, in place
     assert add_missing_dof_motors(spec, _ROBOT) == []  # idempotent
-    meta = MujocoSceneManager._capture_spec_meta(None, spec, _PREFIX, "base")  # type: ignore[arg-type]
+    model, meta = compile_robot_spec(spec, _PREFIX)
     clean_to_prefixed, _ = build_name_maps(meta)
-    world = mujoco.MjSpec()
-    world.copy_during_attach = True
-    world.attach(spec, frame=world.worldbody.add_frame(), prefix=_PREFIX)
-    model = world.compile()
     assert validate_dof_actuators(model, meta, meta.dof_joint_names, clean_to_prefixed) == [1, 0, 2]
     j1 = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{_PREFIX}j1")
     j0 = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{_PREFIX}j0")
@@ -214,47 +188,26 @@ def test_added_motor_is_a_pure_torque_motor_under_a_position_default_class() -> 
     assert list(model.actuator_gainprm[:, 0]) == [1.0] * 3
 
 
-def test_actuators_reject_position_actuator() -> None:
-    with pytest.raises(ValueError, match=r"biastype mjBIAS_AFFINE; only pure torque motors are supported"):
-        _check_actuators(
-            '<position name="j0" joint="j0" kp="10"/><motor name="j1" joint="j1"/><motor name="j2" joint="j2"/>'
-        )
-
-
-def test_actuators_reject_tendon_transmission() -> None:
-    tendon = '<tendon><fixed name="t0"><joint joint="j0" coef="1"/></fixed></tendon>'
-    with pytest.raises(ValueError, match=r"joint transmission; got trntype=mjTRN_TENDON"):
-        _check_actuators(
-            '<general name="j0" tendon="t0"/><motor name="j1" joint="j1"/><motor name="j2" joint="j2"/>', tendon
-        )
-
-
-def test_actuators_reject_nonunit_gear() -> None:
-    with pytest.raises(ValueError, match=r"robot_j0.*gear\[0\]=2.0.*expected 1.0"):
-        _check_actuators(
-            '<motor name="j0" joint="j0" gear="2"/><motor name="j1" joint="j1"/><motor name="j2" joint="j2"/>'
-        )
-
-
 @pytest.mark.parametrize(
-    "attributes",
-    ['gainprm="2"', 'gaintype="affine" gainprm="1 0.2 0.3"'],
-    ids=["nonunit-gain", "state-dependent-gain"],
+    ("actuator", "extra", "match"),
+    [
+        ('<position name="j0" joint="j0" kp="10"/>', "", "biastype mjBIAS_AFFINE; only pure torque motors"),
+        (
+            '<general name="j0" tendon="t0"/>',
+            '<tendon><fixed name="t0"><joint joint="j0" coef="1"/></fixed></tendon>',
+            "joint transmission; got trntype=mjTRN_TENDON",
+        ),
+        ('<motor name="j0" joint="j0" gear="2"/>', "", r"robot_j0.*gear\[0\]=2.0.*expected 1.0"),
+        ('<general name="j0" joint="j0" gainprm="2"/>', "", "robot_j0.*fixed unit gain"),
+        ('<general name="j0" joint="j0" gaintype="affine" gainprm="1 0.2 0.3"/>', "", "robot_j0.*fixed unit gain"),
+        ('<general name="j0" joint="j0" dyntype="filter" dynprm="0.1"/>', "", "robot_j0.*no activation dynamics"),
+        ('<general name="j0" joint="j0" dyntype="integrator" dynprm="0.1"/>', "", "robot_j0.*no activation dynamics"),
+    ],
+    ids=["position", "tendon", "gear", "gain", "affine-gain", "filter", "integrator"],
 )
-def test_actuators_reject_gain_that_changes_joint_effort(attributes: str) -> None:
-    with pytest.raises(ValueError, match="robot_j0.*fixed unit gain"):
-        _check_actuators(
-            f'<general name="j0" joint="j0" {attributes}/><motor name="j1" joint="j1"/><motor name="j2" joint="j2"/>'
-        )
-
-
-@pytest.mark.parametrize("dyntype", ["filter", "integrator"])
-def test_actuators_reject_activation_dynamics(dyntype: str) -> None:
-    with pytest.raises(ValueError, match="robot_j0.*no activation dynamics"):
-        _check_actuators(
-            f'<general name="j0" joint="j0" dyntype="{dyntype}" dynprm="0.1"/>'
-            '<motor name="j1" joint="j1"/><motor name="j2" joint="j2"/>'
-        )
+def test_actuators_reject_drives_that_are_not_unit_torque_motors(actuator: str, extra: str, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        _check_actuators(actuator + '<motor name="j1" joint="j1"/><motor name="j2" joint="j2"/>', extra)
 
 
 @pytest.mark.parametrize(

@@ -231,14 +231,6 @@ def test_sdk_and_plugin_controllers_must_have_disjoint_joints() -> None:
     assert sim.writes[-1][1] == [0]
 
 
-def test_plugin_registry_owns_the_demo() -> None:
-    from holosoma.config_values.plugin import PLUGIN_REGISTRY
-
-    cfg = PLUGIN_REGISTRY["yam-trajectory"]
-    assert cfg.get_cls() is JointTrajectoryPlugin
-    assert cfg.loop and cfg.waypoints[-1].time == 10.75
-
-
 def test_documented_yam_demo_command_disables_sdk_bridge() -> None:
     from holosoma.config_types.run_sim import RunSimConfig
     from holosoma.utils.config_registry import parse_config

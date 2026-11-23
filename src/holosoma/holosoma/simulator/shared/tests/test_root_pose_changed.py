@@ -1,15 +1,11 @@
-"""``root_pose_changed``: the one same-pose / pose-change rule every backend's fixed-base root write keys on.
-
-MuJoCo and IsaacSim treat a same-pose write as a no-op and a change as a kinematic teleport; IsaacGym
-refuses a change with ``NotImplementedError``. Pure torch, no simulator.
-"""
+"""Shared root-pose comparison handles quaternion sign equivalence, batches, and tolerance boundaries."""
 
 from __future__ import annotations
 
 import pytest
 import torch
 
-from holosoma.simulator.shared.root_states import ROOT_POSE_ATOL, root_pose_changed
+from holosoma.simulator.shared.root_states import root_pose_changed
 
 pytestmark = pytest.mark.no_sim
 
@@ -19,10 +15,6 @@ def _poses() -> torch.Tensor:
     quats = torch.tensor([[0.0, 0.6, 0.0, 0.8], [0.36, 0.48, 0.0, 0.8], [0.0, 0.0, 0.6, -0.8]])
     pos = torch.tensor([[0.0, 0.0, 0.5], [1.0, -2.0, 0.3], [5.0, 5.0, 5.0]])
     return torch.cat([pos, quats], dim=1)
-
-
-def test_root_pose_atol_is_the_documented_value() -> None:
-    assert ROOT_POSE_ATOL == 1e-5
 
 
 def test_empty_input_is_unchanged() -> None:
@@ -56,10 +48,10 @@ def test_flipping_one_quaternion_component_is_a_change() -> None:
 def test_position_tolerance_boundary(column: int) -> None:
     current = _poses()
     inside = current.clone()
-    inside[1, column] += 0.5 * ROOT_POSE_ATOL
+    inside[1, column] += 0.5e-5
     assert root_pose_changed(inside, current) is False
     outside = current.clone()
-    outside[1, column] += 2.0 * ROOT_POSE_ATOL
+    outside[1, column] += 2e-5
     assert root_pose_changed(outside, current) is True
 
 
@@ -67,10 +59,10 @@ def test_position_tolerance_boundary(column: int) -> None:
 def test_quaternion_tolerance_boundary(column: int) -> None:
     current = _poses()
     inside = current.clone()
-    inside[2, column] += 0.5 * ROOT_POSE_ATOL
+    inside[2, column] += 0.5e-5
     assert root_pose_changed(inside, current) is False
     outside = current.clone()
-    outside[2, column] += 2.0 * ROOT_POSE_ATOL
+    outside[2, column] += 2e-5
     assert root_pose_changed(outside, current) is True
 
 
@@ -97,7 +89,7 @@ def test_difference_of_exactly_atol_is_unchanged(column: int) -> None:
     current = torch.zeros(1, 7)
     current[0, 3 if column == 6 else 6] = 1.0  # a unit quaternion with 0 in the probed column
     edge = current.clone()
-    edge[0, column] = ROOT_POSE_ATOL
+    edge[0, column] = 1e-5
     assert root_pose_changed(edge, current) is False
-    edge[0, column] = torch.nextafter(torch.tensor(ROOT_POSE_ATOL), torch.tensor(1.0)).item()
+    edge[0, column] = torch.nextafter(torch.tensor(1e-5), torch.tensor(1.0)).item()
     assert root_pose_changed(edge, current) is True

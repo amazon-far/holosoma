@@ -108,11 +108,10 @@ radians for hinges and metres for slides. `robot.default_dof_positions()` return
 canonical order without expanding the stored map in place. Controller gains, action scaling and action clipping
 belong to the action term or plugin that applies them.
 
-Selections deduplicate after expansion, preserving first-seen order. Assignment maps reject overlap between
-separate keys, even for equal values. Defaults and overrides are separate validated layers with explicit
-precedence; exact names have no automatic priority. Ordered symmetry pairs reject repetitions before
-deduplication. The shared helpers live in [`name_tags.py`](../src/holosoma/holosoma/utils/name_tags.py);
-physical-property validation lives in [`robot_properties.py`](../src/holosoma/holosoma/utils/robot_properties.py).
+Selections deduplicate names in first-seen order. Assignment maps reject overlap between keys, even for equal values.
+Ordered symmetry selections reject repeated joints. Resolve selections with
+[`name_tags.py`](../src/holosoma/holosoma/utils/name_tags.py) and physical properties with
+[`robot_properties.py`](../src/holosoma/holosoma/utils/robot_properties.py).
 Task terms can use `env.robot_names.resolve_body_indices(...)` and the corresponding name/joint methods.
 
 For Unitree and Booster, `bridge.controlled_dof_names` must give SDK motor order. Their wire messages contain
@@ -120,9 +119,8 @@ unnamed motor slots, so reordering policy actions must not reorder the hardware 
 canonical order minus `excluded_dof_names`; an explicit controlled tuple takes precedence. When renaming joints,
 audit inherited tags, maps and bridge names. Reordering names alone does not require reordering maps.
 
-Set `asset.fix_base_link=True` for a welded base. Root velocity stays zero; IsaacGym rejects teleporting that
-root, while MuJoCo and IsaacSim support it. Push randomization changes root velocity and therefore requires a
-floating base. For motion tracking, `MotionConfig.root_body=None` discovers the physical root from the loaded
+Set `asset.fix_base_link=True` for a welded base. Root velocity stays zero. MuJoCo and IsaacSim support fixed-root pose changes.
+Push randomization requires a floating base. For motion tracking, `MotionConfig.root_body=None` discovers the physical root from the loaded
 articulation. Include that body in observations and motion data; an explicit selection must identify the same
 root. `body_name_ref` independently selects the tracking reference.
 

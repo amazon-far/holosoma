@@ -1,15 +1,6 @@
-"""Shared ``ExperimentConfig`` for the fixed-base arm env tests.
+"""Shared fixed-base arm experiment for reset, stepping, and PPO integration tests.
 
-Used by the CPU e2e test (``holosoma/envs/tests/test_fixed_base_arm_e2e_mujoco.py``) and the cross-backend
-harness (``fixed_base_env_assert.py``) so both run the same env: the ``test_arm_fixed`` preset (3-DOF arm,
-``asset.fix_base_link=True``) through ``LeggedRobotLocomotionManager`` with robot-agnostic terms only (dof_pos /
-dof_vel / actions observations, action-rate + DOF-limit penalties, timeout termination, the g1 gait/velocity
-command terms, the g1 joint-position action term) on the plane terrain, and PPO for two iterations.
-
-The default plane terrain is used as shipped: its spawn XY jitter applies to floating bases only, so a reset
-writes terrain origin + init pose. That is the spawn pose on MuJoCo/IsaacGym (a same-pose no-op under the
-simulator's fixed-base rule); on IsaacSim, which spawns on IsaacLab's env grid, the first reset is a teleport.
-"""
+The robot uses a welded root on plane terrain with robot-agnostic observations, rewards, and termination."""
 
 from __future__ import annotations
 

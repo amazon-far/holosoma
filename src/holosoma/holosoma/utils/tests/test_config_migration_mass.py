@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -10,7 +9,6 @@ from typing import Any, cast
 import pytest
 import torch
 import yaml
-from loguru import logger
 
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.envs.base_task.base_task import BaseTask
@@ -90,7 +88,7 @@ def _load(raw: dict[str, Any], tmp_path: Path) -> ExperimentConfig:
 
 def _legacy(link_names: list[str]) -> dict[str, Any]:
     raw: dict[str, Any] = yaml.safe_load(
-        (Path(__file__).parent / "data" / "legacy_g1_29dof_experiment_config.yaml").read_text()
+        (Path(__file__).parent / "data" / "legacy_experiments" / "g1_29dof_isaacsim.yaml").read_text()
     )
     raw["robot"]["randomize_link_body_names"] = link_names
     raw["randomization"]["setup_terms"]["mass_randomizer"]["params"] = {
@@ -100,14 +98,6 @@ def _legacy(link_names: list[str]) -> dict[str, Any]:
         "added_mass_range": [2.0, 2.0],
     }
     return raw
-
-
-@pytest.fixture
-def migration_warnings() -> Iterator[list[str]]:
-    messages: list[str] = []
-    sink = logger.add(lambda message: messages.append(message.record["message"]), level="WARNING")
-    yield messages
-    logger.remove(sink)
 
 
 def _assert_mass_changes(
@@ -135,7 +125,7 @@ def _assert_mass_changes(
 @pytest.mark.parametrize("link_names", [[], ["stale_link"]], ids=["empty", "all-stale"])
 @pytest.mark.parametrize("explicit_enable", [False, True], ids=["default-enable", "explicit-enable"])
 def test_empty_legacy_link_selection_keeps_base_mass_after_checkpoint_load(
-    tmp_path: Path, migration_warnings: list[str], link_names: list[str], explicit_enable: bool
+    tmp_path: Path, warnings: list[str], link_names: list[str], explicit_enable: bool
 ) -> None:
     raw = _legacy(link_names)
     if not explicit_enable:
@@ -148,7 +138,7 @@ def test_empty_legacy_link_selection_keeps_base_mass_after_checkpoint_load(
     assert params["link_bodies"] == [] and params["enable_link_mass"] is False
     assert params["enable_base_mass"] is True and params["added_mass_range"] == [2.0, 2.0]
     _assert_mass_changes(simulator, before)
-    assert any("no bodies" in message and "enable_link_mass=False" in message for message in migration_warnings)
+    assert any("no bodies" in message and "enable_link_mass=False" in message for message in warnings)
     dumped = config.to_serializable_dict()
     assert migrate_legacy_experiment_config(dumped) == dumped
 
@@ -173,14 +163,14 @@ def test_empty_legacy_selection_preserves_disabled_operations(tmp_path: Path, di
 @pytest.mark.parametrize("link_bodies", [[], ["pelvis"]], ids=["explicit-empty", "explicit-nonempty"])
 @pytest.mark.parametrize("enable_link_mass", [False, True], ids=["disabled", "enabled"])
 def test_explicit_migrated_link_params_win_over_empty_legacy_selection(
-    tmp_path: Path, migration_warnings: list[str], link_bodies: list[str], enable_link_mass: bool
+    tmp_path: Path, warnings: list[str], link_bodies: list[str], enable_link_mass: bool
 ) -> None:
     raw = _legacy([])
     params = raw["randomization"]["setup_terms"]["mass_randomizer"]["params"]
     params.update(link_bodies=link_bodies, enable_link_mass=enable_link_mass, base_body="torso_link")
     config = _load(raw, tmp_path)
     assert _mass_params(config) == params
-    assert not any("no bodies" in message and "enable_link_mass=False" in message for message in migration_warnings)
+    assert not any("no bodies" in message and "enable_link_mass=False" in message for message in warnings)
 
     if enable_link_mass and not link_bodies:
         with pytest.raises(ValueError, match="enable_link_mass=True requires link_bodies"):

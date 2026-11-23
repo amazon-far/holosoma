@@ -100,7 +100,6 @@ class _StubBridge(BasicSdk2Bridge):
 
 def _bridge(sim: _FakeSim) -> _StubBridge:
     robot_config = SimpleNamespace(
-        dof_effort_limit_list=[100.0] * _NUM_DOF,
         asset=SimpleNamespace(robot_type="g1_29dof"),
         bridge=RobotBridgeConfig(),
     )
@@ -183,7 +182,6 @@ def test_an_exchange_publishes_in_order_and_reads_the_command_last() -> None:
 def test_an_exchange_skips_odometry_and_the_joystick_when_not_configured() -> None:
     sim = _FakeSim()
     robot_config = SimpleNamespace(
-        dof_effort_limit_list=[100.0] * _NUM_DOF,
         asset=SimpleNamespace(robot_type="g1_29dof"),
         bridge=RobotBridgeConfig(),
     )

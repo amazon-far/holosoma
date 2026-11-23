@@ -338,7 +338,7 @@ g1_29dof = RobotConfig(
             "right_hip_roll_joint",
             "right_hip_yaw_joint",
         ],
-        # Left/right actuator pairs sharing PD gains (control.stiffness/damping keys); knees above.
+        # Left/right joint groups for shared PD gains.
         "#hip_yaw": ["left_hip_yaw_joint", "right_hip_yaw_joint"],
         "#hip_roll": ["left_hip_roll_joint", "right_hip_roll_joint"],
         "#hip_pitch": ["left_hip_pitch_joint", "right_hip_pitch_joint"],
@@ -669,7 +669,7 @@ t1_29dof_waist_wrist = RobotConfig(
             "Right_Hip_Roll",
             "Right_Hip_Yaw",
         ],
-        # Left/right actuator pairs sharing PD gains (control.stiffness/damping keys); knees above.
+        # Left/right joint groups for shared PD gains.
         "#hip_yaw": ["Left_Hip_Yaw", "Right_Hip_Yaw"],
         "#hip_roll": ["Left_Hip_Roll", "Right_Hip_Roll"],
         "#hip_pitch": ["Left_Hip_Pitch", "Right_Hip_Pitch"],
@@ -725,10 +725,8 @@ g1_29dof_w_object = replace(
 # --------------------------------------------------------------------------------------------
 # I2RT YAM: 6-DOF arm + two-finger parallel gripper (8 DOF), fixed base. The reference fixed-base robot.
 # Asset provenance and modifications: data/robots/yam/README.md (MIT). The URDF's effort/velocity limits are
-# placeholders, so the lists below are what every backend applies: effort and armature from the MuJoCo Menagerie
-# i2rt_yam model, velocity limits from mjlab's yam_constants. Joint friction is 0: Menagerie's frictionloss 0.1 is
-# a constant MuJoCo torque, while PhysX reads the same number as a coefficient of the joint's constraint force
-# (0.1 held the folded arm ~0.1 rad off its targets on IsaacGym), so the value the backends agree on is none.
+# placeholders. The preset uses effort and armature from MuJoCo Menagerie's i2rt_yam model,
+# velocity limits from mjlab's yam_constants, and zero joint friction.
 # --------------------------------------------------------------------------------------------
 _YAM_ARM = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
 _YAM_HOME = {"joint1": 0.0, "joint2": 1.047, "joint3": 1.047, "joint4": 0.0, "joint5": 0.0, "joint6": 0.0}

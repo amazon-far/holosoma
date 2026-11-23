@@ -16,12 +16,11 @@ from holosoma.config_values.experiment import EXPERIMENT_REGISTRY
 from holosoma.managers.command.terms.wbt import MotionCommand
 from holosoma.utils.config_migration import migrate_legacy_experiment_config
 from holosoma.utils.eval_utils import CheckpointConfig, load_saved_experiment_config
-from holosoma.utils.helpers import get_class
 
 pytestmark = pytest.mark.no_sim
 
 _FUNC = "holosoma.managers.command.terms.wbt:MotionCommand"
-_DATA = Path(__file__).parent / "data" / "legacy_g1_29dof_experiment_config.yaml"
+_DATA = Path(__file__).parent / "data" / "legacy_experiments" / "g1_29dof_isaacsim.yaml"
 
 
 def _write_clip(path: Path, bodies: list[str], joints: list[str]) -> None:
@@ -66,7 +65,7 @@ def test_sparse_motion_params_preserve_reset_clamp_after_checkpoint_load(
     robot["soft_dof_pos_limit"] = 0.8
     robot["dof_pos_lower_limit_list"] = [-1.0] * count
     robot["dof_pos_upper_limit_list"] = [1.0] * count
-    raw["simulator"]["_target_"] = "holosoma.simulator.isaacgym.isaacgym.IsaacGym"
+    raw["simulator"]["_target_"] = "holosoma.simulator.isaacsim.isaacsim.IsaacSim"
     clip_path = tmp_path / "motion.npz"
     motion: dict[str, Any] = {
         "motion_file": str(clip_path),
@@ -135,7 +134,6 @@ def test_motion_soft_limit_migration_recognizes_canonical_paths_in_every_stage(
 ) -> None:
     # get_class accepts the dotted spelling. CommandManager requires a colon, so this checks
     # saved-data migration without extending the manager's runtime path syntax.
-    assert get_class(func.replace(":", ".")) is MotionCommand
     raw: dict[str, Any] = yaml.safe_load(_DATA.read_text())
     raw["robot"]["soft_dof_pos_limit"] = 0.8
     motion: dict[str, Any] = {

@@ -3,8 +3,8 @@
 
      Chain: base_link -> shoulder_joint (hinge, z) -> link1 -> elbow_joint (hinge, y) -> link2
             -> slide_joint (prismatic, x) -> slider.
-     base_link is the URDF root with no joint to the world; IsaacGym welds it via fix_base_link and
-     MuJoCo leaves the MJCF root body jointless (see test_arm.xml). Link order here equals the MJCF
+     base_link is the welded URDF root with no joint to the world.
+     The matching MJCF root body is jointless (see test_arm.xml). Link order here equals the MJCF
      DFS body order: [base_link, link1, link2, slider]; joint order [shoulder_joint, elbow_joint,
      slide_joint]. Joint limits/effort/velocity equal the test_arm_fixed preset lists exactly.
 

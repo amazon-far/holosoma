@@ -100,13 +100,10 @@ def dof_limits_from_sequences(
 
 
 def resolve_dof_properties(robot: RobotConfig) -> DofPropertyOverrides:
-    """Validate the complete assignment before any backend writes or actuator grouping.
+    """Resolve sparse physical-property assignments to canonical names.
 
-    Each property is an independent assignment layer. Repeated names within a tag are harmless;
-    separate keys reaching the same joint are ambiguous, even with equal values. Missing joints
-    retain their asset values. Defaults must fall within explicitly configured position limits;
-    asset-authored limits are unavailable until the simulator loads the asset. The returned maps
-    use canonical names in authored selection order.
+    Reject overlapping keys, invalid values, and defaults outside configured position limits.
+    Unspecified joints retain asset values.
     """
 
     def resolve(spec: Sequence[str]) -> list[str]:

@@ -559,7 +559,7 @@ class MotionCommand(CommandTermBase):
         else:
             self.motion_cfg = MotionConfig(**cfg.params["motion_config"])
         self.init_pose_cfg: NoiseToInitialPoseConfig = self.motion_cfg.noise_to_initial_pose
-        self._soft_dof_pos_limits: torch.Tensor | None = None  # from simulator.dof_pos_limits, built on first reset
+        self._soft_dof_pos_limits: torch.Tensor | None = None  # derived from get_dof_limits_properties on first reset
 
     def setup(self) -> None:
         if self._env.robot_config.asset.fix_base_link:
@@ -586,7 +586,7 @@ class MotionCommand(CommandTermBase):
         if root_names != [physical_root]:
             raise ValueError(
                 f"MotionConfig.root_body={self.motion_cfg.root_body!r} must resolve to the physical root "
-                f"{physical_root!r}; got {root_names}. A different body's pose cannot reset the articulation root."
+                f"{physical_root!r}; got {root_names}."
             )
         self.root_body_index = robot_body_names.index(physical_root)
         robot_body_names_alias = [FAKE_BODY_NAME_ALIASES.get(bn, bn) for bn in robot_body_names]
@@ -880,7 +880,7 @@ class MotionCommand(CommandTermBase):
         # update robot_root_pos_w and robot_root_quat_w, but on a backend whose body poses lag
         # until the next forward-kinematics pass, robot_body_pos_w and robot_body_quat_w still
         # hold the pre-reset poses, so robot_ref_pos_w and robot_ref_quat_w would be stale.
-        # First observed on Isaac Gym; kept as a guard for any backend with that lag.
+        # Derived body states can remain stale until the next physics update.
 
         # Solution:
         # ------------------------------------------------------------

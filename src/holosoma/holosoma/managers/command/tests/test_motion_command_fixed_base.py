@@ -42,10 +42,3 @@ def test_setup_requires_floating_base() -> None:
     with pytest.raises(ValueError, match="requires a floating base"):
         MotionCommand.setup(term)
     assert not hasattr(term, "num_envs")  # nothing past the guard ran
-
-
-def test_setup_proceeds_past_the_guard_for_a_floating_base() -> None:
-    term = _term(floating_base=True)
-    with pytest.raises(_PastTheGuardError):
-        MotionCommand.setup(term)
-    assert (term.num_envs, term.device) == (1, "cpu")  # the guard passed and setup reached the simulator

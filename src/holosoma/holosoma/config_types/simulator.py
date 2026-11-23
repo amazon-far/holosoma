@@ -60,9 +60,6 @@ class PhysxConfig:
     bounce_threshold_velocity: float = 0.5
     """Velocity threshold below which bounce responses are suppressed."""
 
-    max_gpu_contact_pairs: int = 16 * 1024 * 1024
-    """PhysX GPU contact-pair buffer size (IsaacGym). Raise for many-object or multi-contact scenes."""
-
 
 @dataclass(frozen=True)
 class MujocoXMLFilterCfg:

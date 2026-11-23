@@ -11,7 +11,6 @@ from holosoma.utils.name_tags import (
     expand_name_assignments,
     expand_name_spec,
     expand_unique_name_spec,
-    is_tag,
     resolve_single_name_spec,
     validate_tag_table,
 )
@@ -25,11 +24,6 @@ _TAGS = {
     "#knees": ["l_knee", "r_knee"],
 }
 _UNIVERSE = ["l_hip", "l_knee", "r_hip", "r_knee", "torso"]
-
-
-def test_is_tag() -> None:
-    assert is_tag("#legs")
-    assert not is_tag("legs")
 
 
 def test_exact_names_pass_through_in_order() -> None:
@@ -63,14 +57,10 @@ def test_unknown_tag_lists_defined_tags() -> None:
         expand_name_spec(["#feet"], _TAGS, _UNIVERSE)
 
 
-def test_unknown_name_lists_universe_and_kind() -> None:
-    with pytest.raises(ValueError, match=r"Unknown joint name 'nope'.*known joints: \['l_hip'"):
-        expand_name_spec(["nope"], _TAGS, _UNIVERSE, kind="joint")
-
-
-def test_unknown_body_name_says_bodies() -> None:
-    with pytest.raises(ValueError, match=r"Unknown body name 'nope'.*known bodies: \['l_hip'"):
-        expand_name_spec(["nope"], _TAGS, _UNIVERSE)
+@pytest.mark.parametrize(("kind", "plural"), [("joint", "joints"), ("body", "bodies")])
+def test_unknown_name_lists_universe_and_kind(kind: str, plural: str) -> None:
+    with pytest.raises(ValueError, match=rf"Unknown {kind} name 'nope'.*known {plural}: \['l_hip'"):
+        expand_name_spec(["nope"], _TAGS, _UNIVERSE, kind=kind)
 
 
 def test_bare_string_spec_is_a_type_error_naming_the_fix() -> None:
@@ -104,10 +94,6 @@ def test_cycle_reports_chain() -> None:
 def test_non_string_entry_is_type_error() -> None:
     with pytest.raises(TypeError):
         expand_name_spec([3], _TAGS, _UNIVERSE)  # type: ignore[list-item]
-
-
-def test_validate_tag_table_accepts_valid_table() -> None:
-    validate_tag_table(_TAGS, _UNIVERSE)
 
 
 @pytest.mark.parametrize(

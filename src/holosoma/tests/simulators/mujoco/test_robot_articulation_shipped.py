@@ -3,15 +3,13 @@
 Builds the real single-env sim for g1_29dof and t1_29dof_waist_wrist through ``load_assets`` (scene
 manager -> compile -> ``_set_robot_properties`` -> ``_set_robot_joint_addressing``), so every
 ``robot_addressing.validate_*`` check runs against the shipped MJCF + ``RobotConfig`` pair, and asserts
-the config armature/friction lists landed on the compiled model. Also checks reordered canonical joint and body lists.
+the config armature/friction lists landed on the compiled model.
+The shared robot mapping harness exercises canonical name permutations.
 
 Runs in the MuJoCo (hsmujoco) CPU env — no CUDA.
 """
 
 from __future__ import annotations
-
-import dataclasses
-from typing import Any
 
 import numpy as np
 import pytest
@@ -63,18 +61,6 @@ def test_shipped_robot_builds_and_matches_config(robot: RobotConfig) -> None:
     np.testing.assert_allclose(
         torque_limits.cpu(), [resolve_dof_properties(robot).effort[n] for n in robot.dof_names] or []
     )
-
-
-@pytest.mark.parametrize("field_name", ["dof_names", "body_names"])
-def test_reordered_names_preserved(field_name: str) -> None:
-    g1 = robot_values.g1_29dof
-    swapped = list(getattr(g1, field_name))
-    swapped[0], swapped[1] = swapped[1], swapped[0]
-    # Values are deliberately left in their config slots: backends must respect that order.
-    overrides: dict[str, Any] = {field_name: swapped}
-    robot = dataclasses.replace(g1, **overrides)
-    sim = build_classic_sim(robot=robot)
-    assert getattr(sim, field_name) == swapped
 
 
 @pytest.mark.parametrize("zero_dof", [False, True])

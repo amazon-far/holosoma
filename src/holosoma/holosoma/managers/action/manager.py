@@ -56,7 +56,8 @@ class ActionManager:
         expected_dim = len(self.env.robot_config.dof_names)
         if self._total_action_dim != expected_dim:
             raise ValueError(
-                f"Action terms total {self._total_action_dim} dimensions, but robot.actions_dim is {expected_dim}."
+                f"Action terms total {self._total_action_dim} dimensions, "
+                f"but robot.dof_names has {expected_dim} entries."
             )
 
         # Buffers for actions

@@ -373,9 +373,7 @@ class MujocoSceneManager:
             # assumes the robot XML knows what it's doing
             self._apply_collision_settings(robot_spec, robot_config)
 
-        # Require a single root body; capture its root-body name for addressing. A floating base
-        # gets a freejoint (reused if authored); a fixed base is welded to the world like a static
-        # scene object (root-joint rule in _set_root_joint).
+        # Resolve one physical root with mobility matching the robot configuration.
         fixed = robot_config.asset.fix_base_link
         root_body = self._ensure_single_root_body(robot_spec, robot_config.asset.robot_type, free=not fixed)
         # Every non-free joint must be a named hinge/slide (one qpos/dof address per DOF); a DOF joint
@@ -447,8 +445,7 @@ class MujocoSceneManager:
             # Asset files may carry their own lights/ground; strip them like the robot.
             obj_spec = self._filter_worldbody(obj_spec, xml_filter)
 
-        # Single top-level body; free objects get a freejoint, fixed objects are welded (root-joint
-        # rule in _set_root_joint, shared with the robot and scene-file paths).
+        # Resolve one physical root with mobility matching the object configuration.
         root_body = self._ensure_single_root_body(obj_spec, name, free=not obj_config.fixed)
 
         # Apply the per-object physics override (shared PhysicsConfig) to the body before attach,
@@ -528,10 +525,7 @@ class MujocoSceneManager:
                 f"exclude={scene_file.exclude_patterns}; candidates={[b.name for b in bodies]})."
             )
 
-        # Classify each top-level body: free joint => free, jointless => static (the file's
-        # structure), with any per-object config override applied. The body is then made to
-        # match via the shared root-joint rule (a freejoint dropped from a forced-static body,
-        # or added to a forced-free one) so its joint state and registered type always agree.
+        # Per-object mobility overrides take precedence over the authored root-joint structure.
         body_is_static: dict[str, bool] = {}
         for body in included:
             if body.name in body_is_static:
@@ -542,8 +536,7 @@ class MujocoSceneManager:
             has_freejoint = any(j.type == mujoco.mjtJoint.mjJNT_FREE for j in body.joints)
             is_static = scene_file.resolve_fixed(body.name, structural_default=not has_freejoint)
             self._set_root_joint(spec, body, free=not is_static)
-            # Per-body physics override (shared resolve_physics rule, same as IsaacGym/IsaacSim),
-            # applied to this body before the file is attached.
+            # Apply per-body physics before attaching the scene file.
             self._apply_physics_to_body(body, scene_file.resolve_physics(body.name), f"{scene_file_name}_{body.name}")
             # Per-body world-frame position offset. body.pos is relative to the attach frame, so
             # rotate the world offset into the frame's local space (conjugate of the file
@@ -818,13 +811,10 @@ class MujocoSceneManager:
 
     @staticmethod
     def _set_root_joint(spec: mujoco.MjSpec, body: mujoco.MjSpec.Body, *, free: bool) -> None:
-        """Make ``body``'s root joint match ``free``: the one root-joint rule for every actor path.
+        """Keep or create one freejoint for free roots.
 
-        A free body ends up with exactly one freejoint (an authored one is kept, one is added when
-        absent); a welded body ends up with none (an authored freejoint is deleted). Shared by
-        ``add_robot`` (floating vs. fixed base), ``add_rigid_object`` (``fixed``) and
-        ``add_scene_file`` (per-body static classification) so an actor's joint state and its
-        registered free/static type always agree.
+        For welded roots, remove the freejoint if present.
+        If a freejoint is removed, delete keyframes with the obsolete qpos layout.
         """
         freejoint = next((j for j in body.joints if j.type == mujoco.mjtJoint.mjJNT_FREE), None)
         if free and freejoint is None:

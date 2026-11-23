@@ -1,50 +1,7 @@
-"""Headless cross-backend assertion harness for a FIXED-BASE robot (``asset.fix_base_link=True``).
+"""Assert fixed-base spawn, stepping, root-pose writes, joint-state writes, and prismatic actuation.
 
-Builds a sim for a chosen backend with the ``test-arm-fixed`` preset (3-DOF arm, welded base; see
-``tests/simulators/_robot_presets.py``) plus one static pillar clear of the arm (for the mixed robot+object
-write) and asserts the fixed-robot state contract:
-the base is handled like a static (welded) scene object -- constant spawn pose, zero velocity, and one
-root-write rule on every backend (a write whose pose equals the current pose is a no-op with the
-velocity columns ignored; a pose change is a kinematic teleport on MuJoCo/IsaacSim and refused with
-NotImplementedError on IsaacGym) -- while the arm's DOFs stay live (gravity, torques, DOF-state writes).
-
-  1. SPAWN       robot_root_states == [origin + init.position, init quat xyzw, zeros(6)] per env;
-                 all_root_states[robot rows], get_actor_states(["robot"]), base_quat and the base body
-                 row of rigid_body_pos_w agree with it; base_angular_vel / base_linear_acc are zero
-                 (required on MuJoCo, which exposes both on a fixed base; IsaacGym/IsaacSim expose
-                 base_linear_acc only with the bridge enabled and no base_angular_vel: skipped, printed).
-  2. STAYS PUT   1 s of zero torques: base pose unchanged (atol 1e-6); the tip (slider) drops by
-                 > 1 cm under gravity and dof_pos changes -- the joints are dynamic, the base is not.
-  3. SAME-POSE   set_actor_root_state_tensor_robots(env_ids, current pose with the quaternion NEGATED
-                 (-q is the same rotation) + a NON-ZERO velocity) is accepted on every backend (IsaacGym
-                 included) and moves nothing: root (zero velocity, the current sign), base body and tip
-                 read back unchanged.
-  4. TELEPORT    set_actor_root_state_tensor_robots(env_ids, +0.5 m z): base pose reads back at the
-                 target, velocity stays zero, dof_pos is preserved, the tip moves by the same +0.5 m.
-                 IsaacGym MUST refuse a fixed-base pose change with the documented NotImplementedError
-                 (PhysX keeps a welded root where it spawned); a silent accept is a failure there.
-  4b. MIXED      set_actor_states(["robot", pillar], ...) moving BOTH by +0.5 m z in one write: IsaacGym
-                 raises the documented NotImplementedError before anything is written (all-or-nothing:
-                 the pillar reads back unchanged); MuJoCo/IsaacSim apply both poses (velocity ignored).
-  5. UNIFIED     set_actor_states(["robot"], ...) to the spawn pose with a NON-ZERO velocity column:
-                 the pose is applied (a same-pose no-op on IsaacGym, where TELEPORT was refused), the
-                 velocity is ignored (reads back zero), exactly as for a static scene object. A raise
-                 is a failure on every backend.
-  6. DOF WRITE   set_dof_state_tensor_robots to [0.3, -0.3, 0.02] reads back within 5e-2 after one
-                 step; the base pose is untouched.
-  7. PRISMATIC   +2 N on slide_joint for 0.3 s drives dof_pos[:, 2] into (0.01, 0.055]; -2 N for
-                 0.3 s brings it back down (the joint range is [0, 0.05]).
-  8. PER-ENV     (num_envs > 1) distinct env origins give distinct base positions.
-
-Exits 0 on success, 1 with FAIL lines otherwise; writes "OK" to ``--result-file`` on success.
-Mirrors static_move_assert.py / all_root_states_unified_assert.py.
-
-Usage:
-  python fixed_base_robot_assert.py --simulator mujoco                 # ClassicBackend, 1 env, cpu
-  python fixed_base_robot_assert.py --simulator mjwarp   --num-envs 4  # WarpBackend, cuda
-  python fixed_base_robot_assert.py --simulator isaacgym --num-envs 4  # IsaacGym, cuda
-  python fixed_base_robot_assert.py --simulator isaacsim --num-envs 4  # IsaacSim, cuda
-"""
+The welded root stays stationary during stepping while articulated joints respond to gravity and torque.
+Explicit root-pose writes move the robot and preserve its joint state."""
 
 from __future__ import annotations
 
@@ -96,7 +53,7 @@ SLIDE_FORCE = 2.0  # N on slide_joint
 SLIDE_SECONDS = 0.3
 SLIDE_MIN, SLIDE_MAX = 0.01, 0.055  # joint range is [0, 0.05]; 5 mm soft-limit slack
 HOLD_KP, HOLD_KD = 20.0, 1.0  # harness-side PD hold on the hinge joints while the slider is driven
-# IsaacSim refreshes its read cache from PhysX on a sim step; MuJoCo/IsaacGym reflect writes at once.
+# IsaacSim refreshes its read cache from PhysX on a sim step; MuJoCo reflects writes immediately.
 ISAACSIM_REFRESH_STEPS = 2
 
 
@@ -147,7 +104,6 @@ class _Arm:
         self.base_idx = sim.find_rigid_body_indice("base_link")
         self.tip_idx = sim.find_rigid_body_indice("slider")
         self.is_isaacsim = sim.get_simulator_type().value == "isaacsim"
-        self.is_isaacgym = sim.get_simulator_type().value == "isaacgym"
         self.effort = sim.get_dof_limits_properties()[2].to(device=sim.sim_device, dtype=torch.float32)
         init = config.robot.init_state
         # Expected [num_envs, 13]: world position (the backend's live env origins: IsaacSim lays envs out
@@ -220,17 +176,8 @@ def _base_unchanged(arm: _Arm, root_before: torch.Tensor, base_before: torch.Ten
     return fails
 
 
-# The documented IsaacGym refusal (isaacgym/root_state.py fixed_base_robot_rows); any other NotImplementedError
-# is a failure.
-ISAACGYM_REFUSAL = "cannot move a fixed-base robot"
-
-
 def _root_write_refused(arm: _Arm, label: str, exc: NotImplementedError) -> list[str]:
-    """IsaacGym documents refusing a fixed-base root write that changes the pose (PhysX would ignore it);
-    elsewhere, or with any other message, a raise is a failure."""
-    if arm.is_isaacgym and ISAACGYM_REFUSAL in str(exc):
-        print(f"  {label} skipped (fixed-base pose change refused: {exc})")
-        return []
+    """Report an unsupported root-pose write as a harness failure."""
     return [f"{label} raised NotImplementedError: {exc}"]
 
 
@@ -247,7 +194,7 @@ def _check_same_pose(arm: _Arm) -> list[str]:
     except NotImplementedError as exc:
         return [f"same-pose set_actor_root_state_tensor_robots raised NotImplementedError: {exc}"]
     arm.settle_reads()
-    sim.refresh_sim_tensors()  # read the physics pose back (IsaacGym: the raw buffer held the registered spawn)
+    sim.refresh_sim_tensors()
     fails = _base_unchanged(arm, root_before, base_before, "same-pose write")
     tip = arm.body_pos(arm.tip_idx)
     # settle_reads steps IsaacSim briefly, so the free-hanging tip may creep under gravity; a teleport is not small.
@@ -280,7 +227,7 @@ def _check_spawn(arm: _Arm) -> list[str]:
     for name in ("base_linear_acc",):
         view = getattr(sim, name, None)
         if view is None:
-            if arm.is_isaacgym or arm.is_isaacsim:
+            if arm.is_isaacsim:
                 print(f"  SPAWN {name} not exposed on this backend, skipped")
                 continue
             fails.append(f"{name} missing: MuJoCo exposes it on a fixed base")
@@ -317,9 +264,6 @@ def _check_teleport(arm: _Arm) -> list[str]:
         sim.set_actor_root_state_tensor_robots(arm.env_ids, target)
     except NotImplementedError as exc:
         return _root_write_refused(arm, "TELEPORT set_actor_root_state_tensor_robots", exc)
-    if arm.is_isaacgym:
-        # The documented contract: PhysX keeps a welded root where it spawned, so IsaacGym must refuse.
-        return ["TELEPORT set_actor_root_state_tensor_robots did not raise NotImplementedError on IsaacGym"]
     arm.settle_reads()
     root, tip = arm.root(), arm.body_pos(arm.tip_idx)
     fails: list[str] = []
@@ -337,9 +281,7 @@ def _check_teleport(arm: _Arm) -> list[str]:
 
 
 def _check_mixed_write(arm: _Arm) -> list[str]:
-    """One ``set_actor_states`` over the robot AND the static pillar, moving both by +MIXED_DZ: IsaacGym
-    refuses the robot row before writing anything (all-or-nothing, the pillar stays), MuJoCo/IsaacSim apply
-    both poses and ignore the velocity columns."""
+    """Move the robot and static pillar together, preserving joint state and zero root velocity."""
     torch, sim = arm.torch, arm.sim
     names = ["robot", PILLAR]
     n = arm.num_envs
@@ -359,8 +301,6 @@ def _check_mixed_write(arm: _Arm) -> list[str]:
             fails.append("refused mixed write moved the tip")
         print(f"  MIXED refused, pillar z={_fmt(after[n:, 2])} ok={not fails}")
         return fails
-    if arm.is_isaacgym:
-        return ["MIXED set_actor_states(['robot', pillar]) did not raise NotImplementedError on IsaacGym"]
     arm.settle_reads()
     after = sim.get_actor_states(names, arm.env_ids)
     fails = []
@@ -387,7 +327,6 @@ def _check_unified_write(arm: _Arm) -> list[str]:
     try:
         sim.set_actor_states(["robot"], arm.env_ids, target)
     except NotImplementedError as exc:
-        # The spawn pose is the current pose on IsaacGym (TELEPORT was refused), so a raise is a failure everywhere.
         return [f"set_actor_states(['robot']) to the spawn pose raised NotImplementedError: {exc}"]
     arm.settle_reads()
     fails: list[str] = []
@@ -470,7 +409,7 @@ _CHECKS: list[tuple[str, Callable[[_Arm], list[str]]]] = [
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cross-backend fixed-base robot assertion harness.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
     args = parser.parse_args()

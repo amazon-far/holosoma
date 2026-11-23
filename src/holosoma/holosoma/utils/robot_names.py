@@ -36,10 +36,7 @@ def validate_asset_names(
 def configure_robot_names(
     simulator: BaseSimulator, joint_names: list[str], body_names: list[str], *, root_body: str | None = None
 ) -> None:
-    """Establish canonical tensor order and explicit native mappings after loading an asset.
-
-    MuJoCo replaces body IDs with compiled world IDs after attaching the robot to the scene.
-    """
+    """Resolve canonical robot names, the physical root, and native joint/body indices after loading the asset."""
     robot = simulator.robot_config
     validate_asset_names(robot.dof_names, joint_names, kind="joint", require_all=True)
     validate_asset_names(robot.body_names, body_names, kind="body")

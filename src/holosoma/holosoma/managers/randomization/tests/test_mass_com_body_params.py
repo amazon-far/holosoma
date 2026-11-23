@@ -118,20 +118,6 @@ def test_base_body_must_resolve_to_one_body() -> None:
         L.randomize_base_com_startup(env, sampler=_sampler(), base_com_range=_ZERO_COM)
 
 
-def test_unknown_link_body_raises_from_resolver() -> None:
-    env, _ = _make()
-    with pytest.raises(ValueError, match="Unknown body name 'nope'"):
-        L.randomize_mass_startup(
-            env, sampler=_sampler(), enable_link_mass=True, link_bodies=["nope"], enable_base_mass=False
-        )
-
-
-def test_unknown_base_tag_raises_from_resolver() -> None:
-    env, _ = _make({"legs": ["link_a", "link_b"]})  # no "base" tag
-    with pytest.raises(ValueError, match="Unknown body tag '#base'"):
-        L.randomize_base_com_startup(env, sampler=_sampler(), base_com_range=_ZERO_COM)
-
-
 def test_base_body_not_resolved_when_base_mass_disabled() -> None:
     env, model = _make({"legs": ["link_a", "link_b"]})  # no "base" tag: must not be needed
     L.randomize_mass_startup(

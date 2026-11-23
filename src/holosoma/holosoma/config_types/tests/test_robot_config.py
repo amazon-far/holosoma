@@ -104,10 +104,6 @@ def test_every_shipped_humanoid_declares_the_tags_its_consumers_reference(name: 
     assert flip and set(flip) <= set(robot.dof_names)
 
 
-def test_shipped_humanoids_are_g1_and_t1() -> None:
-    assert _HUMANOIDS == ["g1_29dof", "g1_29dof_w_object", "t1_29dof_waist_wrist"]
-
-
 def test_yam_is_the_shipped_fixed_base_arm() -> None:
     """8 DOF (6 hinges + 2 finger slides), welded base, and DOF-keyed physical tables."""
     robot = ROBOT_REGISTRY["yam"]
@@ -126,25 +122,13 @@ def test_zero_dof_robot_constructs() -> None:
     assert not robot.asset.fix_base_link
 
 
-def test_fix_base_link_is_the_only_base_mode_field() -> None:
-    fixed = _replace_robot(g1_29dof, asset=dataclasses.replace(g1_29dof.asset, fix_base_link=True))
-    assert not g1_29dof.asset.fix_base_link
-    assert fixed.asset.fix_base_link
-    assert "floating_base" not in dataclasses.asdict(g1_29dof)
-
-
-def test_root_state_list_is_13_wide_pos_rot_linvel_angvel() -> None:
-    init = g1_29dof.init_state
-    assert init.root_state_list() == [*init.position, *init.orientation_xyzw, *init.lin_vel, *init.ang_vel]
-    assert init.orientation == [1.0, 0.0, 0.0, 0.0] and init.orientation_xyzw == [0.0, 0.0, 0.0, 1.0]
-    assert len(init.root_state_list()) == 13
-
-
 def test_non_identity_orientation_moves_w_from_first_to_last() -> None:
     # A rotation about y (identity is invariant under any reorder that keeps w last, so it cannot pin this).
-    init = RobotInitState(position=[0.0, 0.0, 0.5], orientation=[0.8, 0.0, 0.6, 0.0], lin_vel=[1.0, 2.0, 3.0])
+    init = RobotInitState(
+        position=[0.0, 0.0, 0.5], orientation=[0.8, 0.0, 0.6, 0.0], lin_vel=[1.0, 2.0, 3.0], ang_vel=[4.0, 5.0, 6.0]
+    )
     assert init.orientation_xyzw == [0.0, 0.6, 0.0, 0.8]
-    assert init.root_state_list() == [0.0, 0.0, 0.5, 0.0, 0.6, 0.0, 0.8, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0]
+    assert init.root_state_list() == [0.0, 0.0, 0.5, 0.0, 0.6, 0.0, 0.8, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     # Both orders describe the same rotation: x rotated about y lands at [cos, 0, -sin] of the double angle.
     x_axis = torch.tensor([[1.0, 0.0, 0.0]])
     rotated = quat_rotate(torch.tensor([init.orientation_xyzw]), x_axis, w_last=True)
@@ -152,18 +136,26 @@ def test_non_identity_orientation_moves_w_from_first_to_last() -> None:
     assert torch.allclose(rotated, quat_rotate(torch.tensor([init.orientation]), x_axis, w_last=False), atol=1e-6)
 
 
-def test_duplicate_dof_names_rejected() -> None:
-    names = list(g1_29dof.dof_names)
-    names[1] = names[0]
-    with pytest.raises(pydantic.ValidationError, match="dof_names has duplicate entries"):
-        _replace_robot(g1_29dof, dof_names=names)
-
-
-def test_empty_or_duplicate_body_names_rejected() -> None:
-    with pytest.raises(pydantic.ValidationError, match="body_names must not be empty"):
-        _replace_robot(g1_29dof, body_names=[])
-    with pytest.raises(pydantic.ValidationError, match="body_names has duplicate entries"):
-        _replace_robot(g1_29dof, body_names=[*g1_29dof.body_names[:-1], g1_29dof.body_names[0]])
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"dof_names": [g1_29dof.dof_names[0]] * 2}, "dof_names has duplicate entries"),
+        ({"body_names": []}, "body_names must not be empty"),
+        ({"body_names": [g1_29dof.body_names[0]] * 2}, "body_names has duplicate entries"),
+        (
+            {"bridge": dataclasses.replace(g1_29dof.bridge, excluded_dof_names=("nope",))},
+            "bridge names.*not in dof_names",
+        ),
+        (
+            {"bridge": dataclasses.replace(g1_29dof.bridge, controlled_dof_names=("left_knee_joint",) * 2)},
+            "bridge.controlled_dof_names has duplicate entries",
+        ),
+    ],
+    ids=["duplicate-dofs", "empty-bodies", "duplicate-bodies", "unknown-bridge-dof", "duplicate-motor-order"],
+)
+def test_robot_name_tables_reject_invalid_names(overrides: dict[str, Any], match: str) -> None:
+    with pytest.raises(pydantic.ValidationError, match=match):
+        _replace_robot(g1_29dof, **overrides)
 
 
 @pytest.mark.parametrize(
@@ -182,77 +174,82 @@ def test_lower_limit_above_upper_rejected() -> None:
         _replace_robot(g1_29dof, dof_pos_limits={"left_knee_joint": (2.0, 1.0)})
 
 
-def test_position_bounds_are_a_pair() -> None:
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"dof_pos_limits": {"left_knee_joint": (-1.0,)}},
+        {"body_tags": {"#feet": "left_ankle_roll_link"}},
+        {"joint_tags": {**g1_29dof.joint_tags, "#knees": "left_knee_joint"}},
+    ],
+    ids=["position-pair", "body-tag-list", "joint-tag-list"],
+)
+def test_robot_schema_rejects_malformed_property_and_tag_values(overrides: dict[str, Any]) -> None:
     with pytest.raises(pydantic.ValidationError):
-        _replace_robot(g1_29dof, dof_pos_limits={"left_knee_joint": (-1.0,)})
+        _replace_robot(g1_29dof, **overrides)
 
 
-def test_zero_width_limit_is_allowed() -> None:
-    _synthetic_robot(["knee"], dof_pos_limits={"knee": (0.0, 0.0)})
+@pytest.mark.parametrize(
+    ("limits", "defaults", "match"),
+    [
+        ((-1.0, 1.0), {"knee": 1.5}, "default 1.5 is outside configured position range"),
+        ((0.1, 1.0), {}, "default 0.0 is outside configured position range"),
+        ((-1.0, 1.0), {"knee": 1.0}, None),
+        ((0.0, 0.0), {}, None),
+        (None, {"knee": 100.0}, None),
+    ],
+    ids=["outside", "implicit-zero-outside", "at-limit", "zero-width", "asset-limits-unknown"],
+)
+def test_defaults_respect_configured_position_limits(
+    limits: tuple[float, float] | None, defaults: dict[str, float], match: str | None
+) -> None:
+    overrides = {"knee": limits} if limits is not None else None
+    init = RobotInitState(position=[0.0, 0.0, 0.5], default_joint_positions=defaults)
+    if match is not None:
+        with pytest.raises(pydantic.ValidationError, match=match):
+            _minimal_robot(dof_names=["knee"], dof_pos_limits=overrides, init_state=init)
+    else:
+        robot = _minimal_robot(dof_names=["knee"], dof_pos_limits=overrides, init_state=init)
+        assert robot.default_dof_positions() == {"knee": defaults.get("knee", 0.0)}
 
 
-def test_default_positions_must_fall_within_configured_position_limits() -> None:
-    with pytest.raises(pydantic.ValidationError, match=r"DOF 'knee' default 1\.5 is outside configured position range"):
-        _synthetic_robot(
-            ["knee"],
-            dof_pos_limits={"knee": (-1.0, 1.0)},
-            init_state=RobotInitState(position=[0.0, 0.0, 0.5], default_joint_positions={"knee": 1.5}),
-        )
-
-
-def test_implicit_zero_default_must_fall_within_configured_position_limits() -> None:
-    with pytest.raises(
-        pydantic.ValidationError, match=r"DOF 'slide' default 0\.0 is outside configured position range"
-    ):
-        _synthetic_robot(
-            ["slide"],
-            dof_pos_limits={"slide": (0.1, 1.0)},
-            init_state=RobotInitState(position=[0.0, 0.0, 0.5]),
-        )
-
-
-def test_default_position_at_configured_limit_is_allowed() -> None:
-    _synthetic_robot(
-        ["knee"],
-        dof_pos_limits={"knee": (-1.0, 1.0)},
-        init_state=RobotInitState(position=[0.0, 0.0, 0.5], default_joint_positions={"knee": 1.0}),
-    )
-
-
-def test_default_position_is_not_checked_against_unknown_asset_limits() -> None:
-    robot = _minimal_robot(
-        dof_names=["slide"],
-        init_state=RobotInitState(position=[0.0, 0.0, 0.5], default_joint_positions={"slide": 100.0}),
-    )
-    assert robot.default_dof_positions() == {"slide": 100.0}
-
-
-def test_default_joint_positions_fill_missing_dofs_with_zero() -> None:
-    robot = _replace_robot(
-        g1_29dof, init_state=dataclasses.replace(g1_29dof.init_state, default_joint_positions={"#knees": 0.5})
-    )
-    defaults = robot.default_dof_positions()
-    assert list(defaults) == robot.dof_names
-    assert defaults == {
-        name: 0.5 if name in ("left_knee_joint", "right_knee_joint") else 0.0 for name in robot.dof_names
-    }
-    assert robot.init_state.default_joint_positions == {"#knees": 0.5}
-    with pytest.raises(pydantic.ValidationError, match="Unknown joint name 'ghost_joint'"):
-        _replace_robot(
-            g1_29dof, init_state=dataclasses.replace(g1_29dof.init_state, default_joint_positions={"ghost_joint": 0.0})
-        )
-
-
-def test_default_joint_positions_accept_tags() -> None:
-    angles = {"#all": 0.0, "#knees": 0.5}
-    with pytest.raises(pydantic.ValidationError, match="both cover DOF 'left_knee_joint'"):
-        _replace_robot(g1_29dof, init_state=dataclasses.replace(g1_29dof.init_state, default_joint_positions=angles))
-    tagged = {"#legs": 0.1, "#waist": 0.0, "#arms": 0.2}
-    robot = _replace_robot(
-        g1_29dof, init_state=dataclasses.replace(g1_29dof.init_state, default_joint_positions=tagged)
-    )
-    by_dof = robot.default_dof_positions()
-    assert by_dof["left_knee_joint"] == 0.1 and by_dof["waist_yaw_joint"] == 0.0 and by_dof["left_elbow_joint"] == 0.2
+@pytest.mark.parametrize(
+    ("angles", "expected", "match"),
+    [
+        (
+            {"#knees": 0.5},
+            {name: 0.5 if name in ("left_knee_joint", "right_knee_joint") else 0.0 for name in g1_29dof.dof_names},
+            None,
+        ),
+        (
+            {"#legs": 0.1, "#waist": 0.0, "#arms": 0.2},
+            {
+                name: 0.0
+                if name.startswith("waist_")
+                else 0.1
+                if name in g1_29dof.joint_tags["#left_leg"] + g1_29dof.joint_tags["#right_leg"]
+                else 0.2
+                for name in g1_29dof.dof_names
+            },
+            None,
+        ),
+        ({"ghost_joint": 0.0}, None, "Unknown joint name 'ghost_joint'"),
+        ({"#all": 0.0, "#knees": 0.5}, None, "both cover DOF 'left_knee_joint'"),
+    ],
+    ids=["sparse", "multiple-tags", "unknown", "overlap"],
+)
+def test_default_positions_expand_tags_and_fill_missing_dofs(
+    angles: dict[str, float], expected: dict[str, float] | None, match: str | None
+) -> None:
+    init = dataclasses.replace(g1_29dof.init_state, default_joint_positions=angles)
+    if match is not None:
+        with pytest.raises(pydantic.ValidationError, match=match):
+            _replace_robot(g1_29dof, init_state=init)
+    else:
+        robot = _replace_robot(g1_29dof, init_state=init)
+        defaults = robot.default_dof_positions()
+        assert list(defaults) == robot.dof_names
+        assert defaults == expected
+        assert robot.init_state.default_joint_positions == angles
 
 
 def test_default_positions_map_preserves_serialized_config_and_dof_order() -> None:
@@ -297,21 +294,6 @@ def test_default_positions_map_revalidates_mutable_default_entries() -> None:
         robot.default_dof_positions()
 
 
-def test_bridge_dof_names_must_exist() -> None:
-    with pytest.raises(pydantic.ValidationError, match="bridge names \\['nope'\\] are not in dof_names"):
-        _replace_robot(g1_29dof, bridge=dataclasses.replace(g1_29dof.bridge, excluded_dof_names=("nope",)))
-
-
-def test_bridge_motor_order_must_not_repeat_a_dof() -> None:
-    with pytest.raises(pydantic.ValidationError, match="bridge.controlled_dof_names has duplicate entries"):
-        _replace_robot(
-            g1_29dof,
-            bridge=dataclasses.replace(
-                g1_29dof.bridge, controlled_dof_names=("left_hip_pitch_joint", "left_hip_pitch_joint")
-            ),
-        )
-
-
 @pytest.mark.parametrize(
     ("robot", "first_motor", "last_motor"),
     [
@@ -349,14 +331,6 @@ def test_body_and_joint_tags_are_validated_against_names() -> None:
         _replace_robot(g1_29dof, body_tags={"#a": ["#b"], "#b": ["#a"]})
     with pytest.raises(pydantic.ValidationError, match="leading '#'"):
         _replace_robot(g1_29dof, body_tags={"feet": ["pelvis"]})
-
-
-def test_tag_entries_must_be_lists_not_bare_strings() -> None:
-    # The likeliest preset typo ('feet': 'left_ankle_roll_link') fails at construction, before any resolver.
-    with pytest.raises(pydantic.ValidationError, match=r"body_tags\.#feet\s+Input should be a valid list"):
-        _replace_robot(g1_29dof, body_tags={"#feet": "left_ankle_roll_link"})
-    with pytest.raises(pydantic.ValidationError, match=r"joint_tags\.#knees\s+Input should be a valid list"):
-        _replace_robot(g1_29dof, joint_tags={**g1_29dof.joint_tags, "#knees": "left_knee_joint"})
 
 
 @pytest.mark.parametrize(

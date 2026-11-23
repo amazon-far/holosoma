@@ -315,7 +315,7 @@ class JointPositionActionTerm(ActionTermBase):
 
     def _configure_pd_gains(self, env: Any) -> None:
         robot_config = env.robot_config
-        # Per-DOF gains from the exact-name / #joint_tag keys; coverage is validated at config construction.
+        # Resolve exact-name or tag assignments and require coverage of the controlled DOFs.
         stiffness, damping = self.controller.resolve_gains(robot_config)
         p_by_name = dict(zip(robot_config.dof_names, stiffness, strict=False))
         d_by_name = dict(zip(robot_config.dof_names, damping, strict=False))

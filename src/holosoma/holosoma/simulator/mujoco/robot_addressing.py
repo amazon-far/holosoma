@@ -1,10 +1,4 @@
-"""Resolve MuJoCo robot names and state addresses, validate articulations, and apply robot properties.
-
-Robot DOFs must be named hinge or slide joints with a selected stateless, unit-gain, unit-gear torque
-motor. All authored actuators are preserved; additional drives can contribute effort to the same joint.
-Exact robot names define the public array order; extra asset bodies are allowed.
-Validation failures raise ``ValueError``. The ``add_*`` and ``apply_*`` functions mutate their inputs.
-"""
+"""Resolve MuJoCo articulation names, state addresses, motors, and configured physical properties."""
 
 from __future__ import annotations
 
@@ -375,14 +369,10 @@ def apply_dof_properties_from_config(model: mujoco.MjModel, meta: ActorSpecMeta,
 def read_dof_limits(
     model: mujoco.MjModel, meta: ActorSpecMeta, robot_config: RobotConfig
 ) -> tuple[list[list[float]], list[float], list[float]]:
-    """Per-DOF ``([lower, upper] ...)``, velocity and effort limits as the compiled model enforces them.
+    """Return canonical position, velocity, and effective motor/joint effort limits.
 
-    Position from ``jnt_range`` (``-inf``/``inf`` for an unlimited joint); effort is the tightest active clamp
-    among the motor's control/force ranges after transmission and the joint's actuator-force range
-    (``inf`` when none is limited); velocity is the config value or ``inf`` (MuJoCo has no joint velocity limit).
-    Other drives' individual limits are excluded. They can add effort beyond a motor-only limit;
-    a joint actuator-force clamp, when enabled, bounds their combined contribution.
-    Run after :func:`apply_dof_properties_from_config`.
+    Unbounded limits are infinite. MuJoCo reports configured velocity limits without enforcing them.
+    Other drives' individual limits are excluded.
     """
     overrides = resolve_dof_properties(robot_config)
     dof_names = robot_config.dof_names
@@ -527,56 +517,3 @@ def resolve_actor_addressing(
         logger.info(f"Actor '{name}' addressing resolved (static={name in static_names}).")
 
     return object_addrs, static_object_body_ids
-
-
-def resolve_dof_actuator_ids(
-    model: mujoco.MjModel, dof_names: Sequence[str], clean_to_prefixed: Mapping[str, str]
-) -> list[int]:
-    """Return the id of the actuator driving each DOF joint, in ``dof_names`` order.
-
-    Actuators are matched by their transmission target joint, not by name. Returns an empty list
-    when the model has no actuators.
-
-    Raises
-    ------
-    ValueError
-        If the model has actuators but a DOF joint is not driven by exactly one of them.
-    """
-    if model.nu == 0:
-        return []
-    joint_to_actuators: dict[int, list[int]] = {}
-    for actuator_id in range(model.nu):
-        if model.actuator_trntype[actuator_id] == mujoco.mjtTrn.mjTRN_JOINT:
-            joint_to_actuators.setdefault(int(model.actuator_trnid[actuator_id, 0]), []).append(actuator_id)
-    actuator_ids: list[int] = []
-    for dof_name in dof_names:
-        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, clean_to_prefixed.get(dof_name, dof_name))
-        actuators = joint_to_actuators.get(joint_id, [])
-        if len(actuators) != 1:
-            raise ValueError(f"DOF joint '{dof_name}' must be driven by exactly one actuator, found {len(actuators)}")
-        actuator_ids.append(actuators[0])
-    return actuator_ids
-
-
-def check_dof_names(config_dof_names: Sequence[str], model_dof_names: Sequence[str]) -> None:
-    """Check that the robot config names exactly the model's DOF joints.
-
-    The order may differ: holosoma presents DOFs in ``config_dof_names`` order and maps to the
-    model's order by name.
-
-    Raises
-    ------
-    ValueError
-        If either list has a joint the other lacks, or ``config_dof_names`` has duplicates.
-    """
-    config_set, model_set = set(config_dof_names), set(model_dof_names)
-    if len(config_set) != len(config_dof_names):
-        raise ValueError(f"robot_config.dof_names has duplicate entries: {list(config_dof_names)}")
-    if config_set != model_set:
-        raise ValueError(
-            "robot_config.dof_names does not match the model's DOF joints. "
-            f"Missing from the model: {sorted(config_set - model_set)}. "
-            f"Missing from the config: {sorted(model_set - config_set)}."
-        )
-    if list(config_dof_names) != list(model_dof_names):
-        logger.info("Model joint order differs from robot_config.dof_names; DOFs are mapped by name.")

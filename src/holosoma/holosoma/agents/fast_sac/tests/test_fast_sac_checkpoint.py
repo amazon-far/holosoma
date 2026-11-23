@@ -1,9 +1,4 @@
-"""FastSAC checkpoints hold only primitives and tensors, so a ``weights_only`` ``torch.load`` reads them.
-
-``eval_utils._load_config_from_checkpoint`` uses torch's default loader, which on torch >= 2.6 refuses pickled
-Python objects; the ``FastSACConfig`` written by ``save_params`` nests ``JointSymmetryConfig``, which a shallow
-``vars()`` used to leave as an object (CI IsaacSim e2e eval failed on exactly that).
-"""
+"""FastSAC checkpoints contain primitives and tensors that torch.load accepts with weights_only=True."""
 
 from __future__ import annotations
 

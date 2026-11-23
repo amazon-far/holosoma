@@ -1,4 +1,4 @@
-"""BaseTask.resolve_* : tag-aware body/joint name and index resolution with per-spec caches."""
+"""BaseTask creates name resolvers before managers and rejects a DOF count mismatch."""
 
 from __future__ import annotations
 
@@ -9,8 +9,6 @@ import pytest
 
 from holosoma.envs.base_task import base_task as base_task_module
 from holosoma.envs.base_task.base_task import BaseTask
-from holosoma.utils.robot_name_resolver import RobotNameResolver
-from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
 
@@ -38,140 +36,6 @@ class _Simulator:
     def find_rigid_body_indice(self, body_name: str) -> int:
         self.lookups.append(body_name)
         return BODY_NAMES.index(body_name)
-
-
-def _make_task(
-    body_tags: dict[str, list[str]] | None = None, joint_tags: dict[str, list[str]] | None = None
-) -> tuple[BaseTask, _Simulator]:
-    # Built without __init__ (no simulator, no managers): the resolvers must not depend on setup state.
-    task = BaseTask.__new__(BaseTask)
-    simulator = _Simulator()
-    task.robot_config = SimpleNamespace(  # type: ignore[assignment]
-        body_names=BODY_NAMES,
-        dof_names=DOF_NAMES,
-        body_tags=BODY_TAGS if body_tags is None else body_tags,
-        joint_tags=JOINT_TAGS if joint_tags is None else joint_tags,
-    )
-    task.body_names = list(BODY_NAMES)
-    task.dof_names = list(DOF_NAMES)
-    task.device = "cpu"
-    task.simulator = simulator  # type: ignore[assignment]
-    task.robot_names = RobotNameResolver(task.robot_config, task.device)
-    return task, simulator
-
-
-def test_resolve_body_indices_use_canonical_observation_order() -> None:
-    task, simulator = _make_task()
-
-    idx = task.robot_names.resolve_body_indices(["pelvis", "#feet"])
-
-    assert idx.dtype == torch.long
-    assert idx.device.type == "cpu"
-    assert idx.tolist() == [BODY_NAMES.index(n) for n in ("pelvis", "left_foot", "right_foot")]
-    assert simulator.lookups == []
-
-
-def test_resolve_body_indices_cache_hit_returns_same_tensor() -> None:
-    task, simulator = _make_task()
-
-    first = task.robot_names.resolve_body_indices(["#feet"])
-    second = task.robot_names.resolve_body_indices(("#feet",))
-
-    assert second is first
-    assert simulator.lookups == []
-
-
-def test_resolve_body_names_composes_tags_and_dedupes() -> None:
-    task, _ = _make_task()
-
-    names = task.robot_names.resolve_body_names(["#legs", "left_foot", "pelvis"])
-
-    assert names == ["left_hip_link", "right_hip_link", "left_foot", "right_foot", "pelvis"]
-
-
-def test_resolve_body_names_returns_a_copy() -> None:
-    task, _ = _make_task()
-
-    task.robot_names.resolve_body_names(["#feet"]).append("torso")
-
-    assert task.robot_names.resolve_body_names(["#feet"]) == ["left_foot", "right_foot"]
-
-
-def test_unknown_body_tag_lists_defined_tags() -> None:
-    task, _ = _make_task()
-
-    with pytest.raises(
-        ValueError, match=r"Unknown body tag '#wings'.*defined body tags: \['#feet', '#hips', '#legs'\]"
-    ):
-        task.robot_names.resolve_body_indices(["#wings"])
-
-
-def test_unknown_body_name_lists_known_bodies() -> None:
-    task, _ = _make_task()
-
-    with pytest.raises(ValueError, match=r"Unknown body name 'tail'.*known bodies: \['pelvis'"):
-        task.robot_names.resolve_body_names(["tail"])
-
-
-def test_resolve_joint_indices_are_positions_in_dof_names() -> None:
-    task, simulator = _make_task()
-
-    idx = task.robot_names.resolve_joint_indices(["#legs", "waist"])
-
-    assert idx.dtype == torch.long
-    assert idx.tolist() == [0, 1, 2, 3, 4]
-    assert task.robot_names.resolve_joint_indices(["#legs", "waist"]) is idx
-    assert simulator.lookups == []
-
-
-def test_unknown_joint_tag_lists_defined_tags() -> None:
-    task, _ = _make_task()
-
-    with pytest.raises(
-        ValueError, match=r"Unknown joint tag '#arms'.*defined joint tags: \['#left_leg', '#legs', '#right_leg'\]"
-    ):
-        task.robot_names.resolve_joint_names(["#arms"])
-
-
-def test_body_and_joint_caches_do_not_collide() -> None:
-    task, _ = _make_task(body_tags={"#left": ["left_foot"]}, joint_tags={"#left": ["left_hip", "left_knee"]})
-
-    assert task.robot_names.resolve_body_indices(["#left"]).tolist() == [BODY_NAMES.index("left_foot")]
-    assert task.robot_names.resolve_joint_indices(["#left"]).tolist() == [0, 1]
-
-
-def test_empty_spec_gives_empty_long_tensor() -> None:
-    task, _ = _make_task()
-
-    assert task.robot_names.resolve_body_indices([]).shape == (0,)
-    assert task.robot_names.resolve_body_indices([]).dtype == torch.long
-    assert task.robot_names.resolve_joint_indices([]).shape == (0,)
-
-
-@pytest.mark.parametrize("resolver", ["resolve_body_names", "resolve_body_indices"])
-def test_bare_string_body_spec_raises_type_error(resolver: str) -> None:
-    """A term param ``bodies="pelvis"`` fails at the resolver instead of being iterated character by character."""
-    task, simulator = _make_task()
-
-    with pytest.raises(
-        TypeError, match=r"body spec must be a list of names, got the string 'pelvis'; wrap it in a list: \['pelvis'\]"
-    ):
-        getattr(task.robot_names, resolver)("pelvis")
-
-    assert simulator.lookups == []
-    assert task.robot_names._cache == {}  # nothing is cached under the character-tuple key
-
-
-@pytest.mark.parametrize("resolver", ["resolve_joint_names", "resolve_joint_indices"])
-def test_bare_string_joint_spec_raises_type_error(resolver: str) -> None:
-    task, _ = _make_task()
-
-    with pytest.raises(
-        TypeError, match=r"joint spec must be a list of names, got the string 'waist'; wrap it in a list"
-    ):
-        getattr(task.robot_names, resolver)("waist")
-
-    assert task.robot_names._cache == {}
 
 
 # --------------------------------------------------------------------------- the real constructor
@@ -262,8 +126,7 @@ def test_resolvers_are_usable_by_the_first_manager_through_the_real_constructor(
 ) -> None:
     """``_initialize_base_task`` must create the resolve caches before any manager is built.
 
-    The fixtures above bypass ``__init__``; this drives the real constructor with a stub simulator and
-    resolves from inside the first manager's constructor, then stops.
+    This test uses the real constructor with a stub simulator and resolves from the first manager.
     """
 
     class _StopAfterResolveError(Exception):
@@ -285,7 +148,7 @@ def test_resolvers_are_usable_by_the_first_manager_through_the_real_constructor(
     assert resolved == {
         "bodies": [BODY_NAMES.index(n) for n in ("pelvis", "left_foot", "right_foot")],
         "joints": [0, 1, 2, 3],
-        "dim_actions": len(DOF_NAMES),  # one action per simulator DOF (replaced the actions_dim field)
+        "dim_actions": len(DOF_NAMES),  # one action per simulator DOF
     }
 
 

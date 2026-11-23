@@ -112,27 +112,20 @@ def test_init_with_env_proxy_does_not_touch_robot_config() -> None:
     assert term.env_origins.shape == (NUM_ENVS, 3)
 
 
-def test_auto_off_when_robot_declares_no_feet_height_tag(info_logs: list[str]) -> None:
-    env = _StubEnv(body_tags={"#base": ["baseLink"]})
-
+@pytest.mark.parametrize(
+    "tags",
+    [{"#base": ["baseLink"]}, {"#base": ["baseLink"], "#feet_heigth": ["left_foot_contact_point"]}],
+    ids=["absent", "misspelled"],
+)
+def test_auto_off_when_robot_declares_no_feet_height_tag(tags: dict[str, list[str]], info_logs: list[str]) -> None:
+    env = _StubEnv(body_tags=tags)
     term = _setup(env, _cfg())
-
     assert env.resolve_calls == []
     assert term._compute_feet_heights is False
     assert term.feet_heights.shape == (NUM_ENVS, 0)
     assert term._feet_height_indices.shape == (0,)
     assert term._feet_height_indices.dtype == torch.long
-    assert "feet height raycasts off: no '#feet_height' body tag; body tags: ['#base']" in info_logs
-
-
-def test_auto_off_on_a_misspelled_tag_names_the_defined_tags(info_logs: list[str]) -> None:
-    """A typo cannot be told from an absent tag, so the log lists what the robot does declare."""
-    env = _StubEnv(body_tags={"#base": ["baseLink"], "#feet_heigth": ["left_foot_contact_point"]})
-
-    term = _setup(env, _cfg())
-
-    assert term._compute_feet_heights is False
-    assert "feet height raycasts off: no '#feet_height' body tag; body tags: ['#base', '#feet_heigth']" in info_logs
+    assert f"feet height raycasts off: no '#feet_height' body tag; body tags: {sorted(tags)}" in info_logs
 
 
 def test_auto_on_when_robot_declares_feet_height_tag(info_logs: list[str]) -> None:

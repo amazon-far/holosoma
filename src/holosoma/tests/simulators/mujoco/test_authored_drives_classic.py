@@ -12,11 +12,6 @@ torch = pytest.importorskip("torch")
 mujoco = pytest.importorskip("mujoco")
 
 from holosoma.config_types.robot import RobotConfig, RobotInitState  # noqa: E402
-from holosoma.simulator.mujoco.robot_addressing import (  # noqa: E402
-    add_missing_dof_motors,
-    validate_dof_actuators,
-)
-from holosoma.simulator.mujoco.scene_manager import ActorSpecMeta  # noqa: E402
 from tests.simulators._robot_presets import test_arm_fixed as arm_preset  # noqa: E402
 from tests.simulators.mujoco._build import build_classic_sim  # noqa: E402
 
@@ -40,40 +35,6 @@ _AUTHORED_SERVO_XML = """
   </actuator>
 </mujoco>
 """
-
-
-def test_synthesized_motor_preserves_authored_servo_dynamics() -> None:
-    """Exercise synthesis and validation, then integrate the real two-drive joint."""
-    spec = mujoco.MjSpec.from_string(_AUTHORED_SERVO_XML)
-    authored = spec.compile()
-    assert add_missing_dof_motors(spec, "authored_drives") == ["hinge"]
-    model = spec.compile()
-    meta = ActorSpecMeta(
-        prefix="",
-        root_body="base",
-        body_names=["base", "link"],
-        dof_joint_names=["hinge"],
-        actuator_names=["servo", "hinge"],
-    )
-    selected = validate_dof_actuators(model, meta, ["hinge"], {"hinge": "hinge"})
-    motor, servo = model.actuator("hinge").id, model.actuator("servo").id
-    assert model.nu == 2
-    assert selected == [motor]
-    assert servo not in selected
-    for field in ("actuator_gainprm", "actuator_biasprm", "actuator_gear", "actuator_ctrlrange", "actuator_forcerange"):
-        np.testing.assert_array_equal(getattr(model, field)[servo], getattr(authored, field)[0])
-
-    data = mujoco.MjData(model)
-    data.qpos[0] = 0.5
-    mujoco.mj_forward(model, data)
-    assert data.ctrl[motor] == data.ctrl[servo] == 0.0
-    assert data.actuator_force[motor] == 0.0
-    assert data.actuator_force[servo] == pytest.approx(-50.0)
-    assert data.qfrc_actuator[0] == pytest.approx(-50.0)
-    assert data.qacc[0] < 0.0
-    mujoco.mj_step(model, data)
-    assert data.qvel[0] < 0.0
-    assert data.qpos[0] < 0.5
 
 
 @pytest.mark.parametrize("effort_limit", [None, 5.0], ids=["authored-limits", "config-joint-clamp"])

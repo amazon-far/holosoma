@@ -19,8 +19,7 @@ from holosoma.config_types.command import NoiseToInitialPoseConfig
 from holosoma.config_types.robot import RobotConfig
 from holosoma.utils.robot_properties import dof_limits_from_sequences, dof_values_from_sequence
 
-# Robot fields that no longer exist. Zero-consumer fields are simply dropped; the rest are mapped
-# below before being dropped.
+# Retired robot fields are removed after any supported values are migrated.
 _DELETED_ROBOT_KEYS = frozenset(
     {
         "num_bodies",
@@ -29,7 +28,6 @@ _DELETED_ROBOT_KEYS = frozenset(
         "actions_dim",
         "policy_obs_dim",
         "critic_obs_dim",
-        "contact_pairs_multiplier",
         "key_bodies",
         "num_feet",
         "foot_body_name",
@@ -58,12 +56,10 @@ _DELETED_ROBOT_KEYS = frozenset(
         "right_arm_dof_names",
         "symmetry_joint_names",
         "flip_sign_joint_names",
-        "apply_dof_armature_in_isaacgym",
         "knee_joint_min_threshold",
         "lidar_height_offset",
         "soft_dof_pos_limit",
         "termination_close_to_dof_pos_limit",
-        # Removed 2026-07-09 (8254b123) and silently ignored since.
         "object",
     }
 )
@@ -286,7 +282,6 @@ def _migrate_motion_root(out: dict[str, Any], robot: Mapping[str, Any], *, legac
             continue
         simulator = _get_path(out, "simulator") or {}
         if legacy_body_schema and simulator.get("_target_") not in {
-            "holosoma.simulator.isaacgym.isaacgym.IsaacGym",
             "holosoma.simulator.isaacsim.isaacsim.IsaacSim",
         }:
             raise ValueError(
@@ -339,12 +334,8 @@ def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
     Raises
     ------
     ValueError
-        ``apply_dof_armature_in_isaacgym: false`` (IsaacGym now always applies ``dof_armature``;
-        there is no equivalent); a ``contact_forces_exceeded`` term with a non-default
-        ``contact_indices_attr`` (it pointed at an env attribute that no longer exists); or a ``P``/``V``
-        control dump whose substring gain keys leave a DOF without gains (the old action term raised too).
-        WBT dumps without ``root_body`` also require an explicit selection when the old runtime body
-        order cannot be recovered from the config (pre-refactor MuJoCo or unknown simulator).
+        If a contact term references a removed environment attribute, controller gains lack DOF
+        coverage, or the saved simulator does not establish the identity of motion column zero.
     """
     out = copy.deepcopy(dict(raw))
     _migrate_saved_simulator(out)
@@ -363,9 +354,8 @@ def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
     substring_gain_keys = _substring_gain_keys(control, dof_names) if dof_names else []
     legacy_robot = set(robot) & _DELETED_ROBOT_KEYS
     gain_keys = set(control.get("stiffness") or {}) | set(control.get("damping") or {})
-    # Complete DOF names also overlapped under the old substring rule. The old spawn/morphology
-    # fields identify that schema; default_joint_angles alone also occurs in tag-aware dumps.
-    # 'object' was already obsolete before this refactor and is not evidence of old gain semantics.
+    # Legacy spawn and morphology fields identify substring gain matching, including overlapping exact names.
+    # Neither object nor default_joint_angles alone identifies that schema.
     legacy_gain_schema = bool(legacy_robot - {"object"}) or "pos" in init_state or "rot" in init_state
     legacy_gains = legacy_gain_schema and not any(str(key).startswith("#") for key in gain_keys)
     _migrate_motion_root(out, robot, legacy_body_schema=legacy_gain_schema)
@@ -390,9 +380,7 @@ def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
                 "robot.init_state has conflicting default_joint_angles and default_joint_positions; "
                 "keep only the intended default_joint_positions map."
             )
-        # The old exact-name map was indexed only by dof_names, so surplus entries were unused.
-        # Require old schema evidence and no tag-aware signals; intermediate dumps also used the
-        # default_joint_angles spelling. Explicit current maps retain strict validation.
+        # Legacy exact-name defaults cover active DOFs only. Current maps retain strict validation.
         if (
             legacy_gains
             and dof_names
@@ -508,7 +496,7 @@ def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
             if func.endswith(":randomize_mass_startup"):
                 params = term.setdefault("params", {})
                 if "link_bodies" not in params:
-                    # The old IsaacGym path skipped unknown link names with a warning; the resolver now raises.
+                    # Discard stale names from the legacy link selection.
                     link_names = _names(robot, "randomize_link_body_names")
                     stale_links = [n for n in link_names if body_names and n not in body_names]
                     if stale_links:
@@ -541,24 +529,9 @@ def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
                 "name or add the tag."
             )
 
-    # Relocated knobs.
-    if "contact_pairs_multiplier" in robot:
-        physx = _get_path(out, "simulator.config.sim.physx")
-        if physx is None:
-            changes.append("contact_pairs_multiplier dropped: no simulator.config.sim.physx dict to relocate it into")
-        elif "max_gpu_contact_pairs" not in physx:
-            physx["max_gpu_contact_pairs"] = int(robot["contact_pairs_multiplier"]) * 1024 * 1024
-            changes.append("contact_pairs_multiplier -> simulator.config.sim.physx.max_gpu_contact_pairs")
-    if robot.get("apply_dof_armature_in_isaacgym") is False:
-        raise ValueError(
-            "apply_dof_armature_in_isaacgym=false cannot be migrated: every backend now applies "
-            "dof_armature. Set dof_armature=None to retain asset values instead."
-        )
     soft = robot.get("soft_dof_pos_limit")
     if soft is not None and abs(float(soft) - _DEFAULT_SOFT_DOF_POS_LIMIT) > 1e-9:
-        # The WBT initial-pose clamp is the consumer that moved; carry the value into every MotionCommand term
-        # (an explicit term value wins). The limits_dof_pos reward terms keep their own param over hard limits
-        # on every backend, so IsaacGym no longer contracts dof_pos_limits twice.
+        # Carry the initial-pose clamp into each motion term without replacing an explicit term value.
         carried = 0
         for term in _iter_terms(out.get("command"), ("setup_terms", "reset_terms", "step_terms")):
             # Preserve legacy extension matching; the builtin dotted spelling is also recognized.

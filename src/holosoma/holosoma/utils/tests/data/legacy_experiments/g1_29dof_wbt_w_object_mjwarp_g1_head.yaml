@@ -9,22 +9,22 @@ algo:
   _recursive_: false
   _target_: holosoma.agents.ppo.ppo.PPO
   config:
-    actor_learning_rate: 1.0e-05
+    actor_learning_rate: 0.001
     actor_optimizer:
       _target_: torch.optim.AdamW
-      weight_decay: 0.001
+      weight_decay: 0.0
     clip_param: 0.2
-    critic_learning_rate: 1.0e-05
+    critic_learning_rate: 0.001
     critic_optimizer:
       _target_: torch.optim.AdamW
-      weight_decay: 0.001
+      weight_decay: 0.0
     desired_kl: 0.01
-    empirical_normalization: false
-    entropy_coef: 0.01
+    empirical_normalization: true
+    entropy_coef: 0.005
     eval_callbacks: null
     gamma: 0.99
     init_at_random_ep_len: true
-    init_noise_std: 0.8
+    init_noise_std: 1.0
     lam: 0.95
     load_optimizer: true
     max_actor_learning_rate: null
@@ -89,55 +89,79 @@ algo:
         output_dim:
         - 1
         type: MLP
-    num_learning_epochs: 8
-    num_learning_iterations: 25000
+    num_learning_epochs: 5
+    num_learning_iterations: 30000
     num_mini_batches: 4
     num_steps_per_env: 24
-    save_interval: 100
+    save_interval: 4000
     schedule: adaptive
     symmetry_actor_coef: 1.0
     symmetry_critic_coef: 0.0
-    use_symmetry: true
+    use_symmetry: false
     value_loss_coef: 1.0
 command:
-  params:
-    locomotion_command_resampling_time: 10.0
+  params: {}
   reset_terms:
-    locomotion_command:
-      func: holosoma.managers.command.terms.locomotion:LocomotionCommand
-      params: {}
-    locomotion_gait:
-      func: holosoma.managers.command.terms.locomotion:LocomotionGait
+    motion_command:
+      func: holosoma.managers.command.terms.wbt:MotionCommand
       params: {}
   setup_terms:
-    locomotion_command:
-      func: holosoma.managers.command.terms.locomotion:LocomotionCommand
+    motion_command:
+      func: holosoma.managers.command.terms.wbt:MotionCommand
       params:
-        command_ranges:
-          ang_vel_yaw:
-          - -1.0
-          - 1.0
-          heading:
-          - -3.14
-          - 3.14
-          lin_vel_x:
-          - -1.0
-          - 1.0
-          lin_vel_y:
-          - -1.0
-          - 1.0
-        stand_prob: 0.2
-    locomotion_gait:
-      func: holosoma.managers.command.terms.locomotion:LocomotionGait
-      params:
-        gait_period: 1.0
-        gait_period_randomization_width: 0.2
+        motion_config:
+          body_name_ref:
+          - torso_link
+          body_names_to_track:
+          - pelvis
+          - left_hip_roll_link
+          - left_knee_link
+          - left_ankle_roll_link
+          - right_hip_roll_link
+          - right_knee_link
+          - right_ankle_roll_link
+          - torso_link
+          - left_shoulder_roll_link
+          - left_elbow_link
+          - left_wrist_yaw_link
+          - right_shoulder_roll_link
+          - right_elbow_link
+          - right_wrist_yaw_link
+          default_pose_append_duration_s: 2.0
+          default_pose_prepend_duration_s: 2.0
+          enable_default_pose_append: false
+          enable_default_pose_prepend: false
+          freeze_at_timestep_zero_prob: 0.0
+          motion_dir: ''
+          motion_file: holosoma/data/motions/g1_29dof/whole_body_tracking/sub3_largebox_003_mj_w_obj.npz
+          noise_to_initial_pose:
+            dof_pos: 0.1
+            object_pos:
+            - 0.05
+            - 0.05
+            - 0.0
+            overall_noise_scale: 1.0
+            root_ang_vel:
+            - 0.52
+            - 0.52
+            - 0.78
+            root_lin_vel:
+            - 0.5
+            - 0.5
+            - 0.2
+            root_pos:
+            - 0.05
+            - 0.05
+            - 0.01
+            root_rot:
+            - 0.1
+            - 0.1
+            - 0.2
+          start_at_timestep_zero_prob: 0.0
+          use_adaptive_timesteps_sampler: true
   step_terms:
-    locomotion_command:
-      func: holosoma.managers.command.terms.locomotion:LocomotionCommand
-      params: {}
-    locomotion_gait:
-      func: holosoma.managers.command.terms.locomotion:LocomotionGait
+    motion_command:
+      func: holosoma.managers.command.terms.wbt:MotionCommand
       params: {}
 curriculum:
   params:
@@ -147,19 +171,8 @@ curriculum:
     average_episode_tracker:
       func: holosoma.managers.curriculum.terms.locomotion:AverageEpisodeLengthTracker
       params: {}
-    penalty_curriculum:
-      func: holosoma.managers.curriculum.terms.locomotion:PenaltyCurriculum
-      params:
-        degree: 0.00025
-        enabled: true
-        initial_scale: 0.1
-        level_down_threshold: 150.0
-        level_up_threshold: 750.0
-        max_scale: 1.0
-        min_scale: 0.0
-        tag: penalty_curriculum
   step_terms: {}
-env_class: holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager
+env_class: holosoma.envs.wbt.wbt_manager.WholeBodyTrackingManager
 eval_overrides:
   disable_logger: true
   headless: false
@@ -199,13 +212,25 @@ logger:
     vertical_fov: 45.0
     width: 640
 nightly:
-  iterations: 5000
+  iterations: 8000
   metrics:
-    Episode/rew_tracking_ang_vel:
+    Episode/rew_motion_global_body_ang_vel:
+    - 0.45
+    - inf
+    Episode/rew_motion_global_body_lin_vel:
+    - 0.6
+    - inf
+    Episode/rew_motion_global_ref_orientation_error_exp:
+    - 0.4
+    - inf
+    Episode/rew_motion_global_ref_position_error_exp:
+    - 0.3
+    - inf
+    Episode/rew_motion_relative_body_orientation_error_exp:
     - 0.7
     - inf
-    Episode/rew_tracking_lin_vel:
-    - 0.55
+    Episode/rew_motion_relative_body_position_error_exp:
+    - 0.85
     - inf
 observation:
   clip_observations: 100.0
@@ -217,56 +242,38 @@ observation:
       terms:
         actions:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:actions
+          func: holosoma.managers.observation.terms.wbt:actions
           noise: 0.0
           params: {}
           scale: 1.0
         base_ang_vel:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:base_ang_vel
-          noise: 0.0
-          params: {}
-          scale: 0.25
-        command_ang_vel:
-          clip: null
-          func: holosoma.managers.observation.terms.locomotion:command_ang_vel
-          noise: 0.0
-          params: {}
-          scale: 1.0
-        command_lin_vel:
-          clip: null
-          func: holosoma.managers.observation.terms.locomotion:command_lin_vel
-          noise: 0.0
-          params: {}
-          scale: 1.0
-        cos_phase:
-          clip: null
-          func: holosoma.managers.observation.terms.locomotion:cos_phase
-          noise: 0.0
+          func: holosoma.managers.observation.terms.wbt:base_ang_vel
+          noise: 0.2
           params: {}
           scale: 1.0
         dof_pos:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:dof_pos
+          func: holosoma.managers.observation.terms.wbt:dof_pos
           noise: 0.01
           params: {}
           scale: 1.0
         dof_vel:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:dof_vel
-          noise: 0.1
+          func: holosoma.managers.observation.terms.wbt:dof_vel
+          noise: 0.5
           params: {}
-          scale: 0.05
-        projected_gravity:
+          scale: 1.0
+        motion_command:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:projected_gravity
+          func: holosoma.managers.observation.terms.wbt:motion_command
           noise: 0.0
           params: {}
           scale: 1.0
-        sin_phase:
+        motion_ref_ori_b:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:sin_phase
-          noise: 0.0
+          func: holosoma.managers.observation.terms.wbt:motion_ref_ori_b
+          noise: 0.05
           params: {}
           scale: 1.0
     critic_obs:
@@ -276,61 +283,79 @@ observation:
       terms:
         actions:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:actions
+          func: holosoma.managers.observation.terms.wbt:actions
           noise: 0.0
           params: {}
           scale: 1.0
         base_ang_vel:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:base_ang_vel
-          noise: 0.0
+          func: holosoma.managers.observation.terms.wbt:base_ang_vel
+          noise: 0.2
           params: {}
-          scale: 0.25
+          scale: 1.0
         base_lin_vel:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:base_lin_vel
-          noise: 0.0
-          params: {}
-          scale: 2.0
-        command_ang_vel:
-          clip: null
-          func: holosoma.managers.observation.terms.locomotion:command_ang_vel
-          noise: 0.0
-          params: {}
-          scale: 1.0
-        command_lin_vel:
-          clip: null
-          func: holosoma.managers.observation.terms.locomotion:command_lin_vel
-          noise: 0.0
-          params: {}
-          scale: 1.0
-        cos_phase:
-          clip: null
-          func: holosoma.managers.observation.terms.locomotion:cos_phase
+          func: holosoma.managers.observation.terms.wbt:base_lin_vel
           noise: 0.0
           params: {}
           scale: 1.0
         dof_pos:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:dof_pos
-          noise: 0.0
+          func: holosoma.managers.observation.terms.wbt:dof_pos
+          noise: 0.01
           params: {}
           scale: 1.0
         dof_vel:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:dof_vel
-          noise: 0.0
+          func: holosoma.managers.observation.terms.wbt:dof_vel
+          noise: 0.5
           params: {}
-          scale: 0.05
-        projected_gravity:
+          scale: 1.0
+        motion_command:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:projected_gravity
+          func: holosoma.managers.observation.terms.wbt:motion_command
           noise: 0.0
           params: {}
           scale: 1.0
-        sin_phase:
+        motion_ref_ori_b:
           clip: null
-          func: holosoma.managers.observation.terms.locomotion:sin_phase
+          func: holosoma.managers.observation.terms.wbt:motion_ref_ori_b
+          noise: 0.05
+          params: {}
+          scale: 1.0
+        motion_ref_pos_b:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:motion_ref_pos_b
+          noise: 0.25
+          params: {}
+          scale: 1.0
+        obj_lin_vel_b:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:obj_lin_vel_b
+          noise: 0.0
+          params: {}
+          scale: 1.0
+        obj_ori_b:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:obj_ori_b
+          noise: 0.0
+          params: {}
+          scale: 1.0
+        obj_pos_b:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:obj_pos_b
+          noise: 0.0
+          params: {}
+          scale: 1.0
+        robot_body_ori_b:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:robot_body_ori_b
+          noise: 0.0
+          params: {}
+          scale: 1.0
+        robot_body_pos_b:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:robot_body_pos_b
           noise: 0.0
           params: {}
           scale: 1.0
@@ -340,9 +365,6 @@ randomization:
   reset_terms:
     actuator_randomizer_state:
       func: holosoma.managers.randomization.terms.locomotion:ActuatorRandomizerState
-      params: {}
-    configure_torque_rfi:
-      func: holosoma.managers.randomization.terms.locomotion:configure_torque_rfi
       params: {}
     push_randomizer_state:
       func: holosoma.managers.randomization.terms.locomotion:PushRandomizerState
@@ -354,11 +376,11 @@ randomization:
       func: holosoma.managers.randomization.terms.locomotion:randomize_dof_state
       params:
         joint_pos_bias_range:
-        - 0.0
-        - 0.0
+        - -0.01
+        - 0.01
         joint_pos_scale_range:
-        - 0.5
-        - 1.5
+        - 1.0
+        - 1.0
         joint_vel_range:
         - 0.0
         - 0.0
@@ -370,7 +392,7 @@ randomization:
     actuator_randomizer_state:
       func: holosoma.managers.randomization.terms.locomotion:ActuatorRandomizerState
       params:
-        enable_pd_gain: true
+        enable_pd_gain: false
         enable_rfi_lim: false
         kd_range:
         - 0.9
@@ -379,36 +401,29 @@ randomization:
         - 0.9
         - 1.1
         rfi_lim_range:
-        - 0.5
-        - 1.5
-    mass_randomizer:
-      func: holosoma.managers.randomization.terms.locomotion:randomize_mass_startup
-      params:
-        added_mass_range:
-        - -1.0
-        - 3.0
-        enable_base_mass: true
-        enable_link_mass: true
-        link_mass_range:
-        - 0.9
-        - 1.2
+        - 1.0
+        - 1.0
     push_randomizer_state:
       func: holosoma.managers.randomization.terms.locomotion:PushRandomizerState
       params:
         enabled: true
         max_push_vel:
-        - 1.0
-        - 1.0
+        - 0.5
+        - 0.5
+        - 0.2
+        - 0.52
+        - 0.52
+        - 0.78
         push_interval_s:
-        - 5
-        - 10
+        - 1.0
+        - 3.0
     randomize_base_com_startup:
       func: holosoma.managers.randomization.terms.locomotion:randomize_base_com_startup
       params:
         base_com_range:
           x:
-          - -0.05
-          - 0.05
+          - -0.025
+          - 0.025
           y:
           - -0.05
           - 0.05
@@ -416,32 +431,80 @@ randomization:
           - -0.05
           - 0.05
         enabled: true
-    randomize_friction_startup:
-      func: holosoma.managers.randomization.terms.locomotion:randomize_friction_startup
+    randomize_object_rigid_body_inertia_startup:
+      func: holosoma.managers.randomization.terms.objects:randomize_object_rigid_body_inertia_startup
       params:
-        enabled: true
-        friction_range:
+        inertia_distribution_params_dict:
+          Ixx:
+          - 0.5
+          - 1.5
+          Ixy:
+          - 1.0
+          - 1.0
+          Ixz:
+          - 1.0
+          - 1.0
+          Iyy:
+          - 1.0
+          - 1.0
+          Iyz:
+          - 1.0
+          - 1.0
+          Izz:
+          - 1.0
+          - 1.0
+    randomize_object_rigid_body_mass_startup:
+      func: holosoma.managers.randomization.terms.objects:randomize_object_rigid_body_mass_startup
+      params:
+        mass_distribution_params:
+        - 1.0
+        - 4.0
+    randomize_object_rigid_body_material_startup:
+      func: holosoma.managers.randomization.terms.objects:randomize_object_rigid_body_material_startup
+      params:
+        material:
+          isaacsim:
+            dynamic_friction:
+            - 0.1
+            - 0.6
+            restitution:
+            - 0.0
+            - 1.0
+            static_friction:
+            - 0.1
+            - 0.6
+          mujoco:
+            sliding_friction:
+            - 0.1
+            - 0.6
+            solimp: null
+            solref: null
+    randomize_robot_rigid_body_material_startup:
+      func: holosoma.managers.randomization.terms.locomotion:randomize_robot_rigid_body_material_startup
+      params:
+        dynamic_friction_range:
+        - 0.3
+        - 1.2
+        restitution_range:
+        - 0.0
         - 0.5
-        - 1.25
+        static_friction_range:
+        - 0.3
+        - 1.6
     setup_action_delay_buffers:
       func: holosoma.managers.randomization.terms.locomotion:setup_action_delay_buffers
       params:
         ctrl_delay_step_range:
         - 0
         - 1
-        enabled: true
+        enabled: false
     setup_dof_pos_bias:
       func: holosoma.managers.randomization.terms.locomotion:setup_dof_pos_bias
       params:
         dof_pos_bias_range:
         - -0.01
         - 0.01
-        enabled: false
-    setup_torque_rfi:
-      func: holosoma.managers.randomization.terms.locomotion:setup_torque_rfi
-      params:
-        enabled: false
-        rfi_lim: 0.1
+        enabled: true
   step_terms:
     apply_pushes:
       func: holosoma.managers.randomization.terms.locomotion:apply_pushes
@@ -452,101 +515,75 @@ randomization:
 reward:
   only_positive_rewards: false
   terms:
-    alive:
-      func: holosoma.managers.reward.terms.locomotion:alive
+    action_rate_l2:
+      func: holosoma.managers.reward.terms.wbt:penalty_action_rate
       params: {}
+      tags: []
+      weight: -0.1
+    limits_dof_pos:
+      func: holosoma.managers.reward.terms.wbt:limits_dof_pos
+      params:
+        soft_dof_pos_limit: 0.9
+      tags: []
+      weight: -10.0
+    motion_global_body_ang_vel:
+      func: holosoma.managers.reward.terms.wbt:motion_global_body_ang_vel
+      params:
+        sigma: 3.14
       tags: []
       weight: 1.0
-    feet_phase:
-      func: holosoma.managers.reward.terms.locomotion:feet_phase
+    motion_global_body_lin_vel:
+      func: holosoma.managers.reward.terms.wbt:motion_global_body_lin_vel
       params:
-        swing_height: 0.09
-        tracking_sigma: 0.008
+        sigma: 1.0
       tags: []
-      weight: 5.0
-    penalty_action_rate:
-      func: holosoma.managers.reward.terms.locomotion:penalty_action_rate
-      params: {}
-      tags:
-      - penalty_curriculum
-      weight: -2.0
-    penalty_ang_vel_xy:
-      func: holosoma.managers.reward.terms.locomotion:penalty_ang_vel_xy
-      params: {}
-      tags:
-      - penalty_curriculum
-      weight: -1.0
-    penalty_close_feet_xy:
-      func: holosoma.managers.reward.terms.locomotion:penalty_close_feet_xy
+      weight: 1.0
+    motion_global_ref_orientation_error_exp:
+      func: holosoma.managers.reward.terms.wbt:motion_global_ref_orientation_error_exp
       params:
-        close_feet_threshold: 0.15
-      tags:
-      - penalty_curriculum
-      weight: -10.0
-    penalty_feet_ori:
-      func: holosoma.managers.reward.terms.locomotion:penalty_feet_ori
-      params: {}
-      tags:
-      - penalty_curriculum
-      weight: -5.0
-    penalty_orientation:
-      func: holosoma.managers.reward.terms.locomotion:penalty_orientation
-      params: {}
-      tags:
-      - penalty_curriculum
-      weight: -10.0
-    pose:
-      func: holosoma.managers.reward.terms.locomotion:pose
-      params:
-        pose_weights:
-        - 0.01
-        - 1.0
-        - 5.0
-        - 0.01
-        - 5.0
-        - 5.0
-        - 0.01
-        - 1.0
-        - 5.0
-        - 0.01
-        - 5.0
-        - 5.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-      tags:
-      - penalty_curriculum
-      weight: -0.5
-    tracking_ang_vel:
-      func: holosoma.managers.reward.terms.locomotion:tracking_ang_vel
-      params:
-        tracking_sigma: 0.25
+        sigma: 0.4
       tags: []
-      weight: 1.5
-    tracking_lin_vel:
-      func: holosoma.managers.reward.terms.locomotion:tracking_lin_vel
+      weight: 0.5
+    motion_global_ref_position_error_exp:
+      func: holosoma.managers.reward.terms.wbt:motion_global_ref_position_error_exp
       params:
-        tracking_sigma: 0.25
+        sigma: 0.3
       tags: []
-      weight: 2.0
+      weight: 0.5
+    motion_relative_body_orientation_error_exp:
+      func: holosoma.managers.reward.terms.wbt:motion_relative_body_orientation_error_exp
+      params:
+        sigma: 0.4
+      tags: []
+      weight: 1.0
+    motion_relative_body_position_error_exp:
+      func: holosoma.managers.reward.terms.wbt:motion_relative_body_position_error_exp
+      params:
+        sigma: 0.3
+      tags: []
+      weight: 1.0
+    object_global_ref_orientation_error_exp:
+      func: holosoma.managers.reward.terms.wbt:object_global_ref_orientation_error_exp
+      params:
+        sigma: 0.4
+      tags: []
+      weight: 1.0
+    object_global_ref_position_error_exp:
+      func: holosoma.managers.reward.terms.wbt:object_global_ref_position_error_exp
+      params:
+        sigma: 0.3
+      tags: []
+      weight: 1.0
+    undesired_contacts:
+      func: holosoma.managers.reward.terms.wbt:UndesiredContacts
+      params:
+        threshold: 1.0
+        undesired_contacts_body_names: ^(?!left_foot_contact_point$)(?!right_foot_contact_point$)(?!left_wrist_yaw_link$)(?!right_wrist_yaw_link$)(?!left_ankle_roll_link$)(?!right_ankle_roll_link$).+$
+      tags: []
+      weight: -0.1
 robot:
   actions_dim: 29
   algo_obs_dim_dict: {}
-  apply_dof_armature_in_isaacgym: true
   arm_dof_names:
   - left_shoulder_pitch_joint
   - left_shoulder_roll_joint
@@ -568,12 +605,11 @@ robot:
     collapse_fixed_joints: true
     default_dof_drive_mode: 3
     disable_gravity: null
-    enable_self_collisions: false
+    enable_self_collisions: true
     fix_base_link: false
     flip_visual_attachments: false
     link_physics:
       density: null
-      isaacgym: null
       isaacsim: null
       mass: null
       mujoco: null
@@ -586,7 +622,7 @@ robot:
     replace_cylinder_with_capsule: true
     robot_type: g1_29dof
     thickness: 0.01
-    urdf_file: g1/g1_29dof.urdf
+    urdf_file: g1/main_mesh_collision_halfspherehand.urdf
     usd_file: null
     xml_file: g1/g1_29dof.xml
   body_names:
@@ -628,11 +664,10 @@ robot:
     motor_type: serial
     sdk_robot_type: null
     sdk_type: unitree
-  contact_pairs_multiplier: 16
   control:
     action_clip_value: 100.0
     action_scale: 0.25
-    action_scales_by_effort_limit_over_p_gain: false
+    action_scales_by_effort_limit_over_p_gain: true
     clip_actions: true
     clip_torques: true
     control_type: P
@@ -952,7 +987,7 @@ robot:
     pos:
     - 0.0
     - 0.0
-    - 0.8
+    - 0.76
     rot:
     - 0.0
     - 0.0
@@ -1099,7 +1134,7 @@ robot:
   waist_yaw_dof_name: waist_yaw_joint
 scene:
   asset_root: null
-  env_spacing: 20.0
+  env_spacing: 0.0
   lights:
     default_light:
       color:
@@ -1116,9 +1151,76 @@ scene:
       - 0.0
       - 0.0
   replicate_physics: true
-  rigid_objects: {}
+  rigid_objects:
+    object:
+      angular_velocity:
+      - 0.0
+      - 0.0
+      - 0.0
+      asset_root: null
+      fixed: false
+      linear_velocity:
+      - 0.0
+      - 0.0
+      - 0.0
+      orientation:
+      - 1.0
+      - 0.0
+      - 0.0
+      - 0.0
+      physics: null
+      position:
+      - 0.0
+      - 0.0
+      - 0.0
+      urdf_file: holosoma/data/scene_objects/boxes/large_box.urdf
+      usd_file: null
+      xml_file: null
   scene_files: {}
-sensor: {}
+sensor:
+  g1-head:
+    data_types:
+    - rgb
+    depth_clipping_behavior: none
+    far: 1000.0
+    height: 128
+    isaacsim:
+      f_stop: 0.0
+      fisheye:
+        max_fov: 200.0
+        nominal_height: 1216.0
+        nominal_width: 1936.0
+        optical_centre_x: 970.94244
+        optical_centre_y: 600.37482
+        polynomial_a: 0.0
+        polynomial_b: 0.00245
+        polynomial_c: 0.0
+        polynomial_d: 0.0
+        polynomial_e: 0.0
+        polynomial_f: 0.0
+      focal_length: 24.0
+      focus_distance: 400.0
+      projection_type: pinhole
+    mount:
+      orientation:
+      - 0.5
+      - 0.5
+      - -0.5
+      - -0.5
+      position:
+      - 0.05
+      - 0.0
+      - 0.41
+      target: torso_link
+      target_kind: robot_link
+    mujoco:
+      use_precomputed_rays: null
+      use_shadows: null
+      use_textures: null
+    near: 0.01
+    update_decimation: 50Hz
+    vertical_fov: 45.0
+    width: 128
 simulator:
   _recursive_: false
   _target_: holosoma.simulator.mujoco.mujoco.MuJoCo
@@ -1139,7 +1241,7 @@ simulator:
     isaacsim:
       kit_args: ''
       rendering_mode: null
-    mujoco_backend: classic
+    mujoco_backend: warp
     mujoco_warp:
       nconmax_per_env: 96
       njmax_per_env: null
@@ -1190,12 +1292,35 @@ simulator:
       stiffness: 200.0
 termination:
   terms:
-    contact:
-      func: holosoma.managers.termination.terms.locomotion:contact_forces_exceeded
+    bad_tracking:
+      func: holosoma.managers.termination.terms.wbt:BadTrackingZOnly
       is_timeout: false
       params:
-        contact_indices_attr: termination_contact_indices
-        force_threshold: 1.0
+        bad_motion_body_pos_body_names:
+        - left_ankle_roll_link
+        - right_ankle_roll_link
+        - left_wrist_yaw_link
+        - right_wrist_yaw_link
+        bad_motion_body_pos_threshold: 0.25
+        bad_object_ori_threshold: 0.8
+        bad_object_pos_threshold: 0.25
+        bad_ref_ori_threshold: 0.8
+        bad_ref_pos_threshold: 0.5
+        body_names_to_track:
+        - pelvis
+        - left_hip_roll_link
+        - left_knee_link
+        - left_ankle_roll_link
+        - right_hip_roll_link
+        - right_knee_link
+        - right_ankle_roll_link
+        - torso_link
+        - left_shoulder_roll_link
+        - left_elbow_link
+        - left_wrist_yaw_link
+        - right_shoulder_roll_link
+        - right_elbow_link
+        - right_wrist_yaw_link
     timeout:
       func: holosoma.managers.termination.terms.common:timeout_exceeded
       is_timeout: true
@@ -1209,9 +1334,9 @@ terrain:
     dynamic_friction: 1.0
     func: holosoma.managers.terrain.terms.locomotion:TerrainLocomotion
     hide_visual: false
-    horizontal_scale: 0.1
+    horizontal_scale: 1.0
     max_slope: 0.3
-    mesh_type: trimesh
+    mesh_type: plane
     name: floor
     num_cols: 20
     num_rows: 10
@@ -1231,12 +1356,7 @@ terrain:
     step_width_range:
     - 0.3
     - 0.4
-    terrain_config:
-      flat: 0.2
-      low_obstacles: 0.2
-      rough: 0.6
-      rough_slope: 0.0
-      smooth_slope: 0.0
+    terrain_config: {}
     terrain_length: 8.0
     terrain_move_down_ratio: 0.0
     terrain_move_up_ratio: 0.0
@@ -1248,9 +1368,9 @@ training:
   headless: true
   max_eval_steps: null
   multigpu: false
-  name: g1_29dof_manager
+  name: g1_29dof_wbt_manager
   num_envs: 4096
-  project: hv-g1-manager
+  project: WholeBodyTracking
   seed: 42
   teacher_checkpoint: null
   torch_deterministic: false

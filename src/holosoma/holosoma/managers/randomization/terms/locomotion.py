@@ -737,11 +737,9 @@ def randomize_mass_startup(
             "randomize_mass_startup: enable_link_mass=True requires link_bodies; list the link body names "
             "(exact names or #tags) to scale in the term params."
         )
-    # Names only (no indices): on IsaacGym this runs inside create_envs, before body handles resolve.
     link_names: list[str] = env.robot_names.resolve_body_names(link_bodies) if enable_link_mass else []
     base_name = _resolve_one_body(env, base_body, what="base mass DR") if enable_base_mass else None
-    # Scaling and addition are independent writes, but both inputs belong to
-    # this startup operation. Reject an invalid later input before either write.
+    # Validate both distributions before changing any masses.
     if enable_link_mass:
         link_mass_range = DistributionSpec.parse(link_mass_range)
     if enable_base_mass:

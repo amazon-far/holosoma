@@ -272,7 +272,7 @@ class MuJoCo(BaseSimulator):
         # Runs before backend creation so the WarpBackend's put_model sees the final model.
         self._set_object_addressing()
 
-        # Config per-DOF armature/friction override the MJCF values; also before the backend takes the model.
+        # Apply configured position and effort limits, armature, and friction before backend creation.
         meta = self.scene_manager.robot_spec_meta
         assert meta is not None, "robot_spec_meta must be captured in scene_manager.add_robot"
         apply_dof_properties_from_config(self.root_model, meta, self.robot_config)

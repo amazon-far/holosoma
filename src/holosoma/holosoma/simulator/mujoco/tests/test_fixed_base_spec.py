@@ -26,8 +26,9 @@ else:
 
 from holosoma.config_types.scene import ObjectPatternConfig, RigidObjectConfig, SceneFileConfig
 from holosoma.config_values.simulator import mujoco as mujoco_config
-from holosoma.simulator.mujoco.robot_addressing import resolve_actor_addressing, validate_robot_joint_types
+from holosoma.simulator.mujoco.robot_addressing import resolve_actor_addressing
 from holosoma.simulator.mujoco.scene_manager import MujocoSceneManager
+from holosoma.simulator.mujoco.tests._robot_spec import compile_robot_spec
 
 pytestmark = pytest.mark.no_sim
 
@@ -60,11 +61,8 @@ def _ensure_root(spec: mujoco.MjSpec, *, free: bool) -> str:
 
 def _attach(robot_spec: mujoco.MjSpec) -> mujoco.MjModel:
     """Attach with a prefix at a unit frame and compile, as ``add_robot`` does."""
-    validate_robot_joint_types(robot_spec, _ARM)
-    world = mujoco.MjSpec()
-    world.copy_during_attach = True
-    world.attach(robot_spec, frame=world.worldbody.add_frame(), prefix=_PREFIX)
-    return world.compile()
+    model, _ = compile_robot_spec(robot_spec, _PREFIX)
+    return model
 
 
 def _free_joint_count(model: mujoco.MjModel) -> int:
@@ -76,18 +74,15 @@ def _scene_manager() -> MujocoSceneManager:
     return MujocoSceneManager(mujoco_config.config)
 
 
-@pytest.mark.parametrize("root_joint", ["<freejoint/>", '<joint type="free"/>'], ids=["freejoint", "joint-free"])
-def test_fixed_base_drops_authored_root_freejoint(root_joint: str) -> None:
+@pytest.mark.parametrize(
+    "root_joint", ["", "<freejoint/>", '<joint type="free"/>'], ids=["already-welded", "freejoint", "joint-free"]
+)
+def test_fixed_base_has_no_root_joint(root_joint: str) -> None:
     spec = mujoco.MjSpec.from_string(_arm_mjcf(root_joint))
-    assert any(j.type == mujoco.mjtJoint.mjJNT_FREE for j in spec.worldbody.bodies[0].joints)
-
-    root = _ensure_root(spec, free=False)
-    assert root == "base"
+    assert _ensure_root(spec, free=False) == "base"
     model = _attach(spec)
-    assert model.nq == 3
-    assert model.nv == 3
+    assert model.nq == model.nv == 3
     assert _free_joint_count(model) == 0
-    # The root body is welded: a direct child of the world with no joint of its own.
     base_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{_PREFIX}base")
     assert model.body_parentid[base_id] == 0
     assert model.body_jntnum[base_id] == 0
@@ -109,14 +104,6 @@ def test_welding_drops_the_keyframe_authored_for_the_freejoint() -> None:
     model = _attach(floating)
     assert model.nq == 10
     assert model.nkey == 1
-
-
-def test_fixed_base_without_authored_freejoint_stays_welded() -> None:
-    spec = mujoco.MjSpec.from_string(_arm_mjcf())
-    _ensure_root(spec, free=False)
-    model = _attach(spec)
-    assert model.nq == 3
-    assert _free_joint_count(model) == 0
 
 
 @pytest.mark.parametrize("root_joint", ["", "<freejoint/>"], ids=["added", "authored"])

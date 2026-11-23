@@ -53,10 +53,7 @@ class TerrainLocomotion(TerrainTermBase):
         self._get_env_origins()
 
     def _resolve_feet_height_indices(self) -> torch.Tensor:
-        """Body indices for ``cfg.feet_height_bodies`` (None = ``["#feet_height"]`` iff the robot declares that tag).
-
-        Logs the decision at INFO: under the None default a misspelled tag looks the same as a missing one.
-        """
+        """Resolve configured feet-height bodies, or ``#feet_height`` when that tag is declared."""
         spec = self._cfg.feet_height_bodies
         if spec is None:
             body_tags = self.env.robot_config.body_tags

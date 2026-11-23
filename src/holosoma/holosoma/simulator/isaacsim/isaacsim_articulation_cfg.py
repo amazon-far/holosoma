@@ -217,9 +217,8 @@ def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
         joint_vel={".*": 0.0},
     )
 
-    # IsaacLab initializes uncovered entries of a nonempty parameter dict to zero. Group by
-    # which properties are authored so each parameter covers its entire actuator group or is
-    # None (asset values). Expansion and collision checks above precede any grouping.
+    # Group DOFs by their configured properties so each actuator parameter covers the complete group.
+    # Unspecified parameters retain asset values.
     property_sources = {
         "effort_limit": overrides.effort,
         "velocity_limit": overrides.velocity,

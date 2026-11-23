@@ -194,18 +194,10 @@ def expand_joint_value_map(
     what: str = "joint values",
     required: bool = True,
 ) -> dict[str, float]:
-    """Return a validated exact-name map from joint values keyed by DOF names or ``#tags``.
+    """Resolve finite joint values into canonical DOF order without changing the inputs.
 
-    The result is a fresh dict in ``dof_names`` order; no input is modified. Tags may compose, and
-    ``#all`` defaults to every DOF unless explicitly declared, as on ``RobotConfig``. This helper
-    accepts serialized config fields without constructing a ``RobotConfig``.
-
-    Every DOF must be covered by exactly one key. Overlapping keys are errors even when their values
-    agree; repeated references within a single tag are deduplicated. ``required=False`` permits
-    uncovered DOFs and omits them from the result rather than assigning an implicit value.
-
-    Raises ``ValueError`` for duplicate DOF names, invalid tags, unknown names, overlapping or missing
-    assignments, or non-finite values. ``what`` identifies the field in assignment errors.
+    Reject invalid names, overlapping assignments, and missing coverage when required=True.
+    The #all tag defaults to every DOF.
     """
     if isinstance(dof_names, str):
         raise TypeError(f"{what} dof_names must be a list of names, got the string {dof_names!r}")

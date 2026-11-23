@@ -189,7 +189,7 @@ def test_root_selection_drives_accessors_and_reset(tmp_path: Path, selector: str
     _write_clip(path)
     options = {} if selector is None else {"root_body": selector}
     cfg = _motion(path, **options)
-    # The actual constructor used by CLI/checkpoint term params also sees the new field.
+    # Reconstruct the configuration through the serialized term-parameter boundary.
     cfg = MotionConfig(**dataclasses.asdict(cfg))
     term, simulator = _command(_robot(body_names), cfg)
 

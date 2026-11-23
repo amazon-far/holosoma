@@ -31,7 +31,7 @@ from holosoma.utils.config_registry import ConfigRegistry, deprecated_defaults_a
 
 PLUGIN_REGISTRY = ConfigRegistry(PluginConfig, group="holosoma.config.plugin")
 
-# Position PD control is a plugin, independent of SDK transport and RobotConfig.
+# YAM joint trajectory with position PD control.
 # Example: python -m holosoma.run_sim robot:yam plugin.motion:yam-trajectory
 yam_trajectory = JointTrajectoryPluginConfig(
     waypoints=[
@@ -47,8 +47,7 @@ yam_trajectory = JointTrajectoryPluginConfig(
         JointWaypoint(time=10.75),
     ],
     loop=True,
-    # Explicit torque PD gains for this trajectory. They are plugin behavior, not physical
-    # actuator properties of the YAM robot.
+    # Position PD gains for the trajectory's controlled joints.
     controller=JointControllerCfg(
         stiffness={"#dm4340": 200.0, "#dm4310": 50.0, "#gripper": 200.0},
         damping={"#dm4340": 8.0, "#dm4310": 0.3, "#gripper": 10.0},

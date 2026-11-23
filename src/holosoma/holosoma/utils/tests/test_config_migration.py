@@ -1,24 +1,15 @@
-"""Pre-refactor ``ExperimentConfig`` dumps migrate to the current schema (pure, no simulator).
-
-The fixtures under ``data/`` were dumped by ``ExperimentConfig.to_serializable_dict`` on the schema
-that preceded the RobotConfig refactor (humanoid name fields, ``init_state.pos``/``rot`` in xyzw,
-symmetry lists on the robot, substring PD gain keys, ``contact_pairs_multiplier`` ...).
-``migrate_legacy_experiment_config`` must turn them into configs that construct and reproduce the
-shipped presets' behaviour.
-"""
+"""Legacy robot metadata preserves defaults, controller gains, and task selections in the current schema."""
 
 from __future__ import annotations
 
 import copy
 import dataclasses
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pydantic
 import pytest
 import yaml
-from loguru import logger
 
 from holosoma.config_types.action import ActionTermCfg
 from holosoma.config_types.command import NoiseToInitialPoseConfig
@@ -29,7 +20,7 @@ from holosoma.utils.name_tags import expand_name_spec
 
 pytestmark = pytest.mark.no_sim
 
-_DATA = Path(__file__).parent / "data"
+_DATA = Path(__file__).parent / "data" / "legacy_experiments"
 _ROBOTS = ["g1_29dof", "t1_29dof"]
 # (kp, kd) the old rule gives these DOFs from the fixtures' key-sorted gain dicts.
 _OLD_RULE_SPOT_GAINS = {
@@ -43,7 +34,7 @@ _OLD_RULE_SPOT_GAINS = {
 
 
 def _legacy(name: str) -> dict[str, Any]:
-    return yaml.safe_load((_DATA / f"legacy_{name}_experiment_config.yaml").read_text())  # type: ignore[no-any-return]
+    return yaml.safe_load((_DATA / f"{name}_isaacsim.yaml").read_text())  # type: ignore[no-any-return]
 
 
 def _preset_gains(name: str) -> tuple[dict[str, float], dict[str, float]]:
@@ -77,14 +68,6 @@ def _synthetic_joint_action() -> dict[str, Any]:
             }
         }
     }
-
-
-@pytest.fixture
-def warnings() -> Iterator[list[str]]:
-    msgs: list[str] = []
-    sink_id = logger.add(lambda m: msgs.append(m.record["message"]), level="WARNING")
-    yield msgs
-    logger.remove(sink_id)
 
 
 @pytest.mark.parametrize("name", _ROBOTS)
@@ -139,7 +122,7 @@ def test_migrated_dump_constructs_and_matches_the_shipped_experiment(name: str) 
     assert cfg.termination is not None and current.termination is not None
     contact = cfg.termination.terms["contact"].params
     assert "contact_indices_attr" not in contact
-    # Contact termination is order-free; the shipped preset now names the set by tag.
+    # Contact termination uses an unordered body selection.
     assert set(contact["bodies"]) == set(
         expand_name_spec(
             current.termination.terms["contact"].params["bodies"], cur_robot.body_tags, cur_robot.body_names
@@ -157,10 +140,6 @@ def test_migrated_dump_constructs_and_matches_the_shipped_experiment(name: str) 
     )
     assert mass["base_body"] == "#base"
     assert cfg.randomization.setup_terms["randomize_base_com_startup"].params["body"] == "#base"
-
-    # Relocated knob (16 is also the PhysxConfig default; test_contact_pairs_multiplier_relocates_by_value pins
-    # the relocation itself).
-    assert cfg.simulator.config.sim.physx.max_gpu_contact_pairs == 16 * 1024 * 1024
 
 
 def test_init_state_rot_xyzw_becomes_orientation_wxyz() -> None:
@@ -221,59 +200,41 @@ def test_legacy_superset_default_positions_drop_only_non_dofs(name: str, warning
     assert warnings == []
 
 
-@pytest.mark.parametrize("invalid", ["missing", "nonfinite"])
-def test_legacy_superset_defaults_still_validate_active_dofs(invalid: str) -> None:
+def test_legacy_superset_defaults_fill_missing_active_dofs_with_zero() -> None:
     raw = _legacy("g1_29dof")
     defaults = raw["robot"]["init_state"]["default_joint_angles"]
     defaults["imu_in_torso_joint"] = 0.0
     joint = raw["robot"]["dof_names"][0]
-    if invalid == "missing":
-        defaults.pop(joint)
-        message = "has no key covering DOF"
-    else:
-        defaults[joint] = float("nan")
-        message = "must be finite"
-
-    migrated = migrate_legacy_experiment_config(raw)
-    if invalid == "missing":
-        assert ExperimentConfig(**migrated).robot.default_dof_positions()[joint] == 0.0
-    else:
-        with pytest.raises(pydantic.ValidationError, match=message):
-            ExperimentConfig(**migrated)
+    defaults.pop(joint)
+    cfg = ExperimentConfig(**migrate_legacy_experiment_config(raw))
+    assert cfg.robot.default_dof_positions()[joint] == 0.0
 
 
-@pytest.mark.parametrize("tag_signal", ["defaults", "joint_tags", "empty_joint_tags"])
-def test_tag_aware_defaults_with_old_schema_markers_stay_strict(tag_signal: str) -> None:
+def test_legacy_superset_defaults_reject_nonfinite_active_dofs() -> None:
     raw = _legacy("g1_29dof")
     defaults = raw["robot"]["init_state"]["default_joint_angles"]
-    if tag_signal == "defaults":
-        defaults = {"#all": 0.1}
-        raw["robot"]["init_state"]["default_joint_angles"] = defaults
-    elif tag_signal == "joint_tags":
-        raw["robot"]["joint_tags"] = {"#all": raw["robot"]["dof_names"]}
-    elif tag_signal == "empty_joint_tags":
-        raw["robot"]["joint_tags"] = {}
-    defaults["unused_joint"] = 0.0
-
-    migrated = migrate_legacy_experiment_config(raw)
-
-    assert migrated["robot"]["init_state"]["default_joint_positions"] == defaults
-    with pytest.raises(pydantic.ValidationError, match="Unknown joint name 'unused_joint'"):
-        ExperimentConfig(**migrated)
+    defaults["imu_in_torso_joint"] = 0.0
+    defaults[raw["robot"]["dof_names"][0]] = float("nan")
+    with pytest.raises(pydantic.ValidationError, match="must be finite"):
+        ExperimentConfig(**migrate_legacy_experiment_config(raw))
 
 
-@pytest.mark.parametrize("keep_legacy_key", [False, True])
-def test_current_default_positions_with_old_schema_markers_stay_strict(keep_legacy_key: bool) -> None:
+@pytest.mark.parametrize("signal", ["tag-defaults", "joint-tags", "empty-joint-tags", "current-key", "both-keys"])
+def test_current_or_tagged_defaults_remain_strict_with_legacy_schema_markers(signal: str) -> None:
     raw = _legacy("g1_29dof")
-    init_state = raw["robot"]["init_state"]
-    defaults = init_state.pop("default_joint_angles")
+    init = raw["robot"]["init_state"]
+    defaults = init["default_joint_angles"]
+    if signal == "tag-defaults":
+        defaults = {"#all": 0.1}
+        init["default_joint_angles"] = defaults
+    elif signal in ("joint-tags", "empty-joint-tags"):
+        raw["robot"]["joint_tags"] = {"#all": raw["robot"]["dof_names"]} if signal == "joint-tags" else {}
+    elif signal in ("current-key", "both-keys"):
+        init["default_joint_positions"] = defaults
+        if signal == "current-key":
+            init.pop("default_joint_angles")
     defaults["unused_joint"] = 0.0
-    init_state["default_joint_positions"] = defaults
-    if keep_legacy_key:
-        init_state["default_joint_angles"] = dict(defaults)
-
     migrated = migrate_legacy_experiment_config(raw)
-
     assert migrated["robot"]["init_state"]["default_joint_positions"] == defaults
     with pytest.raises(pydantic.ValidationError, match="Unknown joint name 'unused_joint'"):
         ExperimentConfig(**migrated)
@@ -377,17 +338,19 @@ def test_unmatched_dof_raises_for_pd_control() -> None:
         migrate_legacy_experiment_config(raw)
 
 
-def test_mixed_tag_and_substring_gain_keys_raise_naming_the_tag_keys() -> None:
-    """A half-migrated dump cannot interpret tag keys under the legacy substring rule."""
+@pytest.mark.parametrize("field", ["both", "stiffness", "damping"])
+def test_mixed_gain_schemes_raise_without_discarding_tags_or_mutating_input(field: str) -> None:
     raw = _legacy("g1_29dof")
     control = raw["robot"]["control"]
-    control["stiffness"] = {"#knees": control["stiffness"].pop("knee"), **control["stiffness"]}
-    control["damping"] = {"#knees": control["damping"].pop("knee"), **control["damping"]}
-    with pytest.raises(
-        ValueError,
-        match=r"Cannot mix legacy substring PD gain keys.*#knees",
-    ):
+    fields = ("stiffness", "damping") if field == "both" else (field,)
+    for name in fields:
+        control[name]["#knees"] = control[name].pop("knee") if field == "both" else 123.0
+    if field != "both":
+        raw["robot"]["joint_tags"] = {"#knees": ["left_knee_joint", "right_knee_joint"]}
+    snapshot = copy.deepcopy(raw)
+    with pytest.raises(ValueError, match=r"(mix|Mix).*substring.*#knees"):
         migrate_legacy_experiment_config(raw)
+    assert raw == snapshot
 
 
 def test_stiffness_key_without_a_damping_entry_raises() -> None:
@@ -395,17 +358,6 @@ def test_stiffness_key_without_a_damping_entry_raises() -> None:
     del raw["robot"]["control"]["damping"]["knee"]
     with pytest.raises(ValueError, match="damping has no entry for stiffness key 'knee' \\(DOF 'left_knee_joint'\\)"):
         migrate_legacy_experiment_config(raw)
-
-
-@pytest.mark.parametrize("field", ["stiffness", "damping"])
-def test_mixed_gain_schemes_cannot_silently_discard_a_tag(field: str) -> None:
-    raw = _legacy("g1_29dof")
-    raw["robot"]["control"][field]["#knees"] = 123.0
-    raw["robot"]["joint_tags"] = {"#knees": ["left_knee_joint", "right_knee_joint"]}
-    snapshot = copy.deepcopy(raw)
-    with pytest.raises(ValueError, match=r"(mix|Mix).*substring.*#knees"):
-        migrate_legacy_experiment_config(raw)
-    assert raw == snapshot
 
 
 def test_unmatched_dof_gets_zero_gains_for_torque_control() -> None:
@@ -453,13 +405,6 @@ def test_input_is_not_mutated() -> None:
     assert raw == snapshot
 
 
-def test_apply_dof_armature_false_cannot_migrate() -> None:
-    raw = _legacy("g1_29dof")
-    raw["robot"]["apply_dof_armature_in_isaacgym"] = False
-    with pytest.raises(ValueError, match="apply_dof_armature_in_isaacgym=false"):
-        migrate_legacy_experiment_config(raw)
-
-
 def test_non_default_contact_indices_attr_cannot_migrate() -> None:
     raw = _legacy("g1_29dof")
     raw["termination"]["terms"]["contact"]["params"]["contact_indices_attr"] = "custom_indices"
@@ -477,18 +422,34 @@ def test_pre_2026_07_09_asset_physics_and_robot_object_are_dropped() -> None:
     assert cfg.robot.asset.link_physics == EXPERIMENT_REGISTRY["g1_29dof"].robot.asset.link_physics
 
 
-def test_unknown_robot_keys_are_dropped_with_a_warning(warnings: list[str]) -> None:
-    """Fork / subclass fields a dump carries (never typos: dumps are machine-written) are dropped, named."""
+@pytest.mark.parametrize(
+    ("path", "key", "value"),
+    [
+        ((), "dof_names_23dof", ["left_hip_pitch_joint"]),
+        (("asset",), "fork_flag", True),
+        (("asset", "link_physics"), "fork_flag", True),
+        (("asset", "link_physics", "physx"), "fork_knob", 1.0),
+    ],
+    ids=["robot", "asset", "link-physics", "physx"],
+)
+def test_unknown_saved_robot_keys_are_dropped_and_named(
+    path: tuple[str, ...], key: str, value: Any, warnings: list[str]
+) -> None:
     raw = _legacy("g1_29dof")
-    raw["robot"]["dof_names_23dof"] = ["left_hip_pitch_joint"]
-    raw["robot"]["asset"]["fork_flag"] = True
-
+    node = raw["robot"]
+    for part in path:
+        node[part] = node.get(part) or {}
+        node = node[part]
+    node[key] = value
     migrated = migrate_legacy_experiment_config(raw)
-
     cfg = ExperimentConfig(**migrated)
     assert _joint_term(cfg).controller is not None
-    dropped = next(m for m in warnings if "dropped [" in m)
-    assert all(key in dropped for key in ("dof_names_23dof", "asset.fork_flag"))
+    node = migrated["robot"]
+    for part in path:
+        node = node[part]
+    assert key not in node
+    dropped = next(message for message in warnings if "dropped [" in message)
+    assert ".".join((*path, key)) in dropped
 
 
 def test_non_default_soft_limit_is_carried_into_the_motion_command_terms() -> None:
@@ -549,20 +510,8 @@ def test_one_way_symmetry_map_is_dropped_when_symmetry_is_off(warnings: list[str
     assert any("one-way, and use_symmetry is off" in m for m in warnings)
 
 
-def test_nested_unknown_robot_keys_are_dropped(warnings: list[str]) -> None:
-    raw = _legacy("g1_29dof")
-    raw["robot"]["asset"]["link_physics"] = {"fork_flag": True, "physx": {"fork_knob": 1.0}}
-
-    migrated = migrate_legacy_experiment_config(raw)
-
-    assert migrated["robot"]["asset"]["link_physics"] == {"physx": {}}
-    ExperimentConfig(**migrated)
-    dropped = next(m for m in warnings if "dropped [" in m)
-    assert "asset.link_physics.fork_flag" in dropped and "asset.link_physics.physx.fork_knob" in dropped
-
-
 def test_soft_limit_equal_to_the_wbt_clamp_default_is_dropped_silently(warnings: list[str]) -> None:
-    # The WBT initial-pose clamp now reads NoiseToInitialPoseConfig.soft_dof_pos_limit; only a differing value warns.
+    # Only a value different from the initial-pose clamp default requires migration.
     raw = _legacy("g1_29dof")
     raw["robot"]["soft_dof_pos_limit"] = NoiseToInitialPoseConfig().soft_dof_pos_limit
     migrated = migrate_legacy_experiment_config(raw)
@@ -584,44 +533,6 @@ def test_existing_tags_win_over_derived_ones() -> None:
         derived = EXPERIMENT_REGISTRY["g1_29dof"].robot.body_tags[derived_tag]
         declared_after = {tag: names for tag, names in cfg.robot.body_tags.items() if tag != "#all"}
         assert declared_after == {**raw["robot"]["body_tags"], derived_tag: derived}
-
-
-def test_contact_pairs_relocation_is_skipped_when_the_physx_chain_is_missing(warnings: list[str]) -> None:
-    null_simulator = _legacy("g1_29dof")
-    null_simulator["simulator"] = None
-    migrated = migrate_legacy_experiment_config(null_simulator)
-    assert migrated["simulator"] is None and "contact_pairs_multiplier" not in migrated["robot"]
-
-    no_sim = _legacy("g1_29dof")
-    del no_sim["simulator"]["config"]["sim"]
-    migrated = migrate_legacy_experiment_config(no_sim)
-    assert "physx" not in migrated["simulator"]["config"]["sim"]
-    assert "contact_pairs_multiplier" not in migrated["robot"]
-
-    skipped = [m for m in warnings if "contact_pairs_multiplier dropped: no simulator.config.sim.physx" in m]
-    assert len(skipped) == 2
-
-
-def test_contact_pairs_multiplier_relocates_by_value() -> None:
-    # The fixtures' 16 equals the PhysxConfig default, which cannot tell a relocation from a drop.
-    raw = _legacy("g1_29dof")
-    raw["robot"]["contact_pairs_multiplier"] = 8
-
-    migrated = migrate_legacy_experiment_config(raw)
-
-    assert migrated["simulator"]["config"]["sim"]["physx"]["max_gpu_contact_pairs"] == 8 * 1024 * 1024
-    assert "contact_pairs_multiplier" not in migrated["robot"]
-    assert ExperimentConfig(**migrated).simulator.config.sim.physx.max_gpu_contact_pairs == 8 * 1024 * 1024
-
-
-def test_existing_max_gpu_contact_pairs_is_not_overwritten() -> None:
-    raw = _legacy("g1_29dof")
-    raw["simulator"]["config"]["sim"]["physx"]["max_gpu_contact_pairs"] = 123
-
-    migrated = migrate_legacy_experiment_config(raw)
-
-    assert migrated["simulator"]["config"]["sim"]["physx"]["max_gpu_contact_pairs"] == 123
-    assert "contact_pairs_multiplier" not in migrated["robot"]
 
 
 def test_has_torso_false_still_derives_the_base_tag() -> None:

@@ -9,12 +9,7 @@ from holosoma.config_types.algo import JointSymmetryConfig
 
 
 def _swap_leg_phase_channels(phase: torch.Tensor) -> torch.Tensor:
-    """Exchange the two legs' gait-phase channels, the left-right mirror of the phase.
-
-    ``LocomotionGait`` allocates exactly two phase channels and the reward terms pair channel i
-    with foot i (``feet_heights[:, i]``, ``feet_indices[i]``), so mirroring left and right is
-    exchanging them -- no per-robot foot naming needed.
-    """
+    """Exchange the two gait-phase channels."""
     if phase.shape[-1] != 2:
         raise ValueError(f"Gait phase must have one channel per leg (2), got {phase.shape[-1]}")
     return phase.flip(-1)
@@ -122,12 +117,7 @@ class SymmetryUtils:
             self.observation_dims_single_frame[group_name] = idx_single_frame
 
     def _init_robot_config(self) -> None:
-        """Builds the joint index map and sign-flip mask from the symmetry spec.
-
-        ``left[i]`` and ``right[i]`` swap; every other DOF maps to itself. Indices are positions in
-        ``env.dof_names``. The config and runtime share ordered correspondence validation, including
-        repetitions within tags and sign masks that would prevent the mirror from being its own inverse.
-        """
+        """Build the joint index map and sign mask from validated symmetry pairs."""
         left_names, right_names, flip_names = self.symmetry.resolve(
             self.env.robot_config.joint_tags, self.env.dof_names
         )

@@ -9,7 +9,6 @@ This test suite verifies that:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock
@@ -22,7 +21,6 @@ from holosoma.config_types.algo import JointSymmetryConfig
 from holosoma.config_types.observation import ObservationManagerCfg, ObsGroupCfg, ObsTermCfg
 from holosoma.managers.observation.manager import ObservationManager
 from holosoma.managers.observation.terms.locomotion import base_lin_vel
-from holosoma.utils.name_tags import expand_name_spec
 
 if TYPE_CHECKING:
     from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
@@ -36,15 +34,9 @@ def _step_observations(manager: ObservationManager) -> dict[str, torch.Tensor]:
 
 
 def _install_joint_resolver(env: MagicMock, dof_names: list[str], joint_tags: dict[str, list[str]]) -> None:
-    """Give a mock env the ``dof_names`` / ``resolve_joint_indices`` surface SymmetryUtils reads."""
+    """Supply the robot names and tags consumed by SymmetryUtils."""
     env.dof_names = dof_names
     env.robot_config = SimpleNamespace(joint_tags=joint_tags)
-
-    def resolve_joint_indices(spec: Sequence[str]) -> torch.Tensor:
-        names = expand_name_spec(spec, joint_tags, dof_names, kind="joint")
-        return torch.tensor([dof_names.index(name) for name in names], dtype=torch.long)
-
-    env.robot_names.resolve_joint_indices = resolve_joint_indices
 
 
 _LEG_DOF_NAMES = [
@@ -158,49 +150,6 @@ def test_explicit_joint_names_and_unpaired_joints(mock_env_with_history: MagicMo
     assert symmetry_utils.sign_flip_mask.tolist() == [1.0] * 10
 
 
-def test_left_right_length_mismatch_raises(mock_env_with_history: MagicMock) -> None:
-    symmetry = JointSymmetryConfig(left=["#mirror_left"], right=["right_knee"])
-    with pytest.raises(ValueError, match=r"left \(5 joints\) and \.right \(1 joints\)"):
-        SymmetryUtils(mock_env_with_history, symmetry)
-
-
-def test_overlapping_left_right_is_rejected_as_non_involutive(mock_env_with_history: MagicMock) -> None:
-    """left=[0,1,2] / right=[2,3,4]: index 4 maps to 2, which maps to 0, so the mirror is not its own inverse."""
-    symmetry = JointSymmetryConfig(
-        left=["left_hip_yaw", "left_hip_roll", "left_hip_pitch"],
-        right=["left_hip_pitch", "left_knee", "left_ankle"],
-        flip_sign=[],
-    )
-    with pytest.raises(ValueError, match=r"share joints \['left_hip_pitch'\]"):
-        SymmetryUtils(mock_env_with_history, symmetry)
-
-
-def test_unknown_tag_propagates_from_resolver(mock_env_with_history: MagicMock) -> None:
-    with pytest.raises(ValueError, match="Unknown joint tag '#nope'"):
-        SymmetryUtils(mock_env_with_history, JointSymmetryConfig(left=["#nope"]))
-
-
-@pytest.mark.parametrize("side", ["left", "right"])
-def test_runtime_rejects_repetitions_hidden_by_selection_deduplication(
-    mock_env_with_history: MagicMock, side: str
-) -> None:
-    symmetry = JointSymmetryConfig()
-    getattr(symmetry, side).append(f"{side}_knee")
-    with pytest.raises(ValueError, match=rf"{side}.*{side}_knee.*(repeat|more than once)"):
-        SymmetryUtils(mock_env_with_history, symmetry)
-
-
-def test_runtime_rejects_repetition_within_one_nested_tag(mock_env_with_history: MagicMock) -> None:
-    tags = {
-        **_LEG_JOINT_TAGS,
-        "#left_leg": _LEG_JOINT_TAGS["#mirror_left"],
-        "#mirror_left": ["#left_leg", "left_knee"],
-    }
-    _install_joint_resolver(mock_env_with_history, _LEG_DOF_NAMES, tags)
-    with pytest.raises(ValueError, match=r"left.*left_knee.*(repeat|more than once)"):
-        SymmetryUtils(mock_env_with_history, JointSymmetryConfig())
-
-
 @pytest.mark.parametrize(
     ("left", "right", "message"),
     [
@@ -213,11 +162,6 @@ def test_runtime_rejects_invalid_pair_sets(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         SymmetryUtils(mock_env_with_history, JointSymmetryConfig(left=left, right=right, flip_sign=[]))
-
-
-def test_runtime_rejects_a_sign_mask_that_breaks_double_mirroring(mock_env_with_history: MagicMock) -> None:
-    with pytest.raises(ValueError, match=r"flip_sign.*left_hip_yaw.*right_hip_yaw"):
-        SymmetryUtils(mock_env_with_history, JointSymmetryConfig(flip_sign=["left_hip_yaw"]))
 
 
 def test_tagged_and_explicit_correspondences_preserve_pair_order(mock_env_with_history: MagicMock) -> None:

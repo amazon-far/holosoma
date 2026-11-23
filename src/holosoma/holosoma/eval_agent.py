@@ -16,7 +16,6 @@ from holosoma.utils.eval_utils import (
     init_eval_logging,
     load_checkpoint,
     load_saved_experiment_config,
-    replace_retired_simulator,
 )
 from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
 from holosoma.utils.helpers import get_class
@@ -115,7 +114,7 @@ def main() -> None:
         EvalCallbacksConfig, return_unknown_args=True, add_help=False, args=remaining_args
     )
     saved_cfg, saved_wandb_path = load_saved_experiment_config(checkpoint_cfg)
-    eval_cfg = replace_retired_simulator(saved_cfg.get_eval_config(), remaining_args)
+    eval_cfg = saved_cfg.get_eval_config()
     overwritten_tyro_config = parse_config(
         ExperimentConfig,
         default=eval_cfg,

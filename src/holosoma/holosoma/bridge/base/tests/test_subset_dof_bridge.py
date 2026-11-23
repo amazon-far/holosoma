@@ -62,9 +62,6 @@ class _FakeSim:
     def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         return torch.zeros(self.num_dof, 2), torch.zeros(self.num_dof), self.torque_limits
 
-    def dof_indices(self, names: Sequence[str]) -> list[int]:
-        return BaseSimulator.dof_indices(cast("BaseSimulator", self), names)
-
 
 def _robot_config(
     dof_names: Sequence[str],

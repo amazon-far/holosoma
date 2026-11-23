@@ -14,17 +14,13 @@ from omegaconf import OmegaConf
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
-from holosoma.utils.config_registry import parse_config
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.eval_utils import (
     CheckpointConfig,
-    _drop_retired_isaacgym_fields,
     get_all_checkpoint_metadata,
     load_checkpoint,
     load_saved_experiment_config,
-    replace_retired_simulator,
 )
-from holosoma.utils.simulator_config import set_simulator_type
 
 pytestmark = pytest.mark.no_sim
 
@@ -317,7 +313,7 @@ def test_load_saved_experiment_config_migrates_legacy_checkpoint(tmp_path: Path,
     """A checkpoint dumped before the RobotConfig refactor loads through the legacy migration."""
     import yaml
 
-    legacy_dump = Path(__file__).parent / "data" / "legacy_g1_29dof_experiment_config.yaml"
+    legacy_dump = Path(__file__).parent / "data" / "legacy_experiments" / "g1_29dof_isaacsim.yaml"
     raw = yaml.safe_load(legacy_dump.read_text())
     raw["robot"]["init_state"]["rot"] = [0.0, 0.6, 0.0, 0.8]  # xyzw; a non-identity rotation pins the reorder
     expected_defaults = dict(raw["robot"]["init_state"]["default_joint_angles"])
@@ -486,9 +482,8 @@ def test_load_checkpoint_updates_stale_copy(tmp_path: Path) -> None:
         assert result_path.stat().st_mtime > old_mtime
 
 
-# Configs saved by `to_serializable_dict()` at 8b83d915, before the Isaac Gym retirement (see holosoma-v0.0.3).
-# They carry the `isaacgym` blocks every backend serialized before the retirement.
-_PREVIOUS_SCHEMA_DIR = Path(__file__).parent / "data" / "pre_isaacgym_retirement"
+# Saved configurations with the legacy robot and simulator schemas.
+_PREVIOUS_SCHEMA_DIR = Path(__file__).parent / "data" / "legacy_experiments"
 _SURVIVING_BACKEND_FIXTURES = {
     "g1_29dof_mujoco": "mujoco",
     "t1_29dof_isaacsim": "isaacsim",
@@ -501,10 +496,6 @@ def _previous_schema(name: str) -> dict[str, Any]:
     with open(_PREVIOUS_SCHEMA_DIR / f"{name}.yaml") as f:
         data: dict[str, Any] = yaml.safe_load(f)
     return data
-
-
-def _without(block: dict[str, Any], key: str = "isaacgym") -> dict[str, Any]:
-    return {k: v for k, v in block.items() if k != key}
 
 
 def _load_through(boundary: str, data: dict[str, Any], tmp_path: Path) -> ExperimentConfig:
@@ -537,67 +528,23 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     assert (loaded_cfg.simulator._target_, loaded_cfg.simulator.config.name) == (preset._target_, preset.config.name)
     saved_simulator = copy.deepcopy(saved["simulator"])
     saved_simulator["config"].pop("contact_sensor_history_length")
-    saved_simulator["config"]["sim"]["physx"].setdefault("max_gpu_contact_pairs", 16 * 1024 * 1024)
     saved_warp = saved_simulator["config"].pop("mujoco_warp")
     loaded_simulator = copy.deepcopy(loaded["simulator"])
     loaded_simulator["config"]["sim"].pop("mujoco")
     assert loaded_simulator == saved_simulator
     assert loaded_cfg.simulator.config.sim.mujoco.warp.nconmax_per_env == saved_warp["nconmax_per_env"]
     assert loaded_cfg.simulator.config.sim.mujoco.warp.njmax_per_env == saved_warp["njmax_per_env"]
-    assert loaded["robot"]["asset"]["link_physics"] == _without(saved["robot"]["asset"]["link_physics"])
-    assert "apply_dof_armature_in_isaacgym" not in loaded["robot"]
+    assert loaded["robot"]["asset"]["link_physics"] == saved["robot"]["asset"]["link_physics"]
     for name, sensor in saved["sensor"].items():
         loaded_sensor = copy.deepcopy(loaded["sensor"][name])
         loaded_isaacsim = loaded_sensor["isaacsim"]
         assert loaded_isaacsim.pop("renderer") == "rtx"
         assert loaded_isaacsim.pop("mesh_prim_paths") is None
-        assert loaded_sensor == _without(sensor)
+        assert loaded_sensor == sensor
     saved_material_term = saved["randomization"]["setup_terms"].get(_MATERIAL_TERM)
     if saved_material_term is not None:
         loaded_material = loaded["randomization"]["setup_terms"][_MATERIAL_TERM]["params"]["material"]
-        assert loaded_material == _without(saved_material_term["params"]["material"])
-
-
-def test_scene_object_physics_drops_only_the_isaacgym_block() -> None:
-    mujoco_physics = {"friction": [0.7, 0.005, 0.0001]}
-    physics = {"isaacgym": {"friction": 0.5}, "mujoco": mujoco_physics}
-    saved: dict[str, Any] = {
-        "scene": {
-            "rigid_objects": {"box": {"physics": copy.deepcopy(physics)}},
-            "scene_files": {"room": {"object_configs": {"*chair*": {"physics": copy.deepcopy(physics)}}}},
-        }
-    }
-
-    migrated = _drop_retired_isaacgym_fields(saved)
-
-    assert migrated["scene"]["rigid_objects"]["box"]["physics"] == {"mujoco": mujoco_physics}
-    assert migrated["scene"]["scene_files"]["room"]["object_configs"]["*chair*"]["physics"] == {
-        "mujoco": mujoco_physics
-    }
-    assert saved["scene"]["rigid_objects"]["box"]["physics"] == physics  # the caller's dict is not mutated
-
-
-def test_saved_isaacgym_simulator_reports_unsupported_without_override(tmp_path: Path) -> None:
-    saved_cfg = _load_through("checkpoint", _previous_schema("g1_29dof_isaacgym"), tmp_path)
-
-    eval_cfg = replace_retired_simulator(saved_cfg.get_eval_config(), [])
-
-    with pytest.raises(ValueError, match="Isaac Gym simulator is no longer supported"):
-        set_simulator_type(eval_cfg.simulator)
-
-
-@pytest.mark.parametrize("backend", ["isaacsim", "mujoco", "mjwarp"])
-def test_saved_isaacgym_simulator_can_be_overridden_on_the_cli(backend: str, tmp_path: Path) -> None:
-    # Without replace_retired_simulator, tyro attaches the unmatched Isaac Gym default to the
-    # isaacsim slot, so `simulator:isaacsim` would come back as Isaac Gym.
-    saved_cfg = _load_through("checkpoint", _previous_schema("g1_29dof_isaacgym"), tmp_path)
-    args = [f"simulator:{backend}"]
-
-    eval_cfg = parse_config(
-        ExperimentConfig, default=replace_retired_simulator(saved_cfg.get_eval_config(), args), args=args
-    )
-
-    assert eval_cfg.simulator == SIMULATOR_REGISTRY[backend]
+        assert loaded_material == saved_material_term["params"]["material"]
 
 
 @pytest.mark.parametrize(

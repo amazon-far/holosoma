@@ -190,26 +190,16 @@ _PUSH_ENTRIES = [
 
 
 @pytest.mark.parametrize("entry", _PUSH_ENTRIES)
-def test_push_enabled_on_fixed_base_raises(entry: Any) -> None:
-    env, _ = _push_env(floating_base=False, enabled=True)
+@pytest.mark.parametrize("via_param", [False, True], ids=["configured", "term-param"])
+def test_push_enabled_on_fixed_base_raises(entry: Any, via_param: bool) -> None:
+    env, state = _push_env(floating_base=False, enabled=not via_param)
+    params = {"enabled": True} if via_param else {}
     with pytest.raises(ValueError, match="requires a floating base"):
-        _run_push_entry(entry, env)
-    # Both entry points publish their env flags only after the guard.
-    if entry in _PUSH_ENTRY_FLAGS:
-        assert not hasattr(env, _PUSH_ENTRY_FLAGS[entry])
-    assert not hasattr(env, "_max_push_vel")
-    env._push_robots.assert_not_called()
-
-
-@pytest.mark.parametrize("entry", _PUSH_ENTRIES)
-def test_push_enabled_via_param_on_fixed_base_raises(entry: Any) -> None:
-    """The check runs after ``configure``, so an ``enabled=True`` term param is caught too."""
-    env, state = _push_env(floating_base=False, enabled=False)
-    with pytest.raises(ValueError, match="requires a floating base"):
-        _run_push_entry(entry, env, enabled=True)
+        _run_push_entry(entry, env, **params)
     assert state.enabled
     if entry in _PUSH_ENTRY_FLAGS:
         assert not hasattr(env, _PUSH_ENTRY_FLAGS[entry])
+    assert not hasattr(env, "_max_push_vel")
     env._push_robots.assert_not_called()
 
 

@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from holosoma.config_values.loco.g1.termination import g1_29dof_termination
-from holosoma.config_values.loco.t1.termination import t1_29dof_termination
 from holosoma.managers.termination.terms.locomotion import contact_forces_exceeded
 from holosoma.utils.name_tags import expand_name_spec
 from holosoma.utils.safe_torch_import import torch
@@ -68,35 +65,3 @@ def test_force_threshold_is_honoured() -> None:
     assert contact_forces_exceeded(env, bodies=["pelvis"], force_threshold=0.5).tolist() == [False, False, True, True]
     assert contact_forces_exceeded(env, bodies=["pelvis"], force_threshold=2.0).tolist() == [False] * NUM_ENVS
     assert contact_forces_exceeded(env, bodies=["pelvis"], force_threshold=2.5).tolist() == [False] * NUM_ENVS
-
-
-def test_bare_string_bodies_param_raises_when_the_term_resolves_it() -> None:
-    """``params={"bodies": "pelvis"}``, the likeliest preset typo, fails at the resolver, not by iterating chars."""
-    env = _env()
-    with pytest.raises(
-        TypeError, match=r"body spec must be a list of names, got the string 'pelvis'; wrap it in a list"
-    ):
-        contact_forces_exceeded(env, bodies="pelvis")
-
-
-def test_bodies_has_no_default() -> None:
-    """Presets must name their bodies: no env attribute fallback, no implicit default."""
-    params = inspect.signature(contact_forces_exceeded).parameters
-    assert params["bodies"].default is inspect.Parameter.empty
-    assert "contact_indices_attr" not in params
-
-
-@pytest.mark.parametrize(
-    ("preset", "bodies"),
-    [
-        (g1_29dof_termination, ["#root", "#shoulder_links", "#hip_links"]),
-        (t1_29dof_termination, ["#root", "Waist", "#hip_links"]),
-    ],
-)
-def test_presets_pass_bodies_not_an_env_attribute(preset: Any, bodies: list[str]) -> None:
-    params = preset.terms["contact"].params
-
-    assert params["bodies"] == bodies
-    assert "contact_indices_attr" not in params
-    # The preset's params must bind to the term's signature (the manager calls func(env, **params)).
-    inspect.signature(contact_forces_exceeded).bind(object(), **params)

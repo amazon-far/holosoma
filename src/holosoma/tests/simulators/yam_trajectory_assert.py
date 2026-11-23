@@ -21,7 +21,6 @@ per second of sim time (the control rate is set to 50 Hz for the run; the plugin
 Usage:
   python yam_trajectory_assert.py --simulator mujoco      # ClassicBackend, cpu
   python yam_trajectory_assert.py --simulator mjwarp      # WarpBackend, cuda
-  python yam_trajectory_assert.py --simulator isaacgym
   python yam_trajectory_assert.py --simulator isaacsim
   python yam_trajectory_assert.py --simulator mujoco --record /tmp/yam_video
 """
@@ -73,7 +72,7 @@ ARM_TARGETS = {
     "swing": [0.8, 1.2, 0.6, 0.3, 0.0, 0.6],
 }
 FINGER_TARGET = {True: -0.003, False: -0.04}
-# Settled joint states shared by MuJoCo classic/warp, IsaacGym and IsaacSim with the shipped dynamics. This is
+# Settled joint states shared by MuJoCo Classic, Warp, and IsaacSim with the shipped dynamics. This is
 # deliberately separate from the commanded targets above: gravity sag and the coupled fingers are physical, but
 # those effects must remain aligned across backends. Each backend wrapper checks this same table within 1e-3.
 SETTLED_DOF_REFERENCE = {
@@ -358,7 +357,7 @@ def run_checks(sim: Any, config: Any) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="YAM joint-trajectory assertion harness.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
     parser.add_argument("--record", default=None, metavar="DIR", help="save an mp4 of the run to DIR")
     args = parser.parse_args()

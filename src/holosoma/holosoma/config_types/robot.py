@@ -11,8 +11,7 @@ from holosoma.config_types.value_types import UnitQuaternionWXYZ
 from holosoma.utils.name_tags import expand_joint_value_map, validate_tag_table
 from holosoma.utils.robot_properties import resolve_dof_properties
 
-# Unknown fields are a configuration error, not something to drop silently: a removed or misspelled
-# key would otherwise change behaviour without a trace.
+# Reject undeclared configuration fields.
 _FORBID_EXTRA = ConfigDict(extra="forbid")
 
 
@@ -228,7 +227,6 @@ class RobotConfig:
             object.__setattr__(self, "joint_tags", {"#all": list(self.dof_names), **self.joint_tags})
         validate_tag_table(self.body_tags, self.body_names, kind="body")
         validate_tag_table(self.joint_tags, self.dof_names, kind="joint")
-        # Keyed-by-DOF tables resolve against the validated tag table.
         resolve_dof_properties(self)
         return self
 

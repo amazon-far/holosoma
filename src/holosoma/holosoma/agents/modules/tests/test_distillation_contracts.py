@@ -373,11 +373,6 @@ def _export_ready_algo(
         action_scales=torch.full((3,), 0.25),
         robot_config=SimpleNamespace(
             dof_names=["left_hip_pitch_joint", "right_hip_pitch_joint", "waist_yaw_joint"],
-            control=SimpleNamespace(
-                stiffness={"hip_pitch": 100.0, "waist_yaw": 200.0},
-                damping={"hip_pitch": 2.0, "waist_yaw": 5.0},
-                action_scale=0.25,
-            ),
             asset=SimpleNamespace(urdf_file=urdf.name, asset_root=str(tmp_path)),
         ),
     )

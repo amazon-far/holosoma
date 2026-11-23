@@ -395,9 +395,7 @@ class IsaacSim(BaseSimulator):
         pass
 
     def load_assets(self) -> None:
-        """
-        save self.num_dofs, self.num_bodies, self.dof_names, self.body_names in simulator class
-        """
+        """Resolve canonical robot names and map contact-sensor bodies into that order."""
 
         configure_robot_names(self, list(self._robot.joint_names), list(self._robot.body_names))
 
@@ -405,8 +403,6 @@ class IsaacSim(BaseSimulator):
             [self.contact_sensor.body_names.index(body_name) for body_name in self.body_names],
             device=self.sim_device,
         )
-
-        # return self.num_dof, self.num_bodies, self.dof_names, self.body_names
 
     def create_envs(  # type: ignore[override]
         self, num_envs: int, env_origins: torch.Tensor, base_init_state: torch.Tensor

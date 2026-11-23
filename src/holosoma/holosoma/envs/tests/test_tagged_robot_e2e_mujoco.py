@@ -1,12 +1,4 @@
-"""CPU (MuJoCo classic) env-level runs of the TAGGED shipped g1 presets: locomotion and whole-body tracking.
-
-The refactor rewired the locomotion/WBT consumers from ``env.feet_indices`` / ``termination_contact_indices`` to
-``#tag`` specs resolved through ``BaseTask.resolve_*``; the only other CPU e2e (``test_fixed_base_arm_e2e_mujoco``)
-runs an untagged 3-DOF arm. ``g1_29dof`` (loco) and ``g1_29dof_wbt`` are built on the MuJoCo ClassicBackend with
-one env and checked against the preset: feet-height raycasts on the two ``#feet_height`` bodies feeding
-``feet_phase``, the ``contact`` termination bodies, finite per-term rewards, and ``MotionCommand`` setting up on
-the floating base (its fixed-base guard must not fire) and tracking the clip's bodies.
-"""
+"""MuJoCo Classic resolves locomotion and WBT body tags into terrain, termination, rewards, and motion tracking."""
 
 from __future__ import annotations
 

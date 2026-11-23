@@ -119,7 +119,7 @@ def _g1_29dof_reordered() -> RobotConfig:
 
 # Chain base_link -> shoulder_joint (hinge z) -> link1 -> elbow_joint (hinge y) -> link2 ->
 # slide_joint (slide x) -> slider; see data/robots/test_arm. The limit/effort/velocity lists equal
-# the URDF <limit> values (IsaacGym asserts them within 1e-5). Gain keys are the exact DOF names.
+# the URDF limit values. Gain keys are exact DOF names.
 # The base is mounted at a 90 deg yaw (wxyz) so the spawn checks exercise the wxyz -> xyzw path on every
 # backend; a yaw keeps gravity along -z, so the joints still droop and the tip still falls.
 TEST_ARM_YAW_QUAT_WXYZ = [0.7071068, 0.0, 0.0, 0.7071068]

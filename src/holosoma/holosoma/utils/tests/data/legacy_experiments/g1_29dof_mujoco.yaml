@@ -546,7 +546,6 @@ reward:
 robot:
   actions_dim: 29
   algo_obs_dim_dict: {}
-  apply_dof_armature_in_isaacgym: true
   arm_dof_names:
   - left_shoulder_pitch_joint
   - left_shoulder_roll_joint
@@ -573,7 +572,6 @@ robot:
     flip_visual_attachments: false
     link_physics:
       density: null
-      isaacgym: null
       isaacsim: null
       mass: null
       mujoco: null
@@ -628,7 +626,6 @@ robot:
     motor_type: serial
     sdk_robot_type: null
     sdk_type: unitree
-  contact_pairs_multiplier: 16
   control:
     action_clip_value: 100.0
     action_scale: 0.25
@@ -1121,16 +1118,17 @@ scene:
 sensor: {}
 simulator:
   _recursive_: false
-  _target_: holosoma.simulator.isaacgym.isaacgym.IsaacGym
+  _target_: holosoma.simulator.mujoco.mujoco.MuJoCo
   config:
     bridge:
+      dds_config: null
       domain_id: 0
       enabled: false
       interface: null
       joystick_device: 0
       joystick_type: xbox
       publish_odom: true
-      rate_limit_dt: null
+      transport_decimation: 1
       use_joystick: false
       use_ros: false
     contact_sensor_history_length: 3
@@ -1142,7 +1140,7 @@ simulator:
     mujoco_warp:
       nconmax_per_env: 96
       njmax_per_env: null
-    name: isaacgym
+    name: mujoco
     reset_manager:
       events: []
     robot_mjcf_filter:
@@ -1161,12 +1159,12 @@ simulator:
       physx:
         bounce_threshold_velocity: 0.5
         enable_dof_force_sensors: false
-        num_position_iterations: 8
+        num_position_iterations: 4
         num_threads: 4
-        num_velocity_iterations: 4
+        num_velocity_iterations: 0
         solver_type: 1
       render_interval: 1
-      render_mode: human
+      render_mode: fake
       substeps: 1
     viewer:
       camera: null
@@ -1251,4 +1249,5 @@ training:
   num_envs: 4096
   project: hv-g1-manager
   seed: 42
+  teacher_checkpoint: null
   torch_deterministic: false

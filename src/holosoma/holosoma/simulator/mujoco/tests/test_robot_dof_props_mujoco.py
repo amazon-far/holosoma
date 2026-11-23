@@ -31,7 +31,8 @@ from holosoma.simulator.mujoco.robot_addressing import (
     read_dof_limits,
     validate_dof_actuators,
 )
-from holosoma.simulator.mujoco.scene_manager import ActorSpecMeta, MujocoSceneManager
+from holosoma.simulator.mujoco.scene_manager import ActorSpecMeta
+from holosoma.simulator.mujoco.tests._robot_spec import compile_robot_spec
 
 pytestmark = pytest.mark.no_sim
 
@@ -73,12 +74,7 @@ def _compile_robot(mjcf: str = _MJCF) -> tuple[mujoco.MjModel, ActorSpecMeta]:
     robot_spec = mujoco.MjSpec.from_string(mjcf)
     root_body = robot_spec.worldbody.bodies[0]
     root_body.add_freejoint()
-    # _capture_spec_meta reads no instance state, so call it unbound (self=None).
-    meta = MujocoSceneManager._capture_spec_meta(None, robot_spec, _PREFIX, str(root_body.name))  # type: ignore[arg-type]
-    world = mujoco.MjSpec()
-    world.copy_during_attach = True
-    world.attach(robot_spec, frame=world.worldbody.add_frame(), prefix=_PREFIX)
-    return world.compile(), meta
+    return compile_robot_spec(robot_spec, _PREFIX)
 
 
 def _robot(

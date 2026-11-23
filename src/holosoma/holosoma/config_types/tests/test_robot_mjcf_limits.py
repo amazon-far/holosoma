@@ -24,7 +24,7 @@ from tests.simulators._robot_presets import test_arm_fixed
 
 pytestmark = pytest.mark.no_sim
 
-ATOL = 1e-5  # the IsaacGym load-time assertion tolerance, shared with the URDF test
+ATOL = 1e-5
 ONE_DOF_JOINT_TYPES = {mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE}
 
 # yam's MJCF authors no motors and no ctrlrange (both come from the config at load), so it is not compared here.

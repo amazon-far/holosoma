@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
-from loguru import logger
 
 from holosoma.config_values.experiment import EXPERIMENT_REGISTRY
 from holosoma.utils.config_migration import migrate_legacy_experiment_config
@@ -26,7 +24,7 @@ def _motion(raw: dict[str, Any]) -> dict[str, Any]:
 
 def _legacy() -> dict[str, Any]:
     raw: dict[str, Any] = yaml.safe_load(
-        (Path(__file__).parent / "data/legacy_g1_29dof_experiment_config.yaml").read_text()
+        (Path(__file__).parent / "data/legacy_experiments/g1_29dof_isaacsim.yaml").read_text()
     )
     raw["command"] = {
         "setup_terms": {
@@ -47,15 +45,7 @@ def _legacy() -> dict[str, Any]:
     return raw
 
 
-@pytest.fixture
-def warnings() -> Iterator[list[str]]:
-    messages: list[str] = []
-    sink = logger.add(lambda message: messages.append(message.record["message"]), level="WARNING")
-    yield messages
-    logger.remove(sink)
-
-
-@pytest.mark.parametrize("backend", ["isaacgym.IsaacGym", "isaacsim.IsaacSim"])
+@pytest.mark.parametrize("backend", ["isaacsim.IsaacSim"])
 @pytest.mark.parametrize("separator", [":", "."])
 def test_legacy_known_body_order_becomes_exact_selector(backend: str, separator: str, warnings: list[str]) -> None:
     raw = _legacy()

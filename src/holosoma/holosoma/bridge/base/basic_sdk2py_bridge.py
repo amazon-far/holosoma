@@ -21,16 +21,7 @@ class BasicSdk2Bridge(ABC):
     """Abstract base class for SDK2Py bridge implementations."""
 
     def requires_explicit_dof_order(self) -> bool:
-        """Whether the transport gives motor slots a fixed order independent of the simulator.
-
-        Return ``True`` for SDK packets whose unnamed motor array follows a hardware model's
-        order. Reordering ``RobotConfig.dof_names`` changes the policy's action order, so it
-        cannot also redefine those packet slots. Such bridges require ``controlled_dof_names``.
-
-        Return ``False`` when the receiving API accepts the simulator's order or transmits
-        joint names. The default selection is then canonical order minus ``excluded_dof_names``;
-        an explicit controlled tuple can still select or reorder that subset.
-        """
+        """Whether the transport requires an explicit DOF list in hardware motor order."""
         return False
 
     def __init__(
@@ -60,7 +51,7 @@ class BasicSdk2Bridge(ABC):
             None if self._apply_indices is None else np.asarray(self.dof_indices, dtype=np.intp)
         )
 
-        # SDK motor count is the size of the controlled subset (was: simulator.num_dof).
+        # SDK motor count is the size of the controlled subset.
         self.num_motor = len(self.dof_indices)
         self.torques = np.zeros(self.num_motor)  # Avoids config/model mismatches
         # The effort limits the simulator enforces (config where given, asset otherwise), for the controlled subset.
