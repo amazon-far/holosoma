@@ -16,7 +16,7 @@ CALLS: list[tuple[Any, ...]] = []
 
 class _Base:
     def __init__(self, cfg: Any, env: Any) -> None:
-        self.cfg = cfg
+        pass
 
     def setup(self) -> None:
         CALLS.append(("class.setup", id(self)))

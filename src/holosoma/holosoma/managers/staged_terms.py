@@ -60,7 +60,7 @@ class StagedTerms:
     ) -> None:
         self._class_terms: dict[str, _ClassTerm] = {}
         self._functions: dict[Stage, list[tuple[str, Callable[..., Any], Any]]] = {stage: [] for stage in STAGES}
-        self._function_impls: dict[str, Callable[..., Any]] = {}
+        self._function_names: set[str] = set()
         self._run_every_stage = class_terms_run_every_stage
         self.instances: dict[str, Any] = {}
         """Class terms by name, in the order they were first listed."""
@@ -86,7 +86,7 @@ class StagedTerms:
     ) -> None:
         if not issubclass(term_class, term_base):
             raise TypeError(f"Class-based {context} '{name}' must inherit from {term_base.__name__}.")
-        if name in self._function_impls:
+        if name in self._function_names:
             raise ValueError(f"{context.capitalize()} '{name}' is listed as both a function and a class.")
         entry = self._class_terms.get(name)
         if entry is None:
@@ -104,7 +104,7 @@ class StagedTerms:
     def _add_function(self, name: str, func: Callable[..., Any], term_cfg: Any, stage: Stage, context: str) -> None:
         if name in self._class_terms:
             raise ValueError(f"{context.capitalize()} '{name}' is listed as both a function and a class.")
-        self._function_impls.setdefault(name, func)
+        self._function_names.add(name)
         self._functions[stage].append((name, func, term_cfg))
 
     def classes(self, stage: Stage) -> Iterator[tuple[str, Any]]:

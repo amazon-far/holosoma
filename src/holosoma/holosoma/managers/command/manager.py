@@ -60,7 +60,7 @@ class CommandManager:
         self.command_cfg = _resolve_command_cfg(getattr(self.cfg, "params", None))
 
         self.staged_terms = StagedTerms(cfg, env, term_base=CommandTermBase, context="command term", owner=self)
-        # Read by downstream code; keep the name.
+        # Kept for external code that reads ``_state_terms``.
         self._state_terms = self.staged_terms.instances
 
     def setup(self) -> None:
@@ -85,7 +85,7 @@ class CommandManager:
         CommandTermBase or None
             Stateful command term instance if it exists, otherwise ``None``.
         """
-        return self._state_terms.get(term_name)
+        return self.get_term(term_name)
 
     def get_term(self, name: str) -> CommandTermBase | None:
         """Return the class term registered as ``name``, or ``None``."""

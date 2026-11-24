@@ -206,9 +206,6 @@ class PolicyTask(BaseTask):
     def _compute_reward(self) -> None:
         self.rew_buf[:] = self.reward_manager.compute(self.dt)
 
-    # ------------------------------------------------------------------
-    # Hooks for subclasses
-
     def _collect_metrics(self) -> None:
         """Copy the metrics every manager's class terms publish into ``log_dict``.
 
@@ -245,6 +242,9 @@ class PolicyTask(BaseTask):
     def add_metric_source(self, source: Any) -> None:
         """Also collect the metrics of ``source``'s terms, which it yields from ``iter_terms()``."""
         self._metric_sources.append(source)
+
+    # ------------------------------------------------------------------
+    # Hooks for subclasses
 
     def _pre_compute_observations_callback(self) -> None:
         """Hook invoked after physics but before observation terms compute (no-op by default)."""

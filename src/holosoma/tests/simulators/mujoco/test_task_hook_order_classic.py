@@ -65,10 +65,10 @@ def test_policy_task_phases_resolve_in_the_lifecycle_order() -> None:
         assert task.hooks.names(Phase.FRAME_END) == FRAME_END
         assert task.hooks.names(Phase.RESET) == RESET
 
-        seen: list[float] = []
+        calls: list[None] = []
         task.hooks.add(
             Phase.FRAME_END,
-            lambda: seen.append(float(task.rew_buf.sum())),
+            lambda: calls.append(None),
             name="test.after_reward",
             after=HookRef(TASK_SLOT, TaskHook.REWARD),
             before=HookRef(TASK_SLOT, TaskHook.UPDATE_LOG_DICT),
@@ -79,4 +79,4 @@ def test_policy_task_phases_resolve_in_the_lifecycle_order() -> None:
         task.reset_envs_idx()
         task.compute_reset_observations()
         task.step({"actions": task.action_manager.action * 0})
-        assert len(seen) == 1
+        assert len(calls) == 1
