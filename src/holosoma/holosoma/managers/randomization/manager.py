@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import importlib
+from collections.abc import ItemsView, Iterator
+from contextlib import contextmanager
 from typing import Any
 
-from holosoma.config_types.randomization import RandomizationManagerCfg, RandomizationTermCfg
+from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.managers.randomization.exceptions import RandomizerNotSupportedError
+from holosoma.managers.staged_terms import Stage, StagedTerms
 from holosoma.utils.sampler import STAGE_RESET, STAGE_SETUP, STAGE_STEP, TermSampler
 
 from .base import RandomizationTermBase
@@ -36,113 +38,12 @@ class RandomizationManager:
         self.device = device
         self.logger = getattr(env, "logger", None)
 
-        # Storage for resolved stateless functions
-        self._setup_funcs: dict[str, Any] = {}
-        self._reset_funcs: dict[str, Any] = {}
-        self._step_funcs: dict[str, Any] = {}
+        self.staged_terms = StagedTerms(
+            cfg, env, term_base=RandomizationTermBase, context="randomization term", owner=self
+        )
 
-        # Storage for class-based hooks with their lifecycle bindings
-        self._class_entries: list[dict[str, Any]] = []
-        self._state_terms: dict[str, RandomizationTermBase] = {}
-
-        # Storage for term names and configs
-        self._setup_names: list[str] = []
-        self._reset_names: list[str] = []
-        self._step_names: list[str] = []
-
-        self._setup_cfgs: list[RandomizationTermCfg] = []
-        self._reset_cfgs: list[RandomizationTermCfg] = []
-        self._step_cfgs: list[RandomizationTermCfg] = []
-
-        # Track failed randomizers to avoid re-attempting them
+        # Terms a simulator does not support, skipped after setup when ``ignore_unsupported`` is set
         self._failed_randomizers: set[str] = set()
-
-        # Initialize terms with filtering
-        self._initialize_terms()
-
-    def _initialize_terms(self) -> None:
-        """Initialize randomization terms and resolve their functions/classes."""
-        # Setup terms
-        for term_name, term_cfg in self.cfg.setup_terms.items():
-            resolved = self._resolve_function(term_cfg.func)
-            if isinstance(resolved, type):
-                if not issubclass(resolved, RandomizationTermBase):
-                    raise TypeError(
-                        f"Class-based randomization term '{term_name}' must inherit from RandomizationTermBase."
-                    )
-                self._register_class_term(term_name, resolved, term_cfg, "setup")
-            else:
-                self._setup_funcs[term_name] = resolved
-            self._setup_names.append(term_name)
-            self._setup_cfgs.append(term_cfg)
-
-        # Reset terms
-        for term_name, term_cfg in self.cfg.reset_terms.items():
-            resolved = self._resolve_function(term_cfg.func)
-            if isinstance(resolved, type):
-                if not issubclass(resolved, RandomizationTermBase):
-                    raise TypeError(
-                        f"Class-based randomization term '{term_name}' must inherit from RandomizationTermBase."
-                    )
-                self._register_class_term(term_name, resolved, term_cfg, "reset")
-            else:
-                self._reset_funcs[term_name] = resolved
-            self._reset_names.append(term_name)
-            self._reset_cfgs.append(term_cfg)
-
-        # Step terms
-        for term_name, term_cfg in self.cfg.step_terms.items():
-            resolved = self._resolve_function(term_cfg.func)
-            if isinstance(resolved, type):
-                if not issubclass(resolved, RandomizationTermBase):
-                    raise TypeError(
-                        f"Class-based randomization term '{term_name}' must inherit from RandomizationTermBase."
-                    )
-                self._register_class_term(term_name, resolved, term_cfg, "step")
-            else:
-                self._step_funcs[term_name] = resolved
-            self._step_names.append(term_name)
-            self._step_cfgs.append(term_cfg)
-
-    def _register_class_term(
-        self,
-        term_name: str,
-        term_class: type[RandomizationTermBase],
-        term_cfg: RandomizationTermCfg,
-        stage: str,
-    ) -> None:
-        """Instantiate or update a class-based randomization hook for the given stage.
-
-        Parameters
-        ----------
-        term_name : str
-            Registry name of the randomization term.
-        term_class : type[RandomizationTermBase]
-            Randomization term implementation class.
-        term_cfg : RandomizationTermCfg
-            Configuration for the randomization term.
-        stage : str
-            Lifecycle stage being registered (``"setup"``, ``"reset"``, or ``"step"``).
-        """
-        for entry in self._class_entries:
-            if entry["name"] != term_name:
-                continue
-            # Same registry name across stages must be the SAME class — reuse the one instance so a
-            # multi-stage term shares state. A name collision with a DIFFERENT class is a config error
-            # (it would otherwise silently create a duplicate entry while _state_terms kept only one).
-            if type(entry["instance"]) is not term_class:
-                raise ValueError(
-                    f"Randomization term '{term_name}' is registered with conflicting classes "
-                    f"{type(entry['instance']).__name__} and {term_class.__name__}."
-                )
-            entry["stages"].add(stage)
-            self._state_terms.setdefault(term_name, entry["instance"])
-            return
-
-        instance = term_class(term_cfg, self.env)
-        instance.manager = self
-        self._class_entries.append({"name": term_name, "instance": instance, "stages": {stage}})
-        self._state_terms[term_name] = instance
 
     def get_state(self, term_name: str) -> RandomizationTermBase | None:
         """Return a stateful randomization term by name.
@@ -157,68 +58,37 @@ class RandomizationManager:
         RandomizationTermBase or None
             Stateful term instance if found, otherwise ``None``.
         """
-        return self._state_terms.get(term_name)
+        return self.get_term(term_name)
 
-    def _resolve_function(self, func: Any | str) -> Any:
-        """Resolve a randomization callable or class from a string specification.
+    def get_term(self, name: str) -> RandomizationTermBase | None:
+        """Return the class term registered as ``name``, or ``None``."""
+        return self.staged_terms.instances.get(name)
 
-        Parameters
-        ----------
-        func : Any or str
-            Function reference or string path like ``"module:function"``.
+    def iter_terms(self) -> ItemsView[str, RandomizationTermBase]:
+        """Iterate over ``(name, instance)`` for the class terms."""
+        return self.staged_terms.instances.items()
 
-        Returns
-        -------
-        Any
-            Resolved callable or class.
+    def _sampler(self, term_name: str, stage: int) -> TermSampler:
+        return TermSampler.bind(self.env.dr_base_seed, term_name, stage, self.env.episode_count)
 
-        Raises
-        ------
-        ValueError
-            If the string path is malformed or the target cannot be imported.
-        """
-        if isinstance(func, str):
-            if ":" not in func:
-                raise ValueError(f"Function string must be in format 'module:function', got: {func}")
-            module_path, func_name = func.split(":", 1)
-            try:
-                module = importlib.import_module(module_path)
-                return getattr(module, func_name)
-            except (ImportError, AttributeError) as exc:
-                raise ValueError(f"Failed to import randomization function '{func}': {exc}") from exc
-        return func
+    @contextmanager
+    def _skip_if_unsupported(self, term_name: str) -> Iterator[None]:
+        """Record ``term_name`` as failed instead of raising when ``ignore_unsupported`` is set."""
+        try:
+            yield
+        except RandomizerNotSupportedError:
+            if not self.cfg.ignore_unsupported:
+                raise
+            self._failed_randomizers.add(term_name)
 
     def setup(self) -> None:
         """Run startup hooks."""
-        # Run setup for class-based terms, filtering out unsupported ones
-        for entry in self._class_entries:
-            if "setup" in entry["stages"]:
-                try:
-                    entry["instance"].setup(
-                        TermSampler.bind(self.env.dr_base_seed, entry["name"], STAGE_SETUP, self.env.episode_count)
-                    )
-                except RandomizerNotSupportedError:
-                    if self.cfg.ignore_unsupported:
-                        # Mark as failed to skip in reset() and step()
-                        self._failed_randomizers.add(entry["name"])
-                    else:
-                        raise
-
-        # Run setup for function-based terms
-        for term_name, term_cfg in zip(self._setup_names, self._setup_cfgs, strict=False):
-            if term_name in self._setup_funcs:
-                func = self._setup_funcs[term_name]
-                try:
-                    func(
-                        self.env,
-                        sampler=TermSampler.bind(self.env.dr_base_seed, term_name, STAGE_SETUP, self.env.episode_count),
-                        **term_cfg.params,
-                    )
-                except RandomizerNotSupportedError:
-                    if self.cfg.ignore_unsupported:
-                        self._failed_randomizers.add(term_name)
-                    else:
-                        raise
+        for name, instance in self.staged_terms.classes("setup"):
+            with self._skip_if_unsupported(name):
+                instance.setup(self._sampler(name, STAGE_SETUP))
+        for name, func, term_cfg in self.staged_terms.functions("setup"):
+            with self._skip_if_unsupported(name):
+                func(self.env, sampler=self._sampler(name, STAGE_SETUP), **term_cfg.params)
 
         self.env.simulator.forward_kinematics()
 
@@ -230,37 +100,17 @@ class RandomizationManager:
         env_ids : Any
             Environment identifiers selected for reset (matches environment API expectations).
         """
-        for entry in self._class_entries:
-            if "reset" in entry["stages"] and entry["name"] not in self._failed_randomizers:
-                entry["instance"].reset(
-                    env_ids,
-                    TermSampler.bind(self.env.dr_base_seed, entry["name"], STAGE_RESET, self.env.episode_count),
-                )
-
-        for term_name, term_cfg in zip(self._reset_names, self._reset_cfgs, strict=False):
-            if term_name in self._reset_funcs and term_name not in self._failed_randomizers:
-                func = self._reset_funcs[term_name]
-                # Don't catch unsupported here because setup() has already checked
-                func(
-                    self.env,
-                    env_ids,
-                    sampler=TermSampler.bind(self.env.dr_base_seed, term_name, STAGE_RESET, self.env.episode_count),
-                    **term_cfg.params,
-                )
+        self._run("reset", STAGE_RESET, env_ids)
 
     def step(self) -> None:
         """Run per-step hooks (if any are configured)."""
-        for entry in self._class_entries:
-            if "step" in entry["stages"] and entry["name"] not in self._failed_randomizers:
-                entry["instance"].step(
-                    TermSampler.bind(self.env.dr_base_seed, entry["name"], STAGE_STEP, self.env.episode_count)
-                )
+        self._run("step", STAGE_STEP)
 
-        for term_name, term_cfg in zip(self._step_names, self._step_cfgs, strict=False):
-            if term_name in self._step_funcs and term_name not in self._failed_randomizers:
-                func = self._step_funcs[term_name]
-                func(
-                    self.env,
-                    sampler=TermSampler.bind(self.env.dr_base_seed, term_name, STAGE_STEP, self.env.episode_count),
-                    **term_cfg.params,
-                )
+    def _run(self, stage: Stage, sampler_stage: int, *env_ids: Any) -> None:
+        """Run ``stage``'s terms that setup did not mark unsupported, each with its own sampler."""
+        for name, instance in self.staged_terms.classes(stage):
+            if name not in self._failed_randomizers:
+                getattr(instance, stage)(*env_ids, self._sampler(name, sampler_stage))
+        for name, func, term_cfg in self.staged_terms.functions(stage):
+            if name not in self._failed_randomizers:
+                func(self.env, *env_ids, sampler=self._sampler(name, sampler_stage), **term_cfg.params)

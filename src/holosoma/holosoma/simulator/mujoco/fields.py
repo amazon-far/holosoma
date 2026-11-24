@@ -29,7 +29,7 @@ def collect_required_fields(*managers: Any) -> list[str]:
     ----------
     *managers : Any
         Manager instances to scan (e.g., RandomizationManager, ObservationManager, etc.).
-        Managers must have a _setup_funcs attribute containing resolved functions.
+        Managers without ``staged_terms`` contribute nothing.
 
     Returns
     -------
@@ -48,11 +48,12 @@ def collect_required_fields(*managers: Any) -> list[str]:
         if manager is None:
             continue
 
-        # Check if manager has setup functions (manager-based pattern)
-        if hasattr(manager, "_setup_funcs"):
-            for func in manager._setup_funcs.values():
-                if hasattr(func, MUJOCO_FIELD_ATTR):
-                    fields.add(getattr(func, MUJOCO_FIELD_ATTR))
+        staged_terms = getattr(manager, "staged_terms", None)
+        if staged_terms is None:
+            continue
+        for _, func, _ in staged_terms.functions("setup"):
+            if hasattr(func, MUJOCO_FIELD_ATTR):
+                fields.add(getattr(func, MUJOCO_FIELD_ATTR))
 
     return list(fields)
 
@@ -71,7 +72,7 @@ def prepare_manager_fields(simulator: MuJoCo, **managers: Any) -> None:
     **managers : Any
         Keyword arguments of manager instances to scan (e.g.,
         randomization_manager=..., observation_manager=..., reward_manager=...).
-        Managers must have a _setup_funcs attribute for field discovery.
+        Their setup functions are scanned for field requirements.
 
     Notes
     -----

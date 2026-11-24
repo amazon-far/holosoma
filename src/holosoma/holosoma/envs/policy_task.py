@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
-
-from loguru import logger
 
 from holosoma.config_types.env import EnvConfig
 from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.envs.base_task.task_hooks import TaskHook
 from holosoma.managers.action import ActionManager
 from holosoma.managers.command import CommandManager
-from holosoma.managers.curriculum import CurriculumManager
-from holosoma.managers.curriculum.terms.locomotion import convert_legacy_checkpoint_state
 from holosoma.managers.observation import ObservationManager
 from holosoma.managers.reward import RewardManager
 from holosoma.utils.safe_torch_import import torch
@@ -22,7 +20,7 @@ class PolicyTask(BaseTask):
     """BaseTask specialization for policy training and evaluation."""
 
     def __init__(self, tyro_config: EnvConfig) -> None:
-        for name in ("observation", "action", "reward", "termination", "command", "curriculum"):
+        for name in ("observation", "action", "reward", "termination", "command"):
             if getattr(tyro_config, name) is None:
                 raise ValueError(f"{name}_config must be provided for manager-based environments.")
         self.is_evaluating = False
@@ -44,7 +42,6 @@ class PolicyTask(BaseTask):
         self.action_manager = ActionManager(config.action, self, self.device)
         self.reward_manager = RewardManager(config.reward, self, self.device)
         self.command_manager = CommandManager(config.command, self, self.device)
-        self.curriculum_manager = CurriculumManager(config.curriculum, self, self.device)
 
     def _prepare_manager_fields(self) -> None:
         self.simulator.prepare_manager_fields(
@@ -57,7 +54,6 @@ class PolicyTask(BaseTask):
         super()._setup_task_managers()
         self.action_manager.setup()
         self.command_manager.setup()
-        self.curriculum_manager.setup()
 
     def _init_buffers(self) -> None:
         super()._init_buffers()
@@ -74,48 +70,14 @@ class PolicyTask(BaseTask):
         self._pending_episode_lengths = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self._pending_episode_update_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._pending_torque_rfi: tuple[bool, float] = (False, 0.0)
+        self._metric_sources: list[Any] = []
 
     def get_checkpoint_state(self) -> dict[str, Any]:
-        """Return environment-specific state to persist in checkpoints."""
-        state: dict[str, Any] = {}
-        curriculum_state = self.curriculum_manager.state_dict()
-        if curriculum_state:
-            state["curriculum"] = curriculum_state
-        return state
+        """Return task state to persist in checkpoints; the base policy task has none."""
+        return {}
 
     def load_checkpoint_state(self, state: dict[str, Any] | None) -> None:
-        """Restore environment-specific state from a checkpoint."""
-        if not state:
-            return
-        if "curriculum" not in state:
-            state = convert_legacy_checkpoint_state(self.curriculum_manager, state)
-        curriculum_state = state.get("curriculum")
-        if not curriculum_state:
-            return
-        self.curriculum_manager.load_state_dict(curriculum_state)
-        for name in curriculum_state:
-            term = self.curriculum_manager.get_term(name)
-            if term is not None:
-                term.after_checkpoint_load()
-
-    def synchronize_curriculum_state(self, *, device: str, world_size: int) -> None:
-        """Broadcast rank 0's curriculum state to every rank."""
-        if world_size <= 1:
-            return
-        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
-            return
-        # Every rank builds the same terms from the same config, so all ranks agree on skipping. A term
-        # whose state is empty depending on runtime data would deadlock here.
-        state = self.curriculum_manager.state_dict()
-        if not state:
-            return
-        if not getattr(self, "_logged_curriculum_sync", False):
-            logger.info(f"Multi-GPU curriculum synchronization enabled for terms: {sorted(state)}")
-            self._logged_curriculum_sync = True
-        payload = [state]
-        torch.distributed.broadcast_object_list(payload, src=0, device=torch.device(device))
-        if torch.distributed.get_rank() != 0:
-            self.curriculum_manager.load_state_dict(payload[0])
+        """Restore task state returned by :meth:`get_checkpoint_state`."""
 
     def set_is_evaluating(self) -> None:
         """
@@ -132,7 +94,42 @@ class PolicyTask(BaseTask):
         self._pending_episode_lengths[env_ids] = self.episode_length_buf[env_ids]
         self._pending_episode_update_mask[env_ids] = True
 
-    def _reset_task_managers(self, env_ids: torch.Tensor) -> None:
+    def _frame_end_steps(self) -> list[tuple[TaskHook, Callable[[], None]]]:
+        base = dict(super()._frame_end_steps())
+        return [
+            (TaskHook.COUNT_FRAME, base[TaskHook.COUNT_FRAME]),
+            (TaskHook.TERMINATION, base[TaskHook.TERMINATION]),
+            (TaskHook.OBSERVATION_FRAME, lambda: self.observation_manager.new_frame()),
+            (TaskHook.PRE_COMPUTE_OBSERVATIONS, lambda: self._pre_compute_observations_callback()),
+            (TaskHook.REWARD, lambda: self._compute_reward()),
+            (TaskHook.UPDATE_LOG_DICT, lambda: self._update_log_dict()),
+            (TaskHook.TERMINAL_OBSERVATIONS, lambda: self._store_timeout_observations()),
+            (TaskHook.RESET, base[TaskHook.RESET]),
+            # After resets, so WBT termination checks see the tracking error before the command
+            # manager advances the motion clip.
+            (TaskHook.COMMAND_STEP, lambda: self.command_manager.step()),
+            (TaskHook.RANDOMIZATION_STEP, base[TaskHook.RANDOMIZATION_STEP]),
+            (TaskHook.METRICS, lambda: self._collect_metrics()),
+            (TaskHook.OBSERVATIONS, lambda: self._compute_observations()),
+        ]
+
+    def _reset_steps(self) -> list[tuple[TaskHook, Callable[[torch.Tensor], None]]]:
+        base = dict(super()._reset_steps())
+        return [
+            (TaskHook.PREPARE_RESET, base[TaskHook.PREPARE_RESET]),
+            (TaskHook.WRITE_STATE, base[TaskHook.WRITE_STATE]),
+            (TaskHook.COUNT_EPISODE, base[TaskHook.COUNT_EPISODE]),
+            (TaskHook.REWARD_RESET, lambda env_ids: self._reset_reward(env_ids)),
+            (TaskHook.RANDOMIZATION_RESET, base[TaskHook.RANDOMIZATION_RESET]),
+            (TaskHook.TERMINATION_RESET, base[TaskHook.TERMINATION_RESET]),
+            (TaskHook.ACTION_RESET, lambda env_ids: self.action_manager.reset(env_ids)),
+            (TaskHook.COMMAND_RESET, lambda env_ids: self.command_manager.reset(env_ids)),
+            (TaskHook.MANAGERS_RESET, base[TaskHook.MANAGERS_RESET]),
+            (TaskHook.REFRESH, base[TaskHook.REFRESH]),
+            (TaskHook.AFTER_RESET_SYNC, base[TaskHook.AFTER_RESET_SYNC]),
+        ]
+
+    def _reset_reward(self, env_ids: torch.Tensor) -> None:
         reward_extras = self.reward_manager.reset(env_ids)
 
         # Normalise extras dictionary to contain (possibly empty) sub-sections.
@@ -142,11 +139,6 @@ class PolicyTask(BaseTask):
         self.extras["raw_episode_all"] = reward_extras.get("raw_episode_all", {})
 
         self.extras["time_outs"] = self.time_out_buf
-
-        super()._reset_task_managers(env_ids)
-        self.action_manager.reset(env_ids)
-        self.command_manager.reset(env_ids)
-        self.curriculum_manager.reset(env_ids)
 
     def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
         self._pre_compute_observations_callback()
@@ -177,11 +169,7 @@ class PolicyTask(BaseTask):
     def _apply_force_in_physics_step(self) -> None:
         self.action_manager.apply_actions()
 
-    def _evaluate_frame(self, env_ids: torch.Tensor) -> None:
-        self.observation_manager.new_frame()
-        self._pre_compute_observations_callback()
-        self._compute_reward()
-        self._update_log_dict()
+    def _store_timeout_observations(self) -> None:
         # Time-outs are a subset of resets; only they are bootstrapped from a terminal observation.
         timeout_ids = self.time_out_buf.nonzero(as_tuple=False).flatten()
         if timeout_ids.numel() > 0:
@@ -189,16 +177,11 @@ class PolicyTask(BaseTask):
 
     def _post_physics_step(self) -> tuple[dict[str, Any], torch.Tensor, torch.Tensor, dict[str, Any]]:
         super()._post_physics_step()
-        self.obs_buf_dict = self.observation_manager.step()
         self.extras["to_log"] = self.log_dict
         return self.obs_buf_dict, self.rew_buf, self.reset_buf, self.extras
 
-    def _step_managers(self) -> None:
-        # After resets, so WBT termination checks see the tracking error before the command
-        # manager advances the motion clip.
-        self.command_manager.step()
-        self.curriculum_manager.step()
-        super()._step_managers()
+    def _compute_observations(self) -> None:
+        self.obs_buf_dict = self.observation_manager.step()
 
     def _store_final_observations(self, env_ids: torch.Tensor, final_obs_dict: dict[str, Any]) -> None:
         if not final_obs_dict:
@@ -222,6 +205,43 @@ class PolicyTask(BaseTask):
 
     def _compute_reward(self) -> None:
         self.rew_buf[:] = self.reward_manager.compute(self.dt)
+
+    def _collect_metrics(self) -> None:
+        """Copy the metrics every manager's class terms publish into ``log_dict``.
+
+        A term publishes by keeping a ``metrics`` mapping of tensors, refreshed wherever it computes them;
+        it is read once per frame, by the ``METRICS`` step after the managers step and before
+        observations. Keys are logged as ``Env/<key>``, averaged over the logging window.
+
+        Raises
+        ------
+        ValueError
+            If two terms publish the same key.
+        """
+        publishers: dict[str, str] = {}
+        for manager in self._metric_managers():
+            for name, term in manager.iter_terms():
+                for key, value in getattr(term, "metrics", {}).items():
+                    if key in publishers:
+                        raise ValueError(f"Metric '{key}' is published by both '{publishers[key]}' and '{name}'.")
+                    publishers[key] = name
+                    self.log_dict[key] = value
+
+    def _metric_managers(self) -> list[Any]:
+        """Managers whose class terms may publish metrics."""
+        return [
+            self.action_manager,
+            self.command_manager,
+            self.reward_manager,
+            self.termination_manager,
+            self.randomization_manager,
+            self.terrain_manager,
+            *self._metric_sources,
+        ]
+
+    def add_metric_source(self, source: Any) -> None:
+        """Also collect the metrics of ``source``'s terms, which it yields from ``iter_terms()``."""
+        self._metric_sources.append(source)
 
     # ------------------------------------------------------------------
     # Hooks for subclasses

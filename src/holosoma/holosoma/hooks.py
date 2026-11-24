@@ -66,7 +66,10 @@ class Phase(str, Enum):
     simulator emits ``*_STEP`` around each physics step and the task emits the other phases; motion
     playback also emits ``EPISODE_*`` at clip boundaries. The names are engine-agnostic — they don't
     assume what drives the outer tick (a policy, a bridge, ...). Episode events fire once per batch of
-    environments that end or start together, with their ids as a long tensor.
+    environments that end or start together, with their ids as a long tensor. ``RESET`` fires on every
+    reset call, between ``EPISODE_END`` and ``EPISODE_START``, with the reset ids; they are empty on the
+    frames where no environment resets. The task runs its own steps as hooks on ``PRE_STEP``,
+    ``FRAME_END`` and ``RESET`` (see ``TaskHook``).
     """
 
     payload: tuple[str, ...]
@@ -77,6 +80,7 @@ class Phase(str, Enum):
     POST_STEP = ("post_step", (), True)
     FRAME_END = ("frame_end", (), True)
     EPISODE_END = ("episode_end", ("env_ids",), False)
+    RESET = ("reset", ("env_ids",), False)
     EPISODE_START = ("episode_start", ("env_ids",), False)
     CLOSE = ("close", (), False)
 
@@ -95,7 +99,7 @@ class Phase(str, Enum):
 FrameCallback = Callable[[], Any]
 """Callback for a zero-payload periodic phase (``FRAME_BEGIN``/``PRE_STEP``/``POST_STEP``/``FRAME_END``)."""
 EpisodeCallback = Callable[["torch.Tensor"], Any]
-"""Callback for an episode phase (``EPISODE_START``/``EPISODE_END``); receives the batch's ``env_ids``."""
+"""Callback for ``EPISODE_START``/``EPISODE_END``/``RESET``; receives the batch's ``env_ids``."""
 CloseCallback = Callable[[], Any]
 """Callback for ``CLOSE`` (zero payload, fires once at teardown)."""
 
@@ -261,7 +265,7 @@ class HookRegistry:
     @overload
     def add(
         self,
-        phase: Literal[Phase.EPISODE_END, Phase.EPISODE_START],
+        phase: Literal[Phase.EPISODE_END, Phase.EPISODE_START, Phase.RESET],
         callback: EpisodeCallback,
         *,
         name: str | None = None,

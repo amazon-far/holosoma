@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import ItemsView
-from typing import Any, cast
+from typing import Any
 
 import torch
 
 from holosoma.config_types.action import ActionManagerCfg
+from holosoma.managers.utils import resolve_callable
 
 from .base import ActionTermBase
 
@@ -67,7 +67,7 @@ class ActionManager:
         """Initialize action terms and resolve their classes."""
         for term_name, term_cfg in self.cfg.terms.items():
             # Resolve the action term class
-            term_class = self._resolve_class(term_cfg.func)
+            term_class = resolve_callable(term_cfg.func, context="action term")
 
             # Check if it's a valid action term class
             if not issubclass(term_class, ActionTermBase):
@@ -78,34 +78,6 @@ class ActionManager:
             self._term_instances[term_name] = instance
             self._term_names.append(term_name)
             self._term_dims.append(instance.action_dim)
-
-    def _resolve_class(self, class_path: str) -> type:
-        """Resolve class from string path.
-
-        Parameters
-        ----------
-        class_path : str
-            String path like "module.path:ClassName"
-
-        Returns
-        -------
-        type
-            Resolved class type
-
-        Raises
-        ------
-        ValueError
-            If string path is malformed or class not found
-        """
-        if ":" not in class_path:
-            raise ValueError(f"Action term class path must be in format 'module:ClassName', got: {class_path}")
-
-        module_path, class_name = class_path.split(":", 1)
-        try:
-            module = importlib.import_module(module_path)
-            return cast("type", getattr(module, class_name))
-        except (ImportError, AttributeError) as e:
-            raise ValueError(f"Failed to import action term class '{class_path}': {e}") from e
 
     def setup(self) -> None:
         """Setup action manager after all managers are initialized.
