@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import ItemsView
 from typing import TYPE_CHECKING, Any
 
 from holosoma.config_types.terrain import TerrainManagerCfg
@@ -45,6 +46,10 @@ class TerrainManager:
 
     def update_heights(self, env_ids: torch.Tensor | None = None) -> None:
         self.terrain_term.update_heights(env_ids)
+
+    def iter_terms(self) -> ItemsView[str, TerrainTermBase]:
+        """Iterate over ``(name, instance)`` for the single terrain term, named ``terrain_term``."""
+        return {"terrain_term": self.terrain_term}.items()
 
     def get_state(self, term_name: str) -> TerrainTermBase:
         """Retrieve a stateful terrain term by name.

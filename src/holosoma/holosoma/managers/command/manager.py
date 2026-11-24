@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import ItemsView
 from typing import TYPE_CHECKING, Any
 
 from omegaconf import DictConfig, OmegaConf
@@ -85,6 +86,14 @@ class CommandManager:
             Stateful command term instance if it exists, otherwise ``None``.
         """
         return self._state_terms.get(term_name)
+
+    def get_term(self, name: str) -> CommandTermBase | None:
+        """Return the class term registered as ``name``, or ``None``."""
+        return self.staged_terms.instances.get(name)
+
+    def iter_terms(self) -> ItemsView[str, CommandTermBase]:
+        """Iterate over ``(name, instance)`` for the class terms."""
+        return self.staged_terms.instances.items()
 
     @property
     def commands(self) -> Tensor:

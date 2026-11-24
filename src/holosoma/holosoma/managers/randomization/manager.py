@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import ItemsView, Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -59,6 +59,14 @@ class RandomizationManager:
             Stateful term instance if found, otherwise ``None``.
         """
         return self.staged_terms.instances.get(term_name)
+
+    def get_term(self, name: str) -> RandomizationTermBase | None:
+        """Return the class term registered as ``name``, or ``None``."""
+        return self.staged_terms.instances.get(name)
+
+    def iter_terms(self) -> ItemsView[str, RandomizationTermBase]:
+        """Iterate over ``(name, instance)`` for the class terms."""
+        return self.staged_terms.instances.items()
 
     def _sampler(self, term_name: str, stage: int) -> TermSampler:
         return TermSampler.bind(self.env.dr_base_seed, term_name, stage, self.env.episode_count)
