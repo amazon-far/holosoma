@@ -10,7 +10,6 @@ from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.managers.randomization import RandomizationManager
-from holosoma.managers.reset_events.manager import ResetEventManager
 from holosoma.managers.termination import TerminationManager
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, _warn_deprecated
@@ -162,11 +161,6 @@ class BaseTask:
         # Call setup for managers that need it
         self._setup_task_managers()
 
-        # Initialize reset manager from simulator config
-        self.reset_manager = ResetEventManager(
-            self.simulator.simulator_config.reset_manager, self.simulator, self.device
-        )
-
         self._add_pacing_hooks()
 
     def _add_pacing_hooks(self) -> None:
@@ -246,9 +240,6 @@ class BaseTask:
         # keyed by episode == k (independent of when, or alongside whom, it reset).
         self.episode_count[env_ids.to("cpu")] += 1
         self._reset_task_managers(env_ids)
-
-        # Call manager-based reset events
-        self.reset_manager.reset_scene(env_ids)
 
         self._refresh_envs_after_reset(env_ids)
         self._after_reset_synchronization(env_ids)

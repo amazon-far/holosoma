@@ -52,7 +52,6 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
     class _Simulator:
         def __init__(self, **_kwargs: object) -> None:
             self.sim_dt = 0.005
-            self.simulator_config = SimpleNamespace(reset_manager=object())
             self.hooks = HookRegistry()
             self.prepared = False
             events.append("simulator")

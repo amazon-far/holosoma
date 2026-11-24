@@ -31,14 +31,6 @@ class MujocoBackend(str, Enum):
 
 
 @dataclass(frozen=True)
-class ResetManagerConfig:
-    """Configuration for the reset event manager."""
-
-    events: list[Any] = field(default_factory=list)
-    """List of reset event configurations to be managed."""
-
-
-@dataclass(frozen=True)
 class PhysxConfig:
     """Low-level PhysX solver settings."""
 
@@ -312,9 +304,6 @@ class SimulatorInitConfig:
             ),
         )
     """
-
-    reset_manager: ResetManagerConfig = field(default_factory=ResetManagerConfig)
-    """Reset event manager configuration."""
 
     robot_mjcf_filter: MujocoXMLFilterCfg = field(default_factory=MujocoXMLFilterCfg)
     """MuJoCo-specific XML filtering configuration for robot MJCF files."""
