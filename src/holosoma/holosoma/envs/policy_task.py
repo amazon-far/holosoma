@@ -189,6 +189,7 @@ class PolicyTask(BaseTask):
 
     def _post_physics_step(self) -> tuple[dict[str, Any], torch.Tensor, torch.Tensor, dict[str, Any]]:
         super()._post_physics_step()
+        self._collect_metrics()
         self.obs_buf_dict = self.observation_manager.step()
         self.extras["to_log"] = self.log_dict
         return self.obs_buf_dict, self.rew_buf, self.reset_buf, self.extras
@@ -225,6 +226,39 @@ class PolicyTask(BaseTask):
 
     # ------------------------------------------------------------------
     # Hooks for subclasses
+
+    def _collect_metrics(self) -> None:
+        """Copy the metrics every manager's class terms publish into ``log_dict``.
+
+        A term publishes by keeping a ``metrics`` mapping of tensors, refreshed wherever it computes them;
+        it is read once per frame, after the managers step and before observations. Keys are logged as
+        ``Env/<key>``, averaged over the logging window.
+
+        Raises
+        ------
+        ValueError
+            If two terms publish the same key.
+        """
+        publishers: dict[str, str] = {}
+        for manager in self._metric_managers():
+            for name, term in manager.iter_terms():
+                for key, value in getattr(term, "metrics", {}).items():
+                    if key in publishers:
+                        raise ValueError(f"Metric '{key}' is published by both '{publishers[key]}' and '{name}'.")
+                    publishers[key] = name
+                    self.log_dict[key] = value
+
+    def _metric_managers(self) -> list[Any]:
+        """Managers whose class terms may publish metrics."""
+        return [
+            self.action_manager,
+            self.command_manager,
+            self.reward_manager,
+            self.termination_manager,
+            self.randomization_manager,
+            self.terrain_manager,
+            self.curriculum_manager,
+        ]
 
     def _pre_compute_observations_callback(self) -> None:
         """Hook invoked after physics but before observation terms compute (no-op by default)."""

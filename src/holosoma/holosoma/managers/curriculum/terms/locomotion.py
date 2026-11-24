@@ -83,7 +83,11 @@ class AverageEpisodeLengthTracker(CurriculumTermBase):
         mask_tensor.index_copy_(0, active_ids, zeros_bool)
 
     def step(self) -> None:
-        self.env.log_dict["average_episode_length"] = torch.tensor(self.get_average_value(), dtype=torch.float32)
+        return
+
+    @property
+    def metrics(self) -> dict[str, torch.Tensor]:
+        return {"average_episode_length": torch.tensor(self.get_average_value(), dtype=torch.float32)}
 
     def update(self, env_ids: torch.Tensor, episode_lengths: torch.Tensor) -> None:
         if self._suppress_next_update:
@@ -167,6 +171,7 @@ class PenaltyCurriculum(CurriculumTermBase):
         self.current_scale = float(params.get("initial_scale", 1.0))
         self.penalty_reward_names: list[str] = []
         self.original_weights: dict[str, float] = {}
+        self.metrics: dict[str, torch.Tensor] = {}
 
     def setup(self) -> None:
         """Setup penalty curriculum - identify rewards and apply initial scaling."""
@@ -241,9 +246,7 @@ class PenaltyCurriculum(CurriculumTermBase):
         # Update for logging
         self.env.reward_penalty_scale = self.current_scale
 
-        # Update log_dict for WandB logging
-        if hasattr(self.env, "log_dict"):
-            self.env.log_dict["penalty_scale"] = torch.tensor(self.current_scale, dtype=torch.float)
+        self.metrics["penalty_scale"] = torch.tensor(self.current_scale, dtype=torch.float)
 
     def state_dict(self) -> dict[str, Any]:
         """Curriculum state for checkpointing; ``env.reward_penalty_scale`` is only a mirror of it.

@@ -791,7 +791,6 @@ class MotionCommand(CommandTermBase):
     def step(self) -> None:
         """Advance the clip once per control frame, after rewards and resets and before observations."""
         self.update_metrics()
-        self._env.log_dict.update(self.metrics)
         # 0. update time steps, all motion joint/body poses are updated automatically with the time steps.
         advance_mask = torch.ones_like(self.time_steps, dtype=torch.bool)
 
