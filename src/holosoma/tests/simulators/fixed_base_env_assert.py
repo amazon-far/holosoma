@@ -78,7 +78,7 @@ def _run_checks(env: Any, config: Any, device: str, log_dir: Path) -> list[str]:
         fails.append("config resolved to a different joint or action order")
     if env.body_names != list(test_arm_fixed.body_names):
         fails.append("config resolved to a different body order")
-    if env.terrain_manager.get_state("locomotion_terrain")._compute_feet_heights:
+    if env.terrain_manager.get_state("locomotion_terrain").feet_heights.shape[1] > 0:
         fails.append("feet height raycasts enabled on an arm without feet")
 
     env.reset_envs_idx()
