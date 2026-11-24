@@ -57,6 +57,8 @@ class JointPositionActionTerm(ActionTermBase):
         self._rfi_lim: float = 0.0
         self._randomize_torque_rfi: bool = False
 
+        self.metrics: dict[str, torch.Tensor] = {}
+
         # PD gains and action scales
         self.p_gains = torch.zeros(self._action_dim, dtype=torch.float, device=env.device)
         self.d_gains = torch.zeros_like(self.p_gains)
@@ -124,13 +126,13 @@ class JointPositionActionTerm(ActionTermBase):
             assert self._processed_actions is not None
             self._processed_actions[:] = torch.clip(actions, -clip_limit, clip_limit)
             # Log clipping fraction
-            self.env.log_dict["action_clip_frac"] = (
+            self.metrics["action_clip_frac"] = (
                 self._processed_actions.abs() == clip_limit
             ).sum() / self._processed_actions.numel()
         else:
             assert self._processed_actions is not None
             self._processed_actions[:] = actions
-            self.env.log_dict["action_clip_frac"] = torch.tensor(0.0)
+            self.metrics["action_clip_frac"] = torch.tensor(0.0)
 
         # Apply action delay if configured
         if getattr(self.env, "_randomize_ctrl_delay", False):

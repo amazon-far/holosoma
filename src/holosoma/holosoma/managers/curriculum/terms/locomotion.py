@@ -24,6 +24,7 @@ class AverageEpisodeLengthTracker(CurriculumTermBase):
         self.num_compute_average_epl = max(1, int(base_num_compute_average_epl * env.num_envs / base_denominator))
         self.average_episode_length = torch.tensor(0.0, device=env.device, dtype=torch.float)
         self._suppress_next_update = False
+        self.metrics: dict[str, torch.Tensor] = {}
 
     def setup(self) -> None:
         self.average_episode_length = torch.as_tensor(
@@ -80,6 +81,9 @@ class AverageEpisodeLengthTracker(CurriculumTermBase):
         weight = min(num / self.num_compute_average_epl, 1.0)
         self.average_episode_length = self.average_episode_length * (1 - weight) + current_average * weight
 
+    def update_metrics(self) -> None:
+        self.metrics["average_episode_length"] = self.average_episode_length.detach().cpu()
+
     def suppress_next_update(self) -> None:
         self._suppress_next_update = True
 
@@ -134,6 +138,7 @@ class PenaltyCurriculum(CurriculumTermBase):
         self.current_scale = float(params.get("initial_scale", 1.0))
         self.penalty_reward_names: list[str] = []
         self.original_weights: dict[str, float] = {}
+        self.metrics: dict[str, torch.Tensor] = {}
 
     def setup(self) -> None:
         """Setup penalty curriculum - identify rewards and apply initial scaling."""
@@ -208,9 +213,7 @@ class PenaltyCurriculum(CurriculumTermBase):
         # Update for logging
         self.env.reward_penalty_scale = self.current_scale
 
-        # Update log_dict for WandB logging
-        if hasattr(self.env, "log_dict"):
-            self.env.log_dict["penalty_scale"] = torch.tensor(self.current_scale, dtype=torch.float)
+        self.metrics["penalty_scale"] = torch.tensor(self.current_scale, dtype=torch.float)
 
     def state_dict(self) -> dict[str, Any]:
         """Curriculum state for checkpointing; ``env.reward_penalty_scale`` is only a mirror of it.

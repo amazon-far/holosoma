@@ -231,11 +231,40 @@ class PolicyTask(BaseTask):
         return
 
     def _update_log_dict(self) -> None:
-        """Append per-frame metrics to ``log_dict``: the average episode length when it is tracked."""
-        tracker = self.curriculum_manager.get_term("average_episode_tracker")
-        if tracker is not None:
-            avg = cast("AverageEpisodeLengthTracker", tracker).get_average()
-            self.log_dict["average_episode_length"] = avg.detach().cpu()
+        """Copy the metrics every manager's class terms publish into ``log_dict``.
+
+        A term publishes by keeping a ``metrics`` dict of tensors, refreshed by an optional
+        ``update_metrics()`` that runs here, once per frame before resets. Keys are logged as
+        ``Env/<key>``, averaged over the logging window.
+
+        Raises
+        ------
+        ValueError
+            If two terms publish the same key.
+        """
+        publishers: dict[str, str] = {}
+        for manager in self._metric_managers():
+            for name, term in manager.iter_terms():
+                update_metrics = getattr(term, "update_metrics", None)
+                if update_metrics is not None:
+                    update_metrics()
+                for key, value in getattr(term, "metrics", {}).items():
+                    if key in publishers:
+                        raise ValueError(f"Metric '{key}' is published by both '{publishers[key]}' and '{name}'.")
+                    publishers[key] = name
+                    self.log_dict[key] = value
+
+    def _metric_managers(self) -> list[Any]:
+        """Managers whose class terms may publish metrics."""
+        return [
+            self.action_manager,
+            self.command_manager,
+            self.reward_manager,
+            self.termination_manager,
+            self.randomization_manager,
+            self.terrain_manager,
+            self.curriculum_manager,
+        ]
 
     def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
         tracker = self.curriculum_manager.get_term("average_episode_tracker")

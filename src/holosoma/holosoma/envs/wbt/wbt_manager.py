@@ -25,12 +25,6 @@ class WholeBodyTrackingManager(PolicyTask):
     def base_quat(self) -> torch.Tensor:
         return self.simulator.base_quat
 
-    def _update_log_dict(self) -> None:
-        super()._update_log_dict()
-        motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
-        motion_command.update_metrics()
-        self.log_dict.update(motion_command.metrics)
-
     def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
         # A reset does not step, so refresh the targets the observations and terminations read.
         motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
