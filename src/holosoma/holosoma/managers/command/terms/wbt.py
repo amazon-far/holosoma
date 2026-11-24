@@ -546,6 +546,7 @@ class MotionCommand(CommandTermBase):
         super().__init__(cfg, env)
 
         self._env = env
+        self._stepping = False
         # self.motion_cfg: MotionConfig = cfg.params["motion_config"]
         # TODO(jchen):temporary fix for motion_config being a dict after tyro.cli
         if isinstance(cfg.params["motion_config"], MotionConfig):
@@ -782,8 +783,10 @@ class MotionCommand(CommandTermBase):
             # 4.3 set the object states in simulator
             self._env.simulator.set_actor_states([self.object_name], env_ids, object_states)
 
-        # Observations and terminations read the targets before the next step refreshes them.
-        self.update_relative_body_targets()
+        # Observations, terminations and step()'s metrics read the targets before step() refreshes them.
+        # A reset from inside step() is followed by that refresh.
+        if not self._stepping:
+            self.update_relative_body_targets()
 
     def step(self) -> None:
         """Advance the clip once per control frame, after rewards and resets and before observations."""
@@ -808,7 +811,11 @@ class MotionCommand(CommandTermBase):
         per_motion_end = self.motion.motion_end_idx[self.motion_ids]
         ended_env_ids = torch.where(self.time_steps >= per_motion_end)[0]
         if ended_env_ids.numel() > 0:
-            self.reset(ended_env_ids)
+            self._stepping = True
+            try:
+                self.reset(ended_env_ids)
+            finally:
+                self._stepping = False
             # Flush the mutated root/dof state into the simulator so that
             # rigid-body positions are up-to-date for downstream consumers
             # (termination checks, observations, rewards).
