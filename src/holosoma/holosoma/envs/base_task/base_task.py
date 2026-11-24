@@ -226,6 +226,7 @@ class BaseTask:
         if env_ids.numel() == 0:
             # Managers' reset hooks run every control frame, resets or not; there is no state to apply.
             self._reset_task_managers(env_ids)
+            self.hooks.emit(Phase.RESET, env_ids)
             return
 
         # Initial reset starts an episode without inventing a preceding episode end.
@@ -240,6 +241,7 @@ class BaseTask:
         # keyed by episode == k (independent of when, or alongside whom, it reset).
         self.episode_count[env_ids.to("cpu")] += 1
         self._reset_task_managers(env_ids)
+        self.hooks.emit(Phase.RESET, env_ids)
 
         self._refresh_envs_after_reset(env_ids)
         self._after_reset_synchronization(env_ids)

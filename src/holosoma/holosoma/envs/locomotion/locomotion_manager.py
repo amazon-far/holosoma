@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import datetime
-import warnings
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
 from holosoma.envs.policy_task import PolicyTask
-from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker, PenaltyCurriculum
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.torch_utils import torch_rand_float
 
@@ -16,9 +13,6 @@ if TYPE_CHECKING:
     from holosoma.managers.command.terms.locomotion import LocomotionGait
     from holosoma.managers.randomization.terms.locomotion import PushRandomizerState
     from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
-
-
-_LEGACY_CHECKPOINT_REMOVAL_DATE = datetime.date(2027, 3, 1)
 
 
 class LeggedRobotLocomotionManager(PolicyTask):
@@ -100,49 +94,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
             self.time_out_buf[env_ids] = target_buf["time_out_buf"].to(self.time_out_buf.dtype)
             self._pending_episode_update_mask[env_ids] = False
             self._pending_episode_lengths[env_ids] = 0
-
-    ################ Curriculum #################
-
-    @property
-    def average_episode_length(self) -> float:
-        avg = self._get_average_episode_tracker().get_average()
-        return float(avg.detach().cpu().item())
-
-    # ------------------------------------------------------------------
-    # Checkpoint helpers
-
-    def load_checkpoint_state(self, state: dict[str, Any] | None) -> None:
-        if not state:
-            return
-        if "curriculum" not in state:
-            state = self._convert_legacy_checkpoint_state(state)
-        super().load_checkpoint_state(state)
-
-    def _term_name(self, term_cls: type) -> str | None:
-        return next((name for name, term in self.curriculum_manager.iter_terms() if isinstance(term, term_cls)), None)
-
-    def _convert_legacy_checkpoint_state(self, state: dict[str, Any]) -> dict[str, Any]:
-        """Map the pre-``curriculum`` checkpoint layout onto curriculum term state."""
-        curriculum: dict[str, dict[str, Any]] = {}
-        tracker_state = state.get("average_episode_tracker")
-        tracker_name = self._term_name(AverageEpisodeLengthTracker)
-        if tracker_state is not None and tracker_name is not None:
-            curriculum[tracker_name] = tracker_state
-        penalty_scale = state.get("reward_penalty_scale")
-        penalty_name = self._term_name(PenaltyCurriculum)
-        if penalty_scale is not None and penalty_name is not None:
-            curriculum[penalty_name] = {"current_scale": float(penalty_scale)}
-        if curriculum:
-            message = (
-                "This checkpoint uses the old env-state layout (top-level 'average_episode_tracker' / "
-                "'reward_penalty_scale'), which is deprecated. Re-save it to store curriculum state per term "
-                f"under 'curriculum'. Loading the old layout becomes an error after {_LEGACY_CHECKPOINT_REMOVAL_DATE}."
-            )
-            if datetime.datetime.now(tz=datetime.timezone.utc).date() > _LEGACY_CHECKPOINT_REMOVAL_DATE:
-                raise RuntimeError(message)
-            # FutureWarning: shown by default (DeprecationWarning is filtered outside __main__).
-            warnings.warn(message, FutureWarning, stacklevel=3)
-        return {**state, "curriculum": curriculum}
 
     def _push_robots(self, env_ids: torch.Tensor) -> None:
         """Random pushes the robots. Emulates an impulse by setting a randomized base velocity."""

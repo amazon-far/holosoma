@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+import warnings
 from collections.abc import ItemsView, Mapping
 from typing import Any
 
@@ -9,8 +11,12 @@ from loguru import logger
 
 from holosoma.config_types.curriculum import CurriculumManagerCfg
 from holosoma.managers.staged_terms import StagedTerms
+from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.utils.safe_torch_import import torch
 
 from .base import CurriculumTermBase
+
+_LEGACY_CHECKPOINT_REMOVAL_DATE = datetime.date(2027, 3, 1)
 
 
 class CurriculumManager:
@@ -46,9 +52,19 @@ class CurriculumManager:
             class_terms_run_every_stage=True,
         )
 
+    def install(self) -> None:
+        """Set up the terms and drive them from the task's hooks.
+
+        ``reset`` runs on every ``Phase.RESET`` and ``step`` on every ``Phase.FRAME_BEGIN``; the task
+        also collects this manager's term metrics.
+        """
+        self.setup()
+        self.env.hooks.add(Phase.RESET, self.reset, name="curriculum.reset")
+        self.env.hooks.add(Phase.FRAME_BEGIN, self.step, name="curriculum.step")
+        self.env.add_metric_source(self)
+
     def setup(self) -> None:
         """Run setup hooks: ``setup()`` on every class term, then the setup functions."""
-        self.env._manager_curriculum_cfg = self.cfg
         self.staged_terms.run("setup", self.env)
 
     def reset(self, env_ids: Any) -> None:
@@ -79,3 +95,61 @@ class CurriculumManager:
                 logger.warning(f"Checkpoint has curriculum state for unknown term '{name}'; ignoring it.")
                 continue
             term.load_state_dict(term_state)
+
+    def load_checkpoint_state(self, env_state: Mapping[str, Any]) -> None:
+        """Restore the state saved under ``env_state["curriculum"]``, or under the legacy top-level keys."""
+        state = env_state["curriculum"] if "curriculum" in env_state else self._from_legacy_layout(env_state)
+        if not state:
+            return
+        self.load_state_dict(state)
+        for name in state:
+            term = self.get_term(name)
+            if term is not None:
+                term.after_checkpoint_load()
+
+    def _from_legacy_layout(self, env_state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+        """Map the top-level ``average_episode_tracker`` / ``reward_penalty_scale`` layout onto term state."""
+        from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker, PenaltyCurriculum
+
+        def name_of(term_cls: type) -> str | None:
+            return next((name for name, term in self.iter_terms() if isinstance(term, term_cls)), None)
+
+        state: dict[str, dict[str, Any]] = {}
+        tracker_state = env_state.get("average_episode_tracker")
+        tracker_name = name_of(AverageEpisodeLengthTracker)
+        if tracker_state is not None and tracker_name is not None:
+            state[tracker_name] = tracker_state
+        penalty_scale = env_state.get("reward_penalty_scale")
+        penalty_name = name_of(PenaltyCurriculum)
+        if penalty_scale is not None and penalty_name is not None:
+            state[penalty_name] = {"current_scale": float(penalty_scale)}
+        if state:
+            message = (
+                "This checkpoint uses the old env-state layout (top-level 'average_episode_tracker' / "
+                "'reward_penalty_scale'), which is deprecated. Re-save it to store curriculum state per term "
+                f"under 'curriculum'. Loading the old layout becomes an error after {_LEGACY_CHECKPOINT_REMOVAL_DATE}."
+            )
+            if datetime.datetime.now(tz=datetime.timezone.utc).date() > _LEGACY_CHECKPOINT_REMOVAL_DATE:
+                raise RuntimeError(message)
+            # FutureWarning: shown by default (DeprecationWarning is filtered outside __main__).
+            warnings.warn(message, FutureWarning, stacklevel=4)
+        return state
+
+    def synchronize(self, *, device: str, world_size: int) -> None:
+        """Broadcast rank 0's curriculum state to every rank."""
+        if world_size <= 1:
+            return
+        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+            return
+        # Every rank builds the same terms from the same config, so all ranks agree on skipping. A term
+        # whose state is empty depending on runtime data would deadlock here.
+        state = self.state_dict()
+        if not state:
+            return
+        if not getattr(self, "_logged_sync", False):
+            logger.info(f"Multi-GPU curriculum synchronization enabled for terms: {sorted(state)}")
+            self._logged_sync = True
+        payload = [state]
+        torch.distributed.broadcast_object_list(payload, src=0, device=torch.device(device))
+        if torch.distributed.get_rank() != 0:
+            self.load_state_dict(payload[0])

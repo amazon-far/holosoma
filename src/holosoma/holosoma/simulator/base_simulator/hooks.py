@@ -63,7 +63,8 @@ class Phase(str, Enum):
     ``FRAME_*`` bracket the outer tick (once per frame); ``*_STEP`` bracket each physics substep. The
     names are engine-agnostic — they don't assume what drives the outer tick (a policy, a bridge, ...).
     Episode events fire once per batch of environments that end or start together, with their ids as
-    a long tensor.
+    a long tensor. ``RESET`` fires on every reset call, once the task's managers have reset, with the
+    reset ids; they are empty on the frames where no environment resets.
     """
 
     payload: tuple[str, ...]
@@ -74,6 +75,7 @@ class Phase(str, Enum):
     POST_STEP = ("post_step", (), True)
     FRAME_END = ("frame_end", (), True)
     EPISODE_END = ("episode_end", ("env_ids",), False)
+    RESET = ("reset", ("env_ids",), False)
     EPISODE_START = ("episode_start", ("env_ids",), False)
     CLOSE = ("close", (), False)
 
@@ -92,7 +94,7 @@ class Phase(str, Enum):
 FrameCallback = Callable[[], Any]
 """Callback for a zero-payload periodic phase (``FRAME_BEGIN``/``PRE_STEP``/``POST_STEP``/``FRAME_END``)."""
 EpisodeCallback = Callable[["torch.Tensor"], Any]
-"""Callback for an episode phase (``EPISODE_START``/``EPISODE_END``); receives the batch's ``env_ids``."""
+"""Callback for ``EPISODE_START``/``EPISODE_END``/``RESET``; receives the batch's ``env_ids``."""
 CloseCallback = Callable[[], Any]
 """Callback for ``CLOSE`` (zero payload, fires once at teardown)."""
 
@@ -242,7 +244,7 @@ class HookRegistry:
     @overload
     def add(
         self,
-        phase: Literal[Phase.EPISODE_END, Phase.EPISODE_START],
+        phase: Literal[Phase.EPISODE_END, Phase.EPISODE_START, Phase.RESET],
         callback: EpisodeCallback,
         *,
         name: str | None = None,
@@ -280,7 +282,7 @@ class HookRegistry:
 
         The callback's signature must accept the phase's payload (see :class:`Phase`): zero args for
         the periodic ``FRAME_*``/``*_STEP`` phases and ``CLOSE``, one ``env_ids`` tensor for the episode
-        phases. The typed overloads reject a mismatch at type-check time; :meth:`_check_arity` also
+        phases and ``RESET``. The typed overloads reject a mismatch at type-check time; :meth:`_check_arity` also
         checks it at registration, so a wrong-arity callback fails loudly at ``add`` rather than with a
         ``TypeError`` on the first ``emit``. A parameter with a default still satisfies a phase that
         passes fewer args (e.g. ``capture_frame(env_id: int = 0)`` on the zero-payload ``FRAME_END``).

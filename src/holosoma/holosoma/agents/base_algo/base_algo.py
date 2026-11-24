@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from holosoma.config_types.algo import AlgoInitConfig
 from holosoma.envs.policy_task import PolicyTask
+from holosoma.managers.curriculum import CurriculumManager
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.safe_torch_import import torch
 
@@ -38,6 +39,12 @@ class BaseAlgo:
         self._experiment_config: ExperimentConfig | None = None
         self._wandb_run_path: str | None = None
         self.eval_callbacks: list[RLEvalCallback] = []
+
+        task = self._unwrap_env()
+        self.curriculum: CurriculumManager | None = None
+        if task.config.curriculum is not None:
+            self.curriculum = CurriculumManager(task.config.curriculum, task, device)
+            self.curriculum.install()
 
     def setup(self) -> type[NotImplementedError]:
         return NotImplementedError
@@ -83,9 +90,9 @@ class BaseAlgo:
         return metadata
 
     def _synchronize_curriculum_metrics(self) -> None:
-        """Synchronize curriculum-related metrics across all GPUs."""
-        env = self._unwrap_env()
-        env.synchronize_curriculum_state(device=self.device, world_size=self.gpu_world_size)
+        """Broadcast rank 0's curriculum state to every rank."""
+        if self.curriculum is not None:
+            self.curriculum.synchronize(device=self.device, world_size=self.gpu_world_size)
 
     def get_inference_policy(self, device: str | None = None) -> Callable[[dict[str, torch.Tensor]], torch.Tensor]:
         """Get a callable policy function for inference.
@@ -178,14 +185,16 @@ class BaseAlgo:
         return getattr(self, "unwrapped_env", self.env)
 
     def _collect_env_state(self) -> dict[str, Any]:
-        """Collect environment state for checkpointing via the environment interface."""
-        env = self._unwrap_env()
-        state = env.get_checkpoint_state()
-        return state or {}
+        """Collect the task's checkpoint state, with the curriculum's under ``"curriculum"``."""
+        state = dict(self._unwrap_env().get_checkpoint_state() or {})
+        if self.curriculum is not None and (curriculum_state := self.curriculum.state_dict()):
+            state["curriculum"] = curriculum_state
+        return state
 
     def _restore_env_state(self, env_state: dict[str, Any] | None) -> None:
-        """Restore environment state from checkpoint via the environment interface."""
+        """Restore the task's and the curriculum's state from :meth:`_collect_env_state` output."""
         if not env_state:
             return
-        env = self._unwrap_env()
-        env.load_checkpoint_state(env_state)
+        if self.curriculum is not None:
+            self.curriculum.load_checkpoint_state(env_state)
+        self._unwrap_env().load_checkpoint_state(env_state)

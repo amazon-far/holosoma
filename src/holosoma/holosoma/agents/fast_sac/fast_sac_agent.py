@@ -177,8 +177,8 @@ class FastSACAgent(BaseAlgo):
     ):
         wrapped_env = FastSACEnv(env, config.actor_obs_keys, config.critic_obs_keys)
 
-        super().__init__(wrapped_env, config, device, multi_gpu_cfg)  # type: ignore[arg-type]
         self.unwrapped_env = env
+        super().__init__(wrapped_env, config, device, multi_gpu_cfg)  # type: ignore[arg-type]
         self.log_dir = log_dir
         self.global_step = 0
         self.writer = TensorboardSummaryWriter(log_dir=self.log_dir, flush_secs=10)

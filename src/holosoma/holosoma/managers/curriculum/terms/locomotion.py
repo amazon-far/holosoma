@@ -172,10 +172,6 @@ class PenaltyCurriculum(CurriculumTermBase):
             scaled_cfg = replace(term_cfg, weight=term_cfg.weight * self.current_scale)
             self.env.reward_manager.set_term_cfg(name, scaled_cfg)
 
-        # Set flag for logging compatibility
-        self.env.use_reward_penalty_curriculum = True
-        self.env.reward_penalty_scale = self.current_scale
-
     def reset(self, env_ids: torch.Tensor | Sequence[int] | None) -> None:
         """Update penalty scale based on average episode length."""
         if not self.enabled or not hasattr(self.env, "reward_manager"):
@@ -184,7 +180,7 @@ class PenaltyCurriculum(CurriculumTermBase):
         if not self.penalty_reward_names or not self.original_weights:
             return
 
-        average_length = float(self.env.average_episode_length)
+        average_length = self._average_episode_length()
 
         # Update current scale based on episode length
         if average_length < self.level_down_threshold:
@@ -196,6 +192,12 @@ class PenaltyCurriculum(CurriculumTermBase):
         self.current_scale = float(np.clip(self.current_scale, self.min_scale, self.max_scale))
 
         self._apply_scale()
+
+    def _average_episode_length(self) -> float:
+        tracker = self.manager.get_term("average_episode_tracker") if self.manager is not None else None
+        if not isinstance(tracker, AverageEpisodeLengthTracker):
+            raise RuntimeError("AverageEpisodeLengthTracker is not registered with the curriculum manager.")
+        return float(tracker.get_average().detach().cpu().item())
 
     def _apply_weights(self) -> None:
         """Set each tagged penalty weight to ``original_weight * current_scale``."""
@@ -210,13 +212,10 @@ class PenaltyCurriculum(CurriculumTermBase):
         """Apply ``current_scale`` to the penalty weights and mirror it for logging."""
         self._apply_weights()
 
-        # Update for logging
-        self.env.reward_penalty_scale = self.current_scale
-
         self.metrics["penalty_scale"] = torch.tensor(self.current_scale, dtype=torch.float)
 
     def state_dict(self) -> dict[str, Any]:
-        """Curriculum state for checkpointing; ``env.reward_penalty_scale`` is only a mirror of it.
+        """Curriculum state for checkpointing.
 
         Empty when disabled: the weights were never scaled, so there is no scale to resume.
         """
@@ -244,156 +243,3 @@ class PenaltyCurriculum(CurriculumTermBase):
 
         # Re-apply clamped scale to weights
         self._apply_weights()
-
-
-# ================================================================================================
-# Legacy stateless functions (backward compatibility)
-# ================================================================================================
-
-
-def configure_reward_penalty(
-    env: Any,
-    *,
-    enabled: bool = True,
-    tag: str = "penalty_curriculum",
-    initial_scale: float = 1.0,
-    min_scale: float = 0.0,
-    max_scale: float = 1.0,
-    level_down_threshold: float = 150.0,
-    level_up_threshold: float = 750.0,
-    degree: float = 0.0,
-) -> None:
-    """Configure reward-penalty curriculum parameters.
-
-    This modifies the reward term weights directly in the reward manager,
-    scaling them by initial_scale and storing the original weights for reference.
-
-    Args:
-        enabled: Whether to enable penalty curriculum
-        tag: Tag to filter reward terms (e.g., "penalty_curriculum").
-        initial_scale: Initial scaling factor
-        min_scale: Minimum scaling factor
-        max_scale: Maximum scaling factor
-        level_down_threshold: Episode length threshold for decreasing penalty scale
-        level_up_threshold: Episode length threshold for increasing penalty scale
-        degree: Adjustment rate when updating penalty scale
-    """
-    env.use_reward_penalty_curriculum = bool(enabled)
-
-    # Determine which rewards to apply curriculum to
-    # Use tag-based selection
-    penalty_names = []
-    for term_name in env.reward_manager.active_terms:
-        term_cfg = env.reward_manager.get_term_cfg(term_name)
-        if tag in term_cfg.tags:
-            penalty_names.append(term_name)
-
-    # Enabled but nothing matched the explicitly-given tag -> a permanently inert curriculum that
-    # still reports itself enabled. Warn instead of silently doing nothing (mirrors PenaltyCurriculum).
-    if enabled and not penalty_names:
-        logger.warning(
-            f"configure_reward_penalty: no active reward term carries tag '{tag}'; "
-            f"the penalty curriculum is enabled but will have no effect."
-        )
-
-    env._curriculum_penalty_reward_names = penalty_names
-
-    # Store original weights and apply initial scaling
-    env._curriculum_penalty_original_weights = {}
-    if env.use_reward_penalty_curriculum and hasattr(env, "reward_manager"):
-        for name in penalty_names:
-            if name not in env.reward_manager.active_terms:
-                continue
-            term_cfg = env.reward_manager.get_term_cfg(name)
-            # Store original weight
-            env._curriculum_penalty_original_weights[name] = float(term_cfg.weight)
-            # Apply initial scale
-            scaled_cfg = replace(term_cfg, weight=term_cfg.weight * initial_scale)
-            env.reward_manager.set_term_cfg(name, scaled_cfg)
-
-    env._curriculum_penalty_cfg = {
-        "min_scale": float(min_scale),
-        "max_scale": float(max_scale),
-        "level_down_threshold": float(level_down_threshold),
-        "level_up_threshold": float(level_up_threshold),
-        "degree": float(degree),
-        "current_scale": float(initial_scale),
-    }
-
-    # Set reward_penalty_scale for logging compatibility
-    env.reward_penalty_scale = float(initial_scale)
-
-
-def update_reward_penalty(env: Any, env_ids: Any, **_: Any) -> None:
-    """Update penalty scale based on average episode length.
-
-    Modifies reward term weights directly in the reward manager.
-    """
-    if not getattr(env, "use_reward_penalty_curriculum", False):
-        return
-
-    cfg = getattr(env, "_curriculum_penalty_cfg", None)
-    penalty_names = getattr(env, "_curriculum_penalty_reward_names", [])
-    original_weights = getattr(env, "_curriculum_penalty_original_weights", {})
-    if not cfg or not penalty_names or not hasattr(env, "reward_manager"):
-        return
-
-    average_length = float(env.average_episode_length)
-    degree = cfg["degree"]
-
-    # Update current scale based on episode length
-    current_scale = cfg["current_scale"]
-    if average_length < cfg["level_down_threshold"]:
-        current_scale *= 1.0 - degree
-    elif average_length > cfg["level_up_threshold"]:
-        current_scale *= 1.0 + degree
-
-    # Clamp scale
-    current_scale = float(np.clip(current_scale, cfg["min_scale"], cfg["max_scale"]))
-    cfg["current_scale"] = current_scale
-
-    # Apply scale to each penalty reward's weight
-    for name in penalty_names:
-        if name not in original_weights or name not in env.reward_manager.active_terms:
-            continue
-        term_cfg = env.reward_manager.get_term_cfg(name)
-        # Set weight = original_weight * current_scale
-        scaled_cfg = replace(term_cfg, weight=original_weights[name] * current_scale)
-        env.reward_manager.set_term_cfg(name, scaled_cfg)
-
-    # Update reward_penalty_scale for logging
-    env.reward_penalty_scale = current_scale
-
-    # Update log_dict for WandB logging
-    if hasattr(env, "log_dict"):
-        import torch
-
-        env.log_dict["penalty_scale"] = torch.tensor(env.reward_penalty_scale, dtype=torch.float)
-
-
-def clamp_reward_penalty(env: Any, **_: Any) -> None:
-    """Ensure penalty scale stays within configured bounds each step.
-
-    Re-applies clamping to reward weights in case of any drift.
-    """
-    if not getattr(env, "use_reward_penalty_curriculum", False):
-        return
-
-    cfg = getattr(env, "_curriculum_penalty_cfg", None)
-    penalty_names = getattr(env, "_curriculum_penalty_reward_names", [])
-    original_weights = getattr(env, "_curriculum_penalty_original_weights", {})
-    if not cfg or not penalty_names or not hasattr(env, "reward_manager"):
-        return
-
-    # Clamp current_scale
-    current_scale = cfg.get("current_scale", 1.0)
-    current_scale = float(np.clip(current_scale, cfg["min_scale"], cfg["max_scale"]))
-    cfg["current_scale"] = current_scale
-
-    # Re-apply clamped scale to weights
-    for name in penalty_names:
-        if name not in original_weights or name not in env.reward_manager.active_terms:
-            continue
-        term_cfg = env.reward_manager.get_term_cfg(name)
-        scaled_cfg = replace(term_cfg, weight=original_weights[name] * current_scale)
-        env.reward_manager.set_term_cfg(name, scaled_cfg)
