@@ -40,10 +40,22 @@ def _term(*, soft_factor: float, dof_pos_noise: float) -> tuple[Any, Any]:
         overall_noise_scale=1.0, dof_pos=dof_pos_noise, soft_dof_pos_limit=soft_factor
     )
     term._soft_dof_pos_limits = None
+    term._stepping = False
     term.root_body_index = 0
     term.ref_body_index = 1
     term.tracked_body_indexes = torch.arange(NUM_BODIES)
+    term._motion_root_body_index = term.root_body_index
+    term._motion_ref_body_index = term.ref_body_index
+    term._motion_tracked_body_indexes = term.tracked_body_indexes
+    term._joint_indexes_in_motion = torch.arange(NUM_DOF)
     term.num_envs, term.device = NUM_ENVS, "cpu"
+    for cache, field in (
+        ("_root_pos_noise", "root_pos"),
+        ("_root_rot_noise_rpy", "root_rot"),
+        ("_root_vel_noise", "root_lin_vel"),
+        ("_root_ang_vel_noise_rpy", "root_ang_vel"),
+    ):
+        setattr(term, cache, torch.tensor(getattr(term.init_pose_cfg, field)) * term.init_pose_cfg.overall_noise_scale)
     term.time_steps = torch.zeros(NUM_ENVS, dtype=torch.long)
     term.motion_ids = torch.zeros(NUM_ENVS, dtype=torch.long)
     body_pos_w = torch.zeros(NUM_FRAMES, NUM_BODIES, 3)
@@ -62,6 +74,8 @@ def _term(*, soft_factor: float, dof_pos_noise: float) -> tuple[Any, Any]:
         body_lin_vel_w=torch.zeros(NUM_FRAMES, NUM_BODIES, 3),
         body_ang_vel_w=torch.zeros(NUM_FRAMES, NUM_BODIES, 3),
     )
+    for field in ("joint_pos", "joint_vel", "body_pos_w", "body_quat_w", "body_lin_vel_w", "body_ang_vel_w"):
+        setattr(term.motion, f"_{field}", getattr(term.motion, field))
     simulator = SimpleNamespace(
         get_dof_limits_properties=lambda: (HARD_LIMITS.clone(), None, None),
         dof_pos=torch.full((NUM_ENVS, NUM_DOF), 7.0),
