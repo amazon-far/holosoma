@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import ItemsView
 from typing import Any
 
 from holosoma.config_types.termination import TerminationManagerCfg, TerminationTermCfg
@@ -65,6 +66,14 @@ class TerminationManager:
 
             self._term_names.append(term_name)
             self._term_cfgs.append(term_cfg)
+
+    def get_term(self, name: str) -> TerminationTermBase | None:
+        """Return the class term registered as ``name``, or ``None``."""
+        return self._term_instances.get(name)
+
+    def iter_terms(self) -> ItemsView[str, TerminationTermBase]:
+        """Iterate over ``(name, instance)`` for the class terms."""
+        return self._term_instances.items()
 
     def check(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Evaluate termination terms.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import ItemsView
 from typing import Any
 
 import torch
@@ -242,6 +243,10 @@ class RewardManager:
         if name in self._term_funcs:
             return self._term_funcs[name]
         raise KeyError(f"Reward term '{name}' not found")
+
+    def iter_terms(self) -> ItemsView[str, RewardTermBase]:
+        """Iterate over ``(name, instance)`` for the class terms."""
+        return self._term_instances.items()
 
     def get_term_cfg(self, name: str) -> RewardTermCfg:
         """Get reward term configuration by name.

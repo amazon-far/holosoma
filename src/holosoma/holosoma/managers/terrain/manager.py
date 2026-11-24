@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import ItemsView
 from typing import Any
 
 from holosoma.config_types.terrain import TerrainManagerCfg
@@ -39,6 +40,10 @@ class TerrainManager:
         Calls setup() on the terrain term.
         """
         self.terrain_term.setup()
+
+    def iter_terms(self) -> ItemsView[str, TerrainTermBase]:
+        """Iterate over ``(name, instance)`` for the single terrain term, named ``terrain_term``."""
+        return {"terrain_term": self.terrain_term}.items()
 
     def get_state(self, term_name: str) -> TerrainTermBase:
         """Retrieve a stateful terrain term by name.
