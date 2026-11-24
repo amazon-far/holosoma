@@ -74,6 +74,13 @@ class JointPositionActionTerm(ActionTermBase):
 
         # Action delay queue will be initialized in setup() after randomization manager is ready
         self.action_queue: torch.Tensor | None = None
+        self._env_ids = torch.arange(env.num_envs, device=env.device)
+
+        # Per-frame PD terms, set by process_actions()
+        self._actions_scaled = torch.zeros_like(self._actions_after_delay)
+        self._pd_target = torch.zeros_like(self._actions_after_delay)
+        self._kp = torch.zeros_like(self._actions_after_delay)
+        self._kd = torch.zeros_like(self._actions_after_delay)
 
     def setup(self) -> None:
         """Setup action term after all managers are initialized.
@@ -101,6 +108,7 @@ class JointPositionActionTerm(ActionTermBase):
         enabled, rfi_lim = self.env._pending_torque_rfi
         self.configure_torque_rfi(enabled=enabled, rfi_lim=rfi_lim)
         self.env._pending_torque_rfi = (False, 0.0)
+        self._update_pd_terms()
 
     @property
     def action_dim(self) -> int:
@@ -139,6 +147,8 @@ class JointPositionActionTerm(ActionTermBase):
             assert self._processed_actions is not None
             self._actions_after_delay[:] = self._processed_actions
 
+        self._update_pd_terms()
+
     def _apply_action_delay(self) -> None:
         """Apply action delay based on domain randomization settings."""
         assert self.action_queue is not None, "action_queue must be initialized in setup()"
@@ -146,17 +156,25 @@ class JointPositionActionTerm(ActionTermBase):
 
         # Update action queue
         self.action_queue[:, 1:] = self.action_queue[:, :-1].clone()
-        self.action_queue[:, 0] = self._processed_actions.clone()
+        self.action_queue[:, 0] = self._processed_actions
 
         # Apply uniform delay
-        self._actions_after_delay[:] = self.action_queue[
-            torch.arange(self.env.num_envs), self.env.action_delay_idx
-        ].clone()
+        self._actions_after_delay[:] = self.action_queue[self._env_ids, self.env.action_delay_idx]
+
+    def _update_pd_terms(self) -> None:
+        """Compute the PD terms that stay fixed across the frame's substeps."""
+        self._actions_scaled = self._actions_after_delay * self.action_scales
+        control_type = self.env.robot_config.control.control_type
+        if control_type in ("P", "V"):
+            self._kp = self._kp_scale * self.p_gains
+            self._kd = self._kd_scale * self.d_gains
+        if control_type == "P":
+            self._pd_target = self._actions_scaled + self.env.default_dof_pos
 
     def apply_actions(self) -> None:
         """Apply processed actions by computing and applying torques."""
         # Compute torques using PD controller
-        self.torques[:] = self._compute_torques(self._actions_after_delay)
+        self.torques[:] = self._compute_torques()
         # Record sub-step torques/dof_pos/dof_vel
         self.torques_substep[:, self._substep_idx] = self.torques
         self.dof_pos_substep[:, self._substep_idx] = self.env.simulator.dof_pos
@@ -167,36 +185,27 @@ class JointPositionActionTerm(ActionTermBase):
         # Cache velocities for next derivative computation
         self._prev_dof_vel.copy_(self.env.simulator.dof_vel)
 
-    def _compute_torques(self, actions: torch.Tensor) -> torch.Tensor:
-        """Compute torques from actions using PD controller.
-
-        Args:
-            actions: Action tensor [num_envs, action_dim]
+    def _compute_torques(self) -> torch.Tensor:
+        """Compute torques from the frame's PD terms (see ``_update_pd_terms``) and the current DOF state.
 
         Returns:
             Torque tensor [num_envs, action_dim]
         """
-        # Scale actions
-        actions_scaled = actions * self.action_scales
-
         # Compute torques based on control type
         control_type = self.env.robot_config.control.control_type
 
         if control_type == "P":
             # Position control
-            torques = (
-                self._kp_scale * self.p_gains * (actions_scaled + self.env.default_dof_pos - self.env.simulator.dof_pos)
-                - self._kd_scale * self.d_gains * self.env.simulator.dof_vel
-            )
+            torques = self._kp * (self._pd_target - self.env.simulator.dof_pos) - self._kd * self.env.simulator.dof_vel
         elif control_type == "V":
             # Velocity control
             torques = (
-                self._kp_scale * self.p_gains * (actions_scaled - self.env.simulator.dof_vel)
-                - self._kd_scale * self.d_gains * (self.env.simulator.dof_vel - self._prev_dof_vel) / self.env.sim_dt
+                self._kp * (self._actions_scaled - self.env.simulator.dof_vel)
+                - self._kd * (self.env.simulator.dof_vel - self._prev_dof_vel) / self.env.sim_dt
             )
         elif control_type == "T":
             # Torque control
-            torques = actions_scaled
+            torques = self._actions_scaled
         else:
             raise ValueError(f"Unknown controller type: {control_type}")
 

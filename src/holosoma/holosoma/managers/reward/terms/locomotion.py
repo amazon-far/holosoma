@@ -6,6 +6,7 @@ compatible with the reward manager system.
 
 from __future__ import annotations
 
+import functools
 import weakref
 from typing import TYPE_CHECKING, cast
 
@@ -39,6 +40,21 @@ def _feet_indices(env: PolicyTask) -> torch.Tensor:
     if env not in _FEET_INDICES:
         _FEET_INDICES[env] = body_indices(env, env.robot_config.foot_body_name)
     return _FEET_INDICES[env]
+
+
+_FEET_INDEX_LISTS: weakref.WeakKeyDictionary[PolicyTask, list[int]] = weakref.WeakKeyDictionary()
+
+
+def _feet_index_list(env: PolicyTask) -> list[int]:
+    """``_feet_indices`` as Python ints; indexing with a 0-dim device tensor reads it back to the host."""
+    if env not in _FEET_INDEX_LISTS:
+        _FEET_INDEX_LISTS[env] = _feet_indices(env).tolist()
+    return _FEET_INDEX_LISTS[env]
+
+
+@functools.cache
+def _pose_weights_tensor(pose_weights: tuple[float, ...], device: str | torch.device) -> torch.Tensor:
+    return torch.tensor(pose_weights, device=device, dtype=torch.float32)
 
 
 def _expected_foot_height(phi: torch.Tensor, swing_height: float) -> torch.Tensor:
@@ -99,7 +115,7 @@ def penalty_feet_ori(env: PolicyTask) -> torch.Tensor:
     Returns:
         Reward tensor [num_envs]
     """
-    feet = _feet_indices(env)
+    feet = _feet_index_list(env)
     left_quat = env.simulator._rigid_body_rot[:, feet[0]]
     gravity = gravity_vector(env)
     left_gravity = quat_rotate_inverse(left_quat, gravity, w_last=True)
@@ -174,7 +190,7 @@ def penalty_close_feet_xy(env: PolicyTask, close_feet_threshold: float = 0.05) -
     Returns:
         Reward tensor [num_envs]
     """
-    feet = _feet_indices(env)
+    feet = _feet_index_list(env)
     left_foot_xy = env.simulator._rigid_body_pos[:, feet[0], :2]
     right_foot_xy = env.simulator._rigid_body_pos[:, feet[1], :2]
 
@@ -281,8 +297,7 @@ def pose(
     # Get current joint positions
     qpos = env.simulator.dof_pos
 
-    # Convert pose_weights to tensor
-    weights = torch.tensor(pose_weights, device=env.device, dtype=torch.float32)
+    weights = _pose_weights_tensor(tuple(pose_weights), env.device)
 
     # Calculate squared deviation from default pose
     # Use env.default_dof_pos which is already set up from robot config

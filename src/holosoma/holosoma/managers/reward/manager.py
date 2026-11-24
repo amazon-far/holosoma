@@ -48,12 +48,14 @@ class RewardManager:
         # Buffers for reward tracking
         self._reward_buf = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
 
-        # Episode sums for each term (for logging)
+        # Episode sums for each term (for logging): [scaled/raw, term, env]; the dicts hold row views.
+        num_terms = len(self._term_names)
+        self._episode_sums_buf = torch.zeros(2, num_terms, self.env.num_envs, dtype=torch.float, device=self.device)
         self._episode_sums: dict[str, torch.Tensor] = {}
         self._episode_sums_raw: dict[str, torch.Tensor] = {}
-        for term_name in self._term_names:
-            self._episode_sums[term_name] = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
-            self._episode_sums_raw[term_name] = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
+        for i, term_name in enumerate(self._term_names):
+            self._episode_sums[term_name] = self._episode_sums_buf[0, i]
+            self._episode_sums_raw[term_name] = self._episode_sums_buf[1, i]
 
     def _initialize_terms(self) -> None:
         """Initialize reward terms and resolve their functions/classes."""
@@ -147,6 +149,8 @@ class RewardManager:
         """
         # Reset computation
         self._reward_buf[:] = 0.0
+        rews_scaled: list[torch.Tensor] = []
+        rews_raw: list[torch.Tensor] = []
 
         # Iterate over all reward terms
         for term_name, term_cfg in zip(self._term_names, self._term_cfgs, strict=False):
@@ -173,9 +177,12 @@ class RewardManager:
             # Accumulate
             self._reward_buf += rew_scaled
 
-            # Track episodic sums
-            self._episode_sums[term_name] += rew_scaled
-            self._episode_sums_raw[term_name] += rew_raw
+            rews_scaled.append(rew_scaled)
+            rews_raw.append(rew_raw)
+
+        # Track episodic sums
+        if rews_scaled:
+            self._episode_sums_buf += torch.stack(rews_scaled + rews_raw).view_as(self._episode_sums_buf)
 
         # Optionally clip to positive
         if self.cfg.only_positive_rewards:
@@ -213,41 +220,29 @@ class RewardManager:
         # Resolve environment ids to operate on
         if env_ids is None:
             env_ids_tensor: torch.Tensor | None = None
-            env_ids_slice: slice | torch.Tensor = slice(None)
+        elif isinstance(env_ids, torch.Tensor):
+            env_ids_tensor = env_ids.to(device=self.device, dtype=torch.long)
         else:
-            if isinstance(env_ids, torch.Tensor):
-                env_ids_tensor = env_ids.to(device=self.device, dtype=torch.long)
-            else:
-                env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+            env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
 
-            env_ids_slice = env_ids_tensor
+        # Per-term entries are row views of these stacked [scaled/raw, term, env] tensors.
+        rew_all = self._episode_sums_buf / self.env.max_episode_length_s
 
-        # Helper to detach values before zeroing internal buffers
-        def _clone(tensor: torch.Tensor) -> torch.Tensor:
-            return tensor.detach().clone()
+        # Reset episodic sums for the completed environments
+        if env_ids_tensor is None:
+            rew_episode = rew_all.clone()
+            self._episode_sums_buf.zero_()
+        elif env_ids_tensor.numel() == 0:
+            rew_episode = rew_all[:, :, :0]
+        else:
+            rew_episode = rew_all[:, :, env_ids_tensor]
+            self._episode_sums_buf[:, :, env_ids_tensor] = 0.0
 
-        # Populate scaled reward statistics
-        for term_name in self._term_names:
-            rew_all = self._episode_sums[term_name] / self.env.max_episode_length_s
-            extras["episode_all"][f"rew_{term_name}"] = _clone(rew_all)
-            if env_ids_tensor is None:
-                extras["episode"][f"rew_{term_name}"] = _clone(rew_all)
-            else:
-                extras["episode"][f"rew_{term_name}"] = _clone(rew_all[env_ids_slice])
-
-            # Reset episodic sums for the completed environments
-            self._episode_sums[term_name][env_ids_slice] = 0.0
-
-        # Populate raw (unscaled) reward statistics
-        for term_name in self._term_names:
-            rew_raw_all = self._episode_sums_raw[term_name] / self.env.max_episode_length_s
-            extras["raw_episode_all"][f"raw_rew_{term_name}"] = _clone(rew_raw_all)
-            if env_ids_tensor is None:
-                extras["raw_episode"][f"raw_rew_{term_name}"] = _clone(rew_raw_all)
-            else:
-                extras["raw_episode"][f"raw_rew_{term_name}"] = _clone(rew_raw_all[env_ids_slice])
-
-            self._episode_sums_raw[term_name][env_ids_slice] = 0.0
+        for i, term_name in enumerate(self._term_names):
+            extras["episode_all"][f"rew_{term_name}"] = rew_all[0, i]
+            extras["episode"][f"rew_{term_name}"] = rew_episode[0, i]
+            extras["raw_episode_all"][f"raw_rew_{term_name}"] = rew_all[1, i]
+            extras["raw_episode"][f"raw_rew_{term_name}"] = rew_episode[1, i]
 
         # Reset stateful reward terms
         for instance in self._term_instances.values():

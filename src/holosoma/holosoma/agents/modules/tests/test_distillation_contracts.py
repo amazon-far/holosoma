@@ -40,7 +40,7 @@ def test_warmup_uses_absolute_iteration(
         save_interval=100,
     )
     algo._train_mode = lambda: None
-    algo.policy = SimpleNamespace(require_loaded_teachers=lambda: None)
+    algo.policy = SimpleNamespace(require_loaded_teachers=lambda: None, check_action_std=lambda: None)
     algo.env = SimpleNamespace(reset_envs_idx=lambda: None, compute_reset_observations=dict)
     algo.logging_helper = SimpleNamespace(
         record_collection_time=nullcontext,
@@ -71,7 +71,7 @@ def _stub_learn_loop(algo_cls: type[Distillation | DistillationPPO], events: lis
     algo.current_learning_iteration = 0
     algo.config = SimpleNamespace(num_learning_iterations=2, distillation_warmup_steps=0, save_interval=1)
     algo._train_mode = lambda: None
-    algo.policy = SimpleNamespace(require_loaded_teachers=lambda: None)
+    algo.policy = SimpleNamespace(require_loaded_teachers=lambda: None, check_action_std=lambda: None)
     algo.logging_helper = SimpleNamespace(record_collection_time=nullcontext, record_learn_time=nullcontext)
 
     def rollout(obs: dict[str, Any]) -> dict[str, Any]:

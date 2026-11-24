@@ -123,7 +123,7 @@ class Distillation(DistillationBase):
 
     def _training_step(self) -> dict[str, float]:
         generator = self.storage.mini_batch_generator(self.config.num_mini_batches, self.config.num_learning_epochs)
-        loss_accum = 0.0
+        loss_accum = torch.zeros((), dtype=torch.float64, device=self.device)
         num_updates = 0
 
         mini_batch: DaggerMinibatch
@@ -146,7 +146,7 @@ class Distillation(DistillationBase):
             nn.utils.clip_grad_norm_(self.policy.parameters(), self.config.max_grad_norm)
             self.optimizer.step()
 
-            loss_accum += loss.detach().item()
+            loss_accum += loss.detach()
             num_updates += 1
 
         loss_dict: dict[str, float] = {"warmup_active": float(self._warmup_active)}
@@ -154,7 +154,7 @@ class Distillation(DistillationBase):
             # Logged as "behavior" to match the reference DepthDistillation
             # loss-dict key, keeping wandb plot axes consistent across the two
             # codebases.
-            loss_dict["behavior"] = loss_accum / num_updates
+            loss_dict["behavior"] = loss_accum.item() / num_updates
 
         self.storage.clear()
         return loss_dict

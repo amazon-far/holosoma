@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from typing import TYPE_CHECKING
 
 import torch
@@ -13,14 +14,18 @@ if TYPE_CHECKING:
     from holosoma.envs.policy_task import PolicyTask
 
 
+@functools.cache
+def _broadcast_axis(axis: tuple[float, ...], device: str | torch.device, num_envs: int) -> torch.Tensor:
+    """Read-only ``[num_envs, len(axis)]`` view of a constant axis vector."""
+    return to_torch(list(axis), device=device).unsqueeze(0).expand(num_envs, -1)
+
+
 def gravity_vector(env: PolicyTask, up_axis_idx: int = 2) -> torch.Tensor:
-    axis = to_torch(get_axis_params(-1.0, up_axis_idx), device=env.device)
-    return axis.unsqueeze(0).expand(env.num_envs, -1)
+    return _broadcast_axis(tuple(get_axis_params(-1.0, up_axis_idx)), env.device, env.num_envs)
 
 
 def base_forward_vector(env: PolicyTask) -> torch.Tensor:
-    axis = to_torch([1.0, 0.0, 0.0], device=env.device)
-    return axis.unsqueeze(0).expand(env.num_envs, -1)
+    return _broadcast_axis((1.0, 0.0, 0.0), env.device, env.num_envs)
 
 
 def get_base_lin_vel(env: PolicyTask) -> torch.Tensor:
