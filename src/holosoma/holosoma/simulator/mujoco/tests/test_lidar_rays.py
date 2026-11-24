@@ -238,7 +238,7 @@ def test_mjwarp_shares_one_refitted_context_across_all_due_lidars(monkeypatch: p
     )
     rendered = []
 
-    def capture_render(simulator, record, render_backend, ray_context, sim_time) -> None:
+    def capture_render(simulator, record, render_backend, ray_context, sim_time, env_ids=None) -> None:
         rendered.append((record.name, render_backend, ray_context, sim_time))
 
     monkeypatch.setattr(sensor_setup, "WarpBackend", _FakeWarpBackend)
@@ -442,7 +442,7 @@ def test_mjwarp_lidar_reuses_camera_bvh_without_duplicate_same_frame_refit(
     monkeypatch.setattr(
         sensor_setup,
         "_render_warp",
-        lambda simulator, record, render_backend, context, sim_time: rendered.append(
+        lambda simulator, record, render_backend, context, sim_time, **_kwargs: rendered.append(
             (simulator, record, render_backend, context, sim_time)
         ),
     )

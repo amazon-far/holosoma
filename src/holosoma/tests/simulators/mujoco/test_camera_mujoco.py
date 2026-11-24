@@ -42,6 +42,8 @@ _CELLS = {
     "test_camera_orientation_warp": ("camera_orientation_assert", []),
     "test_camera_obs_pipeline_classic": ("camera_obs_assert", []),
     "test_camera_obs_pipeline_warp": ("camera_obs_assert", []),
+    "test_sensor_rerender_on_reset_classic": ("sensor_rerender_assert", []),
+    "test_sensor_rerender_on_reset_warp": ("sensor_rerender_assert", []),
 }
 
 
@@ -159,3 +161,15 @@ def test_camera_obs_pipeline_warp(request):
 def test_camera_follow_multi_env_warp(request):
     # num_envs=4 at distinct origins: yaw only env 0 and assert the other envs' frames are unchanged.
     _run(request, "mjwarp/camera-follow (num_envs=4)")
+
+
+@pytest.mark.mujoco_classic
+def test_sensor_rerender_on_reset_classic(request):
+    # Depth camera and LiDAR re-render the reset env, and only with num_rerenders_on_reset > 0.
+    _run(request, "mujoco/sensor-rerender-on-reset")
+
+
+@pytest.mark.mujoco_warp
+@_requires_cuda
+def test_sensor_rerender_on_reset_warp(request):
+    _run(request, "mjwarp/sensor-rerender-on-reset")

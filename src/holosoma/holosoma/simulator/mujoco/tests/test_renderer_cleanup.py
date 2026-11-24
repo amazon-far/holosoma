@@ -212,13 +212,13 @@ def test_classic_camera_render_uses_configured_sensor_scene_option() -> None:
     backend._mj_renderers = {"head": {"rgb": _CameraRenderer()}}
     backend._sensor_scene_option = scene_option
 
-    def _set_buffer(data_type: str, value: Any) -> None:
+    def _set_frame(data_type: str, value: Any, env_ids: Any = None) -> None:
         buffers[data_type] = value
 
     camera = SimpleNamespace(
         name="head",
         config=SimpleNamespace(data_types=["rgb"]),
-        set_buffer=_set_buffer,
+        set_frame=_set_frame,
     )
 
     backend.render_cameras(cast("Any", [camera]))

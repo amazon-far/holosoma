@@ -41,6 +41,7 @@ _CELLS = {
     "test_camera_follow_multi_env": ("camera_follow_assert", ["--simulator", "isaacsim", "--num-envs", "4"]),
     "test_camera_orientation": ("camera_orientation_assert", ["--simulator", "isaacsim"]),
     "test_camera_renders_at_its_mount_offset": ("camera_mount_fabric_assert", ["--num-envs", "{num_envs}"]),
+    "test_sensor_rerender_on_reset": ("sensor_rerender_assert", ["--simulator", "isaacsim"]),
 }
 
 
@@ -136,3 +137,8 @@ def test_camera_renders_at_its_mount_offset(request, num_envs):
     # Cameras on links that move while Isaac Lab initializes sensors must still render from their
     # authored offset: Fabric camera world == mount body world x USD local, after startup and later.
     run_batched(request, _cell, label=f"isaacsim/camera-mount-fabric (num_envs={num_envs})", timeout=_TIMEOUT)
+
+
+def test_sensor_rerender_on_reset(request):
+    # RTX depth camera and LiDAR re-render only the reset envs, and only with num_rerenders_on_reset > 0.
+    run_batched(request, _cell, label="isaacsim/sensor-rerender-on-reset", timeout=_TIMEOUT)

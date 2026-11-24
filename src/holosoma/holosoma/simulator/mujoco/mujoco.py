@@ -36,7 +36,12 @@ from holosoma.simulator.mujoco.robot_addressing import (
     resolve_robot_body_ids,
 )
 from holosoma.simulator.mujoco.scene_manager import MujocoSceneManager
-from holosoma.simulator.mujoco.sensor_setup import create_sensors, initialize_camera_mounts, render_sensors
+from holosoma.simulator.mujoco.sensor_setup import (
+    create_sensors,
+    initialize_camera_mounts,
+    render_sensors,
+    rerender_sensors,
+)
 from holosoma.simulator.mujoco.video_recorder import MuJoCoVideoRecorder
 from holosoma.simulator.mujoco.viewer_input import ViewerInputController
 from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
@@ -1225,6 +1230,9 @@ class MuJoCo(BaseSimulator):
     def render_sensors(self) -> None:
         """Capture all due mounted sensors into their cached buffers."""
         render_sensors(self)
+
+    def _rerender_backend_sensors(self, env_ids: torch.Tensor) -> None:
+        rerender_sensors(self, env_ids)
 
     def setup_viewer(self) -> None:
         """Set up MuJoCo viewer using official mujoco.viewer API with keyboard callback."""
