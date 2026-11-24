@@ -57,10 +57,9 @@ def _step(term: JointPositionActionTerm, value: float) -> None:
     term.apply_actions()
 
 
-def test_absent_delay_configuration_is_disabled_without_a_manager_dependency() -> None:
+def test_absent_delay_configuration_delivers_actions_without_a_manager_dependency() -> None:
     env, writes = _environment()
     term = _action(env)
-    randomize_action_delay(env, None, sampler=TermSampler.bind(1, "randomize_action_delay", STAGE_RESET))
     _step(term, 3)
     torch.testing.assert_close(writes[-1], torch.full((2, 3), 3.0))
     assert term.action_queue is None

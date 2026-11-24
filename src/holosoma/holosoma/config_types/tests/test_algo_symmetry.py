@@ -11,9 +11,11 @@ import dataclasses
 from typing import Any
 
 import pytest
+from pydantic.dataclasses import dataclass
 
-from holosoma.config_types.algo import FastSACConfig, JointSymmetryConfig, PPOConfig
+from holosoma.config_types.algo import DistillationConfig, FastSACConfig, JointSymmetryConfig, PPOConfig
 from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_values.algo import distillation
 from holosoma.config_values.experiment import EXPERIMENT_REGISTRY
 from holosoma.config_values.loco.g1.experiment import g1_29dof, g1_29dof_fast_sac
 from holosoma.config_values.loco.t1.experiment import t1_29dof
@@ -22,6 +24,45 @@ from holosoma.config_values.wbt.g1.experiment import g1_29dof_wbt
 from holosoma.utils.name_tags import expand_name_spec
 
 pytestmark = pytest.mark.no_sim
+
+
+@dataclass(frozen=True)
+class _CustomSymmetryConfig(DistillationConfig):
+    use_symmetry: bool = True
+    symmetry: JointSymmetryConfig = dataclasses.field(default_factory=JointSymmetryConfig)
+
+
+@dataclass(frozen=True)
+class _MissingSymmetryConfig(DistillationConfig):
+    use_symmetry: bool = True
+
+
+def test_custom_algorithm_can_validate_symmetry() -> None:
+    symmetry = JointSymmetryConfig(left=["left_knee_joint"], right=["right_knee_joint"], flip_sign=[])
+    algo = dataclasses.replace(
+        distillation, config=_CustomSymmetryConfig(module=distillation.config.module, symmetry=symmetry)
+    )
+    cfg = dataclasses.replace(g1_29dof, algo=algo)
+    assert cfg.algo.config.symmetry.resolve(cfg.robot.joint_tags, cfg.robot.dof_names) == (  # type: ignore[union-attr]
+        ["left_knee_joint"],
+        ["right_knee_joint"],
+        [],
+    )
+
+
+def test_custom_algorithm_invalid_symmetry_fails_at_construction() -> None:
+    symmetry = JointSymmetryConfig(left=["left_knee_joint"], right=["missing_joint"], flip_sign=[])
+    algo = dataclasses.replace(
+        distillation, config=_CustomSymmetryConfig(module=distillation.config.module, symmetry=symmetry)
+    )
+    with pytest.raises(ValueError, match="Unknown joint name 'missing_joint'"):
+        dataclasses.replace(g1_29dof, algo=algo)
+
+
+def test_symmetry_enabled_algorithm_requires_symmetry_specification() -> None:
+    algo = dataclasses.replace(distillation, config=_MissingSymmetryConfig(module=distillation.config.module))
+    with pytest.raises(ValueError, match="use_symmetry=True requires.*symmetry"):
+        dataclasses.replace(g1_29dof, algo=algo)
 
 
 def _symmetry_config(exp: ExperimentConfig) -> PPOConfig | FastSACConfig:

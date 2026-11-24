@@ -4,6 +4,17 @@ Use this checklist to migrate a robot preset, its task presets, overrides, and d
 pre-2026-09 schema. The field definitions in `holosoma/config_types/robot.py` are the source of truth. For the
 current contract, see [Adding a robot](writing-extensions.md#adding-a-robot-robotconfig).
 
+## MuJoCo behavior changes in 0.1.0
+
+MuJoCo now applies configured joint friction, armature, and effort limits when it loads a robot.
+For MJCF robots, earlier versions retained authored friction, armature, and actuator ranges despite preset overrides.
+The same MJCF can therefore produce different motion and torque limits after this update.
+Effort limits now bound both actuator control and force ranges.
+
+Set a physical-property map to `None`, or omit joints from a sparse map, to retain their authored asset values.
+Review the effective properties in the setup logs before comparing runs from different versions.
+Both MuJoCo Classic and Warp use these compiled model properties.
+
 ## Completion criteria
 
 The migration is complete when:
@@ -94,6 +105,7 @@ order may differ from the saved list. Check this selection when correcting an ol
 | `robot_config.floating_base`, `simulator.robot_fixed_base` | `robot_config.asset.fix_base_link`. |
 | `init_state.pos`, `init_state.rot` | `init_state.position`; use `orientation_xyzw` or `root_state_list()` for runtime tensor layout. |
 | `env.dim_obs`, `env.dim_critic_obs` | Remove. `env.dim_actions` remains available. |
+| `_setup_robot_body_indices` override | Resolve body selections in the terms that consume them. The unused task hook is removed. |
 | A generator emitting the old schema | Emit exact names, tags, and the new init-state fields. Physical-property maps may be sparse or `None`. |
 
 Simulator limit tensors contain hard limits. Reward and reset terms use `soft_limits` to derive their soft intervals.

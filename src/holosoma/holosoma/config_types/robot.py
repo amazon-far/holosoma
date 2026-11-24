@@ -180,14 +180,15 @@ class RobotConfig:
     """Bridge SDK configuration for this robot."""
 
     body_tags: dict[str, list[str]] = field(default_factory=dict)
-    """Named sets of robot bodies, declared and referenced with a leading ``#``
+    """Named groups of robot bodies, declared and referenced with a leading ``#``
     (``{"#feet": ["left_ankle_roll_link", "right_ankle_roll_link"]}``). Entries are exact ``body_names``
     entries or other ``#tags``. ``#all`` always selects every current body and cannot be declared. Used by
     tag-aware term parameters, e.g. a termination term's ``bodies=["#root", "#hip_links"]`` or the
     mass-randomization ``link_bodies``; see ``holosoma.utils.name_tags``."""
 
     joint_tags: dict[str, list[str]] = field(default_factory=dict)
-    """Named sets of robot DOFs, same syntax as ``body_tags`` over ``dof_names``.
+    """Named groups of robot DOFs, same syntax as ``body_tags`` over ``dof_names``.
+    Tag expansion preserves the declared order. Symmetry pairs joints by position.
     ``#all`` always selects every current DOF and cannot be declared. Used by action/controller parameters,
     ``default_joint_positions`` keys, or
     algorithm configs such as the symmetry augmentation's

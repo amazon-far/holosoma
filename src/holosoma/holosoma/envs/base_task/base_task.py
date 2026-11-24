@@ -143,7 +143,6 @@ class BaseTask:
 
         self._create_envs()
         self.dof_pos_limits, self.dof_vel_limits, self.torque_limits = self.simulator.get_dof_limits_properties()
-        self._setup_robot_body_indices()
         self.simulator.prepare_sim()
 
         # if running with a viewer, set up keyboard shortcuts and camera
@@ -198,9 +197,6 @@ class BaseTask:
         self.time_out_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
 
         default_joint_angles = self.robot_config.default_dof_positions()
-        missing = [name for name in self.dof_names if name not in default_joint_angles]
-        if missing:
-            raise ValueError(f"Missing default joint angles for DOFs {missing} in robot configuration.")
         self.default_dof_pos_base = torch.tensor(
             [[float(default_joint_angles[name]) for name in self.dof_names]], dtype=torch.float, device=self.device
         )
@@ -313,9 +309,6 @@ class BaseTask:
     def _create_envs(self) -> None:
         """Create the environments at their origins with the robot's base initial state."""
         self.simulator.create_envs(self.num_envs, self._get_env_origins(), self.base_init_state)  # type: ignore[call-arg]
-
-    def _setup_robot_body_indices(self) -> None:
-        """Task terms resolve their own body selections through robot_names."""
 
     # ------------------------------------------------------------------
     # Hooks for subclasses

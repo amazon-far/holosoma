@@ -4,7 +4,7 @@ import dataclasses
 import datetime
 import json
 from contextlib import AbstractContextManager
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast, runtime_checkable
 
 import yaml
 from pydantic import model_validator
@@ -26,7 +26,7 @@ import holosoma.config_values.simulator
 import holosoma.config_values.termination
 import holosoma.config_values.terrain
 from holosoma.config_types.action import ActionManagerCfg
-from holosoma.config_types.algo import AlgoConfig
+from holosoma.config_types.algo import AlgoConfig, JointSymmetryConfig
 from holosoma.config_types.command import CommandManagerCfg
 from holosoma.config_types.curriculum import CurriculumManagerCfg
 from holosoma.config_types.logger import LoggerConfig
@@ -48,6 +48,14 @@ if TYPE_CHECKING:
 
 def now_timestamp() -> str:
     return datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+
+@runtime_checkable
+class SupportsJointSymmetry(Protocol):
+    """Algorithm configuration that declares joint symmetry."""
+
+    use_symmetry: bool
+    symmetry: JointSymmetryConfig
 
 
 @dataclass(frozen=True)
@@ -197,12 +205,12 @@ class ExperimentConfig:
                         f"action term {term_name!r} controller does not resolve against the robot: {exc}"
                     ) from exc
 
-        if not getattr(self.algo.config, "use_symmetry", False):
+        algo_config = self.algo.config
+        if not getattr(algo_config, "use_symmetry", False):
             return self
-        from holosoma.config_types.algo import FastSACConfig, PPOConfig
-
-        assert isinstance(self.algo.config, (FastSACConfig, PPOConfig))
-        symmetry = self.algo.config.symmetry
+        if not isinstance(algo_config, SupportsJointSymmetry):
+            raise ValueError("algo.config.use_symmetry=True requires algo.config.symmetry.")
+        symmetry = algo_config.symmetry
 
         robot_type = self.robot.asset.robot_type
         hint = "Declare the joint tags on the robot, override algo.config.symmetry, or set use_symmetry=False."

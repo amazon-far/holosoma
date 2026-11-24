@@ -532,7 +532,7 @@ def randomize_action_delay(
     if ctrl_delay_step_range is not None:
         env._ctrl_delay_step_range = list(ctrl_delay_step_range)
 
-    if not getattr(env, "_randomize_ctrl_delay", False):
+    if not env._randomize_ctrl_delay:
         return
     if not hasattr(env, "_ctrl_delay_step_range"):
         raise AttributeError(
