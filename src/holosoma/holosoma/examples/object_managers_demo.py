@@ -292,7 +292,11 @@ def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
         # configured [5,6] band is unambiguous proof the manager's startup DR ran.
         _section("5. PHYSICS DR — object mass/material/inertia applied by the RandomizationManager at build")
         rm = env.randomization_manager
-        ran = [n for n in rm._setup_names if n not in rm._failed_randomizers and n.startswith("randomize_object_")]
+        ran = [
+            n
+            for n in rm.staged_terms.names("setup")
+            if n not in rm._failed_randomizers and n.startswith("randomize_object_")
+        ]
         skipped = [n for n in rm._failed_randomizers if n.startswith("randomize_object_")]
         print(f"manager setup DR terms applied: {ran}")
         if skipped:
