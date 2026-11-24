@@ -192,6 +192,7 @@ A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=No
 | `POST_STEP` | simulator | after each physics substep (freshest sim time) | — | physics `fps` |
 | `FRAME_END` | task | after the frame's last substep (read state here) | — | control rate |
 | `EPISODE_START` / `EPISODE_END` | task (motion playback also emits them at clip boundaries) | on reset boundaries, once per batch of envs | `env_ids` (long tensor) | per batch |
+| `RESET` | task | on every reset call, after the task's managers reset; `env_ids` is empty on frames with no reset | `env_ids` (long tensor) | every frame, plus each explicit reset |
 | `CLOSE` | task | teardown (release resources); `before`/`after` describe execution here too, and ties go to the latest registered | — | once |
 
 ### Ordering

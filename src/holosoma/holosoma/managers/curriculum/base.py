@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from holosoma.config_types.curriculum import CurriculumTermCfg
+    from holosoma.managers.curriculum.manager import CurriculumManager
 
 
 class CurriculumTermBase(ABC):
@@ -34,6 +35,7 @@ class CurriculumTermBase(ABC):
         """
         self.cfg = cfg
         self.env = env
+        self.manager: CurriculumManager | None = None
 
     @abstractmethod
     def setup(self) -> None:

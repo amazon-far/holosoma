@@ -56,6 +56,7 @@ def _algo_config(eval_callbacks: Any) -> AlgoInitConfig:
 
 class _FakeEnv:
     def __init__(self) -> None:
+        self.config = SimpleNamespace(curriculum=None)
         self.evaluating = False
         self.step_count = 0
 

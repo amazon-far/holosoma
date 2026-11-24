@@ -24,6 +24,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 from holosoma.config_values import experiment
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
+from holosoma.managers.curriculum import CurriculumManager
 from holosoma.managers.curriculum.terms.locomotion import average_episode_length
 from holosoma.utils.common import seeding
 from holosoma.utils.safe_torch_import import torch
@@ -71,6 +72,10 @@ def main() -> int:
     with tyro_config.create_task() as env:
         if env.device != DEVICE:
             failures.append(f"task resolved device {env.device!r}, expected {DEVICE!r}")
+        # Attached the way the training loop attaches it.
+        assert tyro_config.curriculum is not None
+        curriculum = CurriculumManager(tyro_config.curriculum, env, env.device)
+        curriculum.install()
         env.reset_envs_idx()
         obs_dict = env.compute_reset_observations()
         failures.extend(
@@ -89,8 +94,9 @@ def main() -> int:
             failures.append(f"no episode finished in {NUM_STEPS} zero-action steps")
 
         env.reset_envs_idx()
-        if average_episode_length(env) != 0.0:
-            failures.append(f"average_episode_length is {average_episode_length(env)} after a reset, expected 0.0")
+        average = average_episode_length(curriculum)
+        if average != 0.0:
+            failures.append(f"average_episode_length is {average} after a reset, expected 0.0")
 
         # Report before leaving the session: closing the Isaac Sim app ends the process.
         return _report(args, failures, n_dones)

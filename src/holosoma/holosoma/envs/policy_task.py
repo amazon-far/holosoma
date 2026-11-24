@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from loguru import logger
-
 from holosoma.config_types.env import EnvConfig
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.managers.action import ActionManager
 from holosoma.managers.command import CommandManager
-from holosoma.managers.curriculum import CurriculumManager
-from holosoma.managers.curriculum.terms.locomotion import convert_legacy_checkpoint_state
 from holosoma.managers.observation import ObservationManager
 from holosoma.managers.reward import RewardManager
 from holosoma.utils.safe_torch_import import torch
@@ -22,7 +18,7 @@ class PolicyTask(BaseTask):
     """BaseTask specialization for policy training and evaluation."""
 
     def __init__(self, tyro_config: EnvConfig) -> None:
-        for name in ("observation", "action", "reward", "termination", "command", "curriculum"):
+        for name in ("observation", "action", "reward", "termination", "command"):
             if getattr(tyro_config, name) is None:
                 raise ValueError(f"{name}_config must be provided for manager-based environments.")
         self.is_evaluating = False
@@ -44,7 +40,6 @@ class PolicyTask(BaseTask):
         self.action_manager = ActionManager(config.action, self, self.device)
         self.reward_manager = RewardManager(config.reward, self, self.device)
         self.command_manager = CommandManager(config.command, self, self.device)
-        self.curriculum_manager = CurriculumManager(config.curriculum, self, self.device)
 
     def _prepare_manager_fields(self) -> None:
         self.simulator.prepare_manager_fields(
@@ -57,7 +52,6 @@ class PolicyTask(BaseTask):
         super()._setup_task_managers()
         self.action_manager.setup()
         self.command_manager.setup()
-        self.curriculum_manager.setup()
 
     def _init_buffers(self) -> None:
         super()._init_buffers()
@@ -74,48 +68,14 @@ class PolicyTask(BaseTask):
         self._pending_episode_lengths = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self._pending_episode_update_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._pending_torque_rfi: tuple[bool, float] = (False, 0.0)
+        self._metric_sources: list[Any] = []
 
     def get_checkpoint_state(self) -> dict[str, Any]:
-        """Return environment-specific state to persist in checkpoints."""
-        state: dict[str, Any] = {}
-        curriculum_state = self.curriculum_manager.state_dict()
-        if curriculum_state:
-            state["curriculum"] = curriculum_state
-        return state
+        """Return task state to persist in checkpoints; the base policy task has none."""
+        return {}
 
     def load_checkpoint_state(self, state: dict[str, Any] | None) -> None:
-        """Restore environment-specific state from a checkpoint."""
-        if not state:
-            return
-        if "curriculum" not in state:
-            state = convert_legacy_checkpoint_state(self.curriculum_manager, state)
-        curriculum_state = state.get("curriculum")
-        if not curriculum_state:
-            return
-        self.curriculum_manager.load_state_dict(curriculum_state)
-        for name in curriculum_state:
-            term = self.curriculum_manager.get_term(name)
-            if term is not None:
-                term.after_checkpoint_load()
-
-    def synchronize_curriculum_state(self, *, device: str, world_size: int) -> None:
-        """Broadcast rank 0's curriculum state to every rank."""
-        if world_size <= 1:
-            return
-        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
-            return
-        # Every rank builds the same terms from the same config, so all ranks agree on skipping. A term
-        # whose state is empty depending on runtime data would deadlock here.
-        state = self.curriculum_manager.state_dict()
-        if not state:
-            return
-        if not getattr(self, "_logged_curriculum_sync", False):
-            logger.info(f"Multi-GPU curriculum synchronization enabled for terms: {sorted(state)}")
-            self._logged_curriculum_sync = True
-        payload = [state]
-        torch.distributed.broadcast_object_list(payload, src=0, device=torch.device(device))
-        if torch.distributed.get_rank() != 0:
-            self.curriculum_manager.load_state_dict(payload[0])
+        """Restore task state returned by :meth:`get_checkpoint_state`."""
 
     def set_is_evaluating(self) -> None:
         """
@@ -146,7 +106,6 @@ class PolicyTask(BaseTask):
         super()._reset_task_managers(env_ids)
         self.action_manager.reset(env_ids)
         self.command_manager.reset(env_ids)
-        self.curriculum_manager.reset(env_ids)
 
     def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
         self._pre_compute_observations_callback()
@@ -198,7 +157,6 @@ class PolicyTask(BaseTask):
         # After resets, so WBT termination checks see the tracking error before the command
         # manager advances the motion clip.
         self.command_manager.step()
-        self.curriculum_manager.step()
         super()._step_managers()
 
     def _store_final_observations(self, env_ids: torch.Tensor, final_obs_dict: dict[str, Any]) -> None:
@@ -257,8 +215,12 @@ class PolicyTask(BaseTask):
             self.termination_manager,
             self.randomization_manager,
             self.terrain_manager,
-            self.curriculum_manager,
+            *self._metric_sources,
         ]
+
+    def add_metric_source(self, source: Any) -> None:
+        """Also collect the metrics of ``source``'s terms, which it yields from ``iter_terms()``."""
+        self._metric_sources.append(source)
 
     def _pre_compute_observations_callback(self) -> None:
         """Hook invoked after physics but before observation terms compute (no-op by default)."""

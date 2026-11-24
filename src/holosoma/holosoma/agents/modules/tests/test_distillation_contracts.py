@@ -94,16 +94,12 @@ def test_learn_synchronizes_curriculum_every_iteration_on_multi_gpu(
     events: list[tuple[Any, ...]] = []
     algo = _stub_learn_loop(algo_cls, events)
 
-    def synchronize_curriculum_state(*, device: str, world_size: int) -> None:
+    def synchronize(*, device: str, world_size: int) -> None:
         del device
         events.append(("sync", world_size))
 
-    algo.env = SimpleNamespace(
-        reset_envs_idx=lambda: None,
-        compute_reset_observations=dict,
-        use_reward_penalty_curriculum=True,
-        synchronize_curriculum_state=synchronize_curriculum_state,
-    )
+    algo.env = SimpleNamespace(reset_envs_idx=lambda: None, compute_reset_observations=dict)
+    algo.curriculum = SimpleNamespace(synchronize=synchronize)
     algo.device = "cpu"
     algo.is_multi_gpu = True
     algo.gpu_world_size = 2
@@ -468,6 +464,7 @@ class _FakeEnv:
     num_envs = 4
 
     def __init__(self, depth_group: tuple[str, str] | None = None) -> None:
+        self.config = SimpleNamespace(curriculum=None)
         self.depth_group = depth_group
         self.robot_config = SimpleNamespace(actions_dim=2)
         self.command_manager = SimpleNamespace(get_state=lambda _name: None)

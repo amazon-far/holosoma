@@ -8,7 +8,9 @@ from typing import Any
 from loguru import logger
 
 from holosoma.config_types.curriculum import CurriculumManagerCfg
+from holosoma.hooks import Phase
 from holosoma.managers.staged_terms import StagedTerms
+from holosoma.utils.safe_torch_import import torch
 
 from .base import CurriculumTermBase
 
@@ -46,9 +48,19 @@ class CurriculumManager:
             class_terms_run_every_stage=True,
         )
 
+    def install(self) -> None:
+        """Set up the terms and drive them from the task's hooks.
+
+        ``reset`` runs on every ``Phase.RESET`` and ``step`` on every ``Phase.FRAME_BEGIN``; the task
+        also collects this manager's term metrics.
+        """
+        self.setup()
+        self.env.hooks.add(Phase.RESET, self.reset, name="curriculum.reset")
+        self.env.hooks.add(Phase.FRAME_BEGIN, self.step, name="curriculum.step")
+        self.env.add_metric_source(self)
+
     def setup(self) -> None:
         """Run setup hooks: ``setup()`` on every class term, then the setup functions."""
-        self.env._manager_curriculum_cfg = self.cfg
         self.staged_terms.run("setup", self.env)
 
     def reset(self, env_ids: Any) -> None:
@@ -79,3 +91,37 @@ class CurriculumManager:
                 logger.warning(f"Checkpoint has curriculum state for unknown term '{name}'; ignoring it.")
                 continue
             term.load_state_dict(term_state)
+
+    def load_checkpoint_state(self, env_state: Mapping[str, Any]) -> None:
+        """Restore the state saved under ``env_state["curriculum"]``, or under the legacy top-level keys."""
+        from holosoma.managers.curriculum.terms.locomotion import convert_legacy_checkpoint_state
+
+        if "curriculum" not in env_state:
+            env_state = convert_legacy_checkpoint_state(self, dict(env_state))
+        state = env_state.get("curriculum")
+        if not state:
+            return
+        self.load_state_dict(state)
+        for name in state:
+            term = self.get_term(name)
+            if term is not None:
+                term.after_checkpoint_load()
+
+    def synchronize(self, *, device: str, world_size: int) -> None:
+        """Broadcast rank 0's curriculum state to every rank."""
+        if world_size <= 1:
+            return
+        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+            return
+        # Every rank builds the same terms from the same config, so all ranks agree on skipping. A term
+        # whose state is empty depending on runtime data would deadlock here.
+        state = self.state_dict()
+        if not state:
+            return
+        if not getattr(self, "_logged_sync", False):
+            logger.info(f"Multi-GPU curriculum synchronization enabled for terms: {sorted(state)}")
+            self._logged_sync = True
+        payload = [state]
+        torch.distributed.broadcast_object_list(payload, src=0, device=torch.device(device))
+        if torch.distributed.get_rank() != 0:
+            self.load_state_dict(payload[0])
