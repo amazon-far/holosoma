@@ -71,10 +71,6 @@ class TerrainTermBase(ABC):
         """Feet heights."""
 
     @abstractmethod
-    def update_heights(self, env_ids: torch.Tensor | None = None) -> None:
-        """Update the base and feet heights."""
-
-    @abstractmethod
     def draw_debug_viz(self) -> None:
         """Draw debug visualization."""
 

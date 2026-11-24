@@ -19,6 +19,11 @@ A ``.npz`` with a ``qpos`` key uses ``qpos [T, 7+nj]`` (root pose wxyz + joints)
 block, and ``object_motion_pos [T, 3]`` +
 ``object_motion_rot_wxyz [T, 4]`` (when present) form one object block appended after it.
 
+A holosoma motion ``.npz`` (``joint_names`` and ``joint_pos [T, 7+nj]`` with the root DOFs first,
+as whole-body tracking reads) is played as recorded: its joints are reordered into the sim's DOF
+order by name, ``object_pos_w``/``object_quat_w`` (when present) form the object block, and its
+``fps`` replaces the configured one.
+
 Playlist entries may be single files or a glob pattern, local (``motions/*.npz``) or remote
 (``s3://bucket/motions/*.npz``), so a 100-clip run does not have to spell out 100 paths.
 
@@ -67,8 +72,27 @@ def _qpos_matrix(data: np.lib.npyio.NpzFile) -> npt.NDArray[np.float32]:
     return np.concatenate(blocks, axis=1, dtype=np.float32)
 
 
-def _load_matrix(motion_file: str) -> npt.NDArray[np.float32]:
-    """Load a 2D ``[frames, columns]`` float32 matrix from a .npy/.npz/.csv/.txt file."""
+def _motion_matrix(data: np.lib.npyio.NpzFile, dof_names: list[str], motion_file: str) -> npt.NDArray[np.float32]:
+    """Assemble the standard matrix layout from a holosoma motion file, joints in ``dof_names`` order."""
+    names = [str(name) for name in data["joint_names"]]
+    missing = sorted(set(dof_names) - set(names))
+    if missing:
+        raise ValueError(f"Motion file '{motion_file}' has no joints {missing} for the sim's DOFs.")
+    joint_pos = np.asarray(data["joint_pos"], dtype=np.float32)
+    joints = joint_pos[:, _ROOT:][:, [names.index(name) for name in dof_names]]
+    blocks = [joint_pos[:, :_ROOT], joints]
+    if "object_pos_w" in data.files:
+        blocks += [np.asarray(data["object_pos_w"], dtype=np.float32), np.asarray(data["object_quat_w"], np.float32)]
+    return np.concatenate(blocks, axis=1, dtype=np.float32)
+
+
+def _load_matrix(motion_file: str, dof_names: list[str] | None = None) -> tuple[npt.NDArray[np.float32], float | None]:
+    """Load a 2D ``[frames, columns]`` float32 matrix from a .npy/.npz/.csv/.txt file.
+
+    Also returns the frame rate a holosoma motion file records, else None. ``dof_names`` is the
+    sim's DOF order, which a holosoma motion file's joints are reordered into.
+    """
+    fps: float | None = None
     path = resolve_data_file_path(motion_file)
     logger.info(f"MotionPlaybackPlugin loading clip: {path}")
     ext = Path(path).suffix.lower()
@@ -77,7 +101,10 @@ def _load_matrix(motion_file: str) -> npt.NDArray[np.float32]:
             arr = np.load(f)
         elif ext == ".npz":
             with np.load(f) as data:
-                if "qpos" in data.files:
+                if "joint_names" in data.files and "joint_pos" in data.files and dof_names is not None:
+                    arr = _motion_matrix(data, dof_names, motion_file)
+                    fps = float(np.asarray(data["fps"]).reshape(-1)[0]) if "fps" in data.files else None
+                elif "qpos" in data.files:
                     arr = _qpos_matrix(data)
                 elif len(data.files) == 1:
                     arr = data[data.files[0]]
@@ -99,7 +126,7 @@ def _load_matrix(motion_file: str) -> npt.NDArray[np.float32]:
     if not np.isfinite(arr).all():
         bad = int((~np.isfinite(arr)).sum())
         raise ValueError(f"Motion file '{motion_file}' contains {bad} non-finite value(s) (NaN/inf).")
-    return arr
+    return arr, fps
 
 
 class PlaybackClip:
@@ -108,9 +135,18 @@ class PlaybackClip:
     Tensors are float32 on ``device``; quaternions are stored xyzw (sim convention).
     """
 
-    def __init__(self, motion_file: str, num_dof: int, num_objects: int, fps: float, quat_order: str, device: str):
-        mat = _load_matrix(motion_file)
-        self.fps = fps
+    def __init__(
+        self,
+        motion_file: str,
+        num_dof: int,
+        num_objects: int,
+        fps: float,
+        quat_order: str,
+        device: str,
+        dof_names: list[str] | None = None,
+    ):
+        mat, file_fps = _load_matrix(motion_file, dof_names)
+        self.fps = file_fps or fps
         self.num_frames = mat.shape[0]
 
         # Robot block is root(7)+joints or just joints; infer from the column count once the
@@ -327,6 +363,7 @@ class MotionPlaybackPlugin:
                 cfg.fps,
                 cfg.quat_order,
                 self.simulator.sim_device,
+                dof_names=list(self.simulator.dof_names),
             )
             self._clips[index] = clip
         return clip

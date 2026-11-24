@@ -17,10 +17,13 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from holosoma.config_types.curriculum import CurriculumManagerCfg, CurriculumTermCfg
-from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
 from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.curriculum.manager import CurriculumManager
-from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker, PenaltyCurriculum
+from holosoma.managers.curriculum.terms.locomotion import (
+    AverageEpisodeLengthTracker,
+    PenaltyCurriculum,
+    average_episode_length,
+)
 
 pytestmark = pytest.mark.no_sim
 
@@ -75,7 +78,7 @@ def _curriculum_cfg(*, penalty_key: str = "penalty_curriculum", enabled: bool = 
     )
 
 
-class _Env(LeggedRobotLocomotionManager):
+class _Env(PolicyTask):
     """Just enough of a locomotion env for its curriculum manager and checkpoint methods."""
 
     def __init__(self, **cfg_kwargs: Any) -> None:
@@ -93,7 +96,7 @@ class _Env(LeggedRobotLocomotionManager):
 
     @property
     def tracker(self) -> AverageEpisodeLengthTracker:
-        return self._get_average_episode_tracker()
+        return next(t for _, t in self.curriculum_manager.iter_terms() if isinstance(t, AverageEpisodeLengthTracker))
 
     def weight(self, name: str) -> float:
         return self.reward_manager.get_term_cfg(name).weight
@@ -123,7 +126,7 @@ def test_checkpoint_round_trip_restores_all_terms() -> None:
     _assert_scale_applied(resumed, INITIAL_SCALE)
     resumed.load_checkpoint_state(state)
     _assert_scale_applied(resumed, 0.8)
-    assert resumed.average_episode_length == pytest.approx(900.0)
+    assert average_episode_length(resumed) == pytest.approx(900.0)
 
     # The first reset after a restore steps the curriculum from the restored scale, not from initial_scale.
     resumed.penalty.reset(None)
@@ -147,7 +150,7 @@ def test_legacy_checkpoint_layout_is_converted(scale: float | torch.Tensor) -> N
     with pytest.warns(FutureWarning, match="old env-state layout"):
         resumed.load_checkpoint_state(legacy)
     _assert_scale_applied(resumed, 0.873)
-    assert resumed.average_episode_length == pytest.approx(900.0)
+    assert average_episode_length(resumed) == pytest.approx(900.0)
     assert resumed.tracker._suppress_next_update
 
 
@@ -215,7 +218,7 @@ def _sync_worker(rank: int, init_file: str, results: Any) -> None:
     try:
         env = _trained_env(scale=0.8 if rank == 0 else 0.3, avg_length=900.0 if rank == 0 else 200.0)
         env.synchronize_curriculum_state(device="cpu", world_size=2)
-        results[rank] = (env.penalty.current_scale, env.weight("penalty_action_rate"), env.average_episode_length)
+        results[rank] = (env.penalty.current_scale, env.weight("penalty_action_rate"), average_episode_length(env))
     finally:
         dist.destroy_process_group()
 

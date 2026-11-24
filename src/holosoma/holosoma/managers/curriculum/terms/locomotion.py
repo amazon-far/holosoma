@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import datetime
+import warnings
 from collections.abc import Sequence
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -12,15 +14,24 @@ from loguru import logger
 
 from holosoma.managers.curriculum.base import CurriculumTermBase
 
+if TYPE_CHECKING:
+    from holosoma.managers.curriculum.manager import CurriculumManager
+
+_LEGACY_CHECKPOINT_REMOVAL_DATE = datetime.date(2027, 3, 1)
+
 
 class AverageEpisodeLengthTracker(CurriculumTermBase):
-    """Track moving average of episode length for locomotion tasks."""
+    """Track moving average of episode length for locomotion tasks.
+
+    The averaging window is ``num_compute_average_epl`` episodes, scaled by ``num_envs / base_num_envs``
+    when ``base_num_envs`` is given.
+    """
 
     def __init__(self, cfg: Any, env: Any) -> None:
         super().__init__(cfg, env)
         params = cfg.params or {}
         base_num_compute_average_epl = float(params.get("num_compute_average_epl", 1000))
-        base_denominator = getattr(env, "BASE_NUM_ENVS", env.num_envs)
+        base_denominator = float(params.get("base_num_envs", env.num_envs))
         self.num_compute_average_epl = max(1, int(base_num_compute_average_epl * env.num_envs / base_denominator))
         self.average_episode_length = torch.tensor(0.0, device=env.device, dtype=torch.float)
         self._suppress_next_update = False
@@ -66,7 +77,7 @@ class AverageEpisodeLengthTracker(CurriculumTermBase):
         mask_tensor.index_copy_(0, active_ids, zeros_bool)
 
     def step(self) -> None:
-        return
+        self.env.log_dict["average_episode_length"] = self.average_episode_length.detach().cpu()
 
     def update(self, env_ids: torch.Tensor, episode_lengths: torch.Tensor) -> None:
         if self._suppress_next_update:
@@ -106,6 +117,16 @@ class AverageEpisodeLengthTracker(CurriculumTermBase):
         if avg is not None:
             self.average_episode_length = torch.as_tensor(float(avg), device=self.env.device, dtype=torch.float)
         self._suppress_next_update = bool(state.get("suppress_next_update", False))
+
+
+def average_episode_length(env: Any) -> float:
+    """The average episode length tracked by ``env``'s ``AverageEpisodeLengthTracker`` curriculum term."""
+    tracker = next(
+        (term for _, term in env.curriculum_manager.iter_terms() if isinstance(term, AverageEpisodeLengthTracker)), None
+    )
+    if tracker is None:
+        raise RuntimeError("AverageEpisodeLengthTracker is not registered with the curriculum manager.")
+    return float(tracker.get_average().detach().cpu().item())
 
 
 class PenaltyCurriculum(CurriculumTermBase):
@@ -179,7 +200,7 @@ class PenaltyCurriculum(CurriculumTermBase):
         if not self.penalty_reward_names or not self.original_weights:
             return
 
-        average_length = float(self.env.average_episode_length)
+        average_length = average_episode_length(self.env)
 
         # Update current scale based on episode length
         if average_length < self.level_down_threshold:
@@ -335,7 +356,7 @@ def update_reward_penalty(env: Any, env_ids: Any, **_: Any) -> None:
     if not cfg or not penalty_names or not hasattr(env, "reward_manager"):
         return
 
-    average_length = float(env.average_episode_length)
+    average_length = average_episode_length(env)
     degree = cfg["degree"]
 
     # Update current scale based on episode length
@@ -394,3 +415,31 @@ def clamp_reward_penalty(env: Any, **_: Any) -> None:
         term_cfg = env.reward_manager.get_term_cfg(name)
         scaled_cfg = replace(term_cfg, weight=original_weights[name] * current_scale)
         env.reward_manager.set_term_cfg(name, scaled_cfg)
+
+
+def convert_legacy_checkpoint_state(curriculum_manager: CurriculumManager, state: dict[str, Any]) -> dict[str, Any]:
+    """Map the pre-``curriculum`` checkpoint layout of locomotion runs onto curriculum term state."""
+
+    def term_name(term_cls: type) -> str | None:
+        return next((name for name, term in curriculum_manager.iter_terms() if isinstance(term, term_cls)), None)
+
+    curriculum: dict[str, dict[str, Any]] = {}
+    tracker_state = state.get("average_episode_tracker")
+    tracker_name = term_name(AverageEpisodeLengthTracker)
+    if tracker_state is not None and tracker_name is not None:
+        curriculum[tracker_name] = tracker_state
+    penalty_scale = state.get("reward_penalty_scale")
+    penalty_name = term_name(PenaltyCurriculum)
+    if penalty_scale is not None and penalty_name is not None:
+        curriculum[penalty_name] = {"current_scale": float(penalty_scale)}
+    if curriculum:
+        message = (
+            "This checkpoint uses the old env-state layout (top-level 'average_episode_tracker' / "
+            "'reward_penalty_scale'), which is deprecated. Re-save it to store curriculum state per term "
+            f"under 'curriculum'. Loading the old layout becomes an error after {_LEGACY_CHECKPOINT_REMOVAL_DATE}."
+        )
+        if datetime.datetime.now(tz=datetime.timezone.utc).date() > _LEGACY_CHECKPOINT_REMOVAL_DATE:
+            raise RuntimeError(message)
+        # FutureWarning: shown by default (DeprecationWarning is filtered outside __main__).
+        warnings.warn(message, FutureWarning, stacklevel=3)
+    return {**state, "curriculum": curriculum}

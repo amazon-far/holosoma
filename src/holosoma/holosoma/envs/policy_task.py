@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any
 
 from loguru import logger
 
@@ -11,13 +11,11 @@ from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.managers.action import ActionManager
 from holosoma.managers.command import CommandManager
 from holosoma.managers.curriculum import CurriculumManager
+from holosoma.managers.curriculum.terms.locomotion import convert_legacy_checkpoint_state
 from holosoma.managers.observation import ObservationManager
 from holosoma.managers.reward import RewardManager
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.sim_utils import setup_keyboard_listener
-
-if TYPE_CHECKING:
-    from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker
 
 
 class PolicyTask(BaseTask):
@@ -89,6 +87,8 @@ class PolicyTask(BaseTask):
         """Restore environment-specific state from a checkpoint."""
         if not state:
             return
+        if "curriculum" not in state:
+            state = convert_legacy_checkpoint_state(self.curriculum_manager, state)
         curriculum_state = state.get("curriculum")
         if not curriculum_state:
             return
@@ -231,14 +231,4 @@ class PolicyTask(BaseTask):
         return
 
     def _update_log_dict(self) -> None:
-        """Append per-frame metrics to ``log_dict``: the average episode length when it is tracked."""
-        tracker = self.curriculum_manager.get_term("average_episode_tracker")
-        if tracker is not None:
-            avg = cast("AverageEpisodeLengthTracker", tracker).get_average()
-            self.log_dict["average_episode_length"] = avg.detach().cpu()
-
-    def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
-        tracker = self.curriculum_manager.get_term("average_episode_tracker")
-        if tracker is None:
-            raise RuntimeError("AverageEpisodeLengthTracker is not registered with the curriculum manager.")
-        return cast("AverageEpisodeLengthTracker", tracker)
+        """Hook invoked after rewards to append per-frame metrics to ``log_dict`` (no-op by default)."""

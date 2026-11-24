@@ -4,7 +4,9 @@ A backend binds each state quantity once, in ``prepare_sim``, with :meth:`SimSta
 returns the current value: a function returning a tensor (or a tuple of tensors, one per name), or a
 :class:`Columns` spec, a column selection of a backend tensor. The registry copies each value into a
 float32 buffer on ``device``, allocated on the first read, on the first access after the simulation
-state changed, and ``write`` flushes in-place changes back to the simulation, row by row.
+state changed, and ``write`` flushes in-place changes back to the simulation, row by row. Other
+components may register read-only quantities derived from simulator state, such as terrain heights,
+the same way after setup.
 
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
 simulation state. In-place writes reach the simulation before its next physics step, FK pass or any

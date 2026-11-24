@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from holosoma.config_types.termination import TerminationTermCfg
-from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.command.terms.wbt import MotionCommand
-from holosoma.managers.observation.terms.wbt import gravity_vector
+from holosoma.managers.observation.terms.common import gravity_vector
 from holosoma.managers.termination.base import TerminationTermBase
 from holosoma.utils.rotations import (
     quat_error_magnitude,
@@ -38,7 +38,7 @@ class BadTracking(TerminationTermBase):
     When bad tracking is detected, the motion_commmand.AdaptiveTimestepsSampler will be updated.
     """
 
-    def __init__(self, cfg: TerminationTermCfg, env: WholeBodyTrackingManager) -> None:
+    def __init__(self, cfg: TerminationTermCfg, env: PolicyTask) -> None:
         super().__init__(cfg, env)
 
         self.bad_ref_pos_threshold = cfg.params["bad_ref_pos_threshold"]

@@ -22,7 +22,7 @@ g1_29dof_wbt = ExperimentConfig(
         name="g1_29dof_wbt_manager",
         num_envs=4096,
     ),
-    env_class="holosoma.envs.wbt.wbt_manager.WholeBodyTrackingManager",
+    env_class="holosoma.envs.policy_task.PolicyTask",
     algo=replace(
         algo.ppo,
         config=replace(
@@ -88,7 +88,7 @@ g1_29dof_wbt_fast_sac = ExperimentConfig(
         name="g1_29dof_wbt_fast_sac_manager",
         num_envs=4096,
     ),
-    env_class="holosoma.envs.wbt.wbt_manager.WholeBodyTrackingManager",
+    env_class="holosoma.envs.policy_task.PolicyTask",
     algo=replace(
         algo.fast_sac,
         config=replace(

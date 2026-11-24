@@ -6,15 +6,20 @@ compatible with the reward manager system.
 
 from __future__ import annotations
 
+import weakref
 from typing import TYPE_CHECKING, cast
 
-from holosoma.managers.observation.terms.locomotion import (
+from holosoma.managers.observation.terms.common import (
     base_forward_vector,
     get_base_ang_vel,
     get_base_lin_vel,
     get_projected_gravity,
     gravity_vector,
 )
+
+# Re-exported so configs naming these terms under this module keep resolving.
+from holosoma.managers.reward.terms.common import limits_dof_pos, penalty_action_rate  # noqa: F401
+from holosoma.managers.utils import body_indices
 from holosoma.utils.rotations import (
     quat_apply,
     quat_rotate_inverse,
@@ -22,8 +27,18 @@ from holosoma.utils.rotations import (
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
-    from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
+    from holosoma.envs.policy_task import PolicyTask
     from holosoma.managers.command.terms.locomotion import LocomotionGait
+
+
+_FEET_INDICES: weakref.WeakKeyDictionary[PolicyTask, torch.Tensor] = weakref.WeakKeyDictionary()
+
+
+def _feet_indices(env: PolicyTask) -> torch.Tensor:
+    """Indices of the robot bodies named by ``robot_config.foot_body_name``, looked up once per task."""
+    if env not in _FEET_INDICES:
+        _FEET_INDICES[env] = body_indices(env, env.robot_config.foot_body_name)
+    return _FEET_INDICES[env]
 
 
 def _expected_foot_height(phi: torch.Tensor, swing_height: float) -> torch.Tensor:
@@ -45,7 +60,7 @@ def _expected_foot_height(phi: torch.Tensor, swing_height: float) -> torch.Tenso
 # ================================================================================================
 
 
-def termination(env: LeggedRobotLocomotionManager) -> torch.Tensor:
+def termination(env: PolicyTask) -> torch.Tensor:
     """Terminal reward/penalty for early termination (excluding timeouts).
 
     Args:
@@ -62,21 +77,7 @@ def termination(env: LeggedRobotLocomotionManager) -> torch.Tensor:
 # ================================================================================================
 
 
-def penalty_action_rate(env: LeggedRobotLocomotionManager) -> torch.Tensor:
-    """Penalize changes in actions between steps.
-
-    Args:
-        env: The environment instance
-
-    Returns:
-        Reward tensor [num_envs]
-    """
-    actions = env.action_manager.action
-    prev_actions = env.action_manager.prev_action
-    return torch.sum(torch.square(prev_actions - actions), dim=1)
-
-
-def penalty_orientation(env: LeggedRobotLocomotionManager) -> torch.Tensor:
+def penalty_orientation(env: PolicyTask) -> torch.Tensor:
     """Penalize non-flat base orientation.
 
     Args:
@@ -89,7 +90,7 @@ def penalty_orientation(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     return torch.sum(torch.square(projected[:, :2]), dim=1)
 
 
-def penalty_feet_ori(env: LeggedRobotLocomotionManager) -> torch.Tensor:
+def penalty_feet_ori(env: PolicyTask) -> torch.Tensor:
     """Penalize feet orientation deviation from flat.
 
     Args:
@@ -98,10 +99,11 @@ def penalty_feet_ori(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     Returns:
         Reward tensor [num_envs]
     """
-    left_quat = env.simulator._rigid_body_rot[:, env.feet_indices[0]]
+    feet = _feet_indices(env)
+    left_quat = env.simulator._rigid_body_rot[:, feet[0]]
     gravity = gravity_vector(env)
     left_gravity = quat_rotate_inverse(left_quat, gravity, w_last=True)
-    right_quat = env.simulator._rigid_body_rot[:, env.feet_indices[1]]
+    right_quat = env.simulator._rigid_body_rot[:, feet[1]]
     right_gravity = quat_rotate_inverse(right_quat, gravity, w_last=True)
     return (
         torch.sum(torch.square(left_gravity[:, :2]), dim=1) ** 0.5
@@ -110,37 +112,11 @@ def penalty_feet_ori(env: LeggedRobotLocomotionManager) -> torch.Tensor:
 
 
 # ================================================================================================
-# Limit Rewards
-# ================================================================================================
-
-
-def limits_dof_pos(env: LeggedRobotLocomotionManager, soft_dof_pos_limit: float = 0.95) -> torch.Tensor:
-    """Penalize joint positions too close to limits.
-
-    Args:
-        env: The environment instance
-        soft_dof_pos_limit: Soft limit as fraction of hard limit
-
-    Returns:
-        Reward tensor [num_envs]
-    """
-    # Use soft limits as fraction of hard limits
-    m = (env.simulator.hard_dof_pos_limits[:, 0] + env.simulator.hard_dof_pos_limits[:, 1]) / 2  # type: ignore[attr-defined]
-    r = env.simulator.hard_dof_pos_limits[:, 1] - env.simulator.hard_dof_pos_limits[:, 0]  # type: ignore[attr-defined]
-    lower_soft_limit = m - 0.5 * r * soft_dof_pos_limit
-    upper_soft_limit = m + 0.5 * r * soft_dof_pos_limit
-
-    out_of_limits = -(env.simulator.dof_pos - lower_soft_limit).clip(max=0.0)  # lower limit
-    out_of_limits += (env.simulator.dof_pos - upper_soft_limit).clip(min=0.0)
-    return torch.sum(out_of_limits, dim=1)
-
-
-# ================================================================================================
 # Tracking and Task Rewards
 # ================================================================================================
 
 
-def tracking_lin_vel(env: LeggedRobotLocomotionManager, tracking_sigma: float = 0.25) -> torch.Tensor:
+def tracking_lin_vel(env: PolicyTask, tracking_sigma: float = 0.25) -> torch.Tensor:
     """Reward tracking of linear velocity commands (xy axes).
 
     Uses exponential reward: exp(-error / sigma)
@@ -157,7 +133,7 @@ def tracking_lin_vel(env: LeggedRobotLocomotionManager, tracking_sigma: float = 
     return torch.exp(-lin_vel_error / tracking_sigma)
 
 
-def tracking_ang_vel(env: LeggedRobotLocomotionManager, tracking_sigma: float = 0.25) -> torch.Tensor:
+def tracking_ang_vel(env: PolicyTask, tracking_sigma: float = 0.25) -> torch.Tensor:
     """Reward tracking of angular velocity commands (yaw).
 
     Uses exponential reward: exp(-error / sigma)
@@ -175,7 +151,7 @@ def tracking_ang_vel(env: LeggedRobotLocomotionManager, tracking_sigma: float = 
     return torch.exp(-ang_vel_error / tracking_sigma)
 
 
-def penalty_ang_vel_xy(env: LeggedRobotLocomotionManager) -> torch.Tensor:
+def penalty_ang_vel_xy(env: PolicyTask) -> torch.Tensor:
     """Penalize xy axes base angular velocity.
 
     Args:
@@ -188,7 +164,7 @@ def penalty_ang_vel_xy(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     return torch.sum(torch.square(ang_vel[:, :2]), dim=1)
 
 
-def penalty_close_feet_xy(env: LeggedRobotLocomotionManager, close_feet_threshold: float = 0.05) -> torch.Tensor:
+def penalty_close_feet_xy(env: PolicyTask, close_feet_threshold: float = 0.05) -> torch.Tensor:
     """Penalize when feet are too close together in xy plane.
 
     Args:
@@ -198,11 +174,12 @@ def penalty_close_feet_xy(env: LeggedRobotLocomotionManager, close_feet_threshol
     Returns:
         Reward tensor [num_envs]
     """
-    left_foot_xy = env.simulator._rigid_body_pos[:, env.feet_indices[0], :2]
-    right_foot_xy = env.simulator._rigid_body_pos[:, env.feet_indices[1], :2]
+    feet = _feet_indices(env)
+    left_foot_xy = env.simulator._rigid_body_pos[:, feet[0], :2]
+    right_foot_xy = env.simulator._rigid_body_pos[:, feet[1], :2]
 
     # Get base orientation
-    base_forward = quat_apply(env.base_quat, base_forward_vector(env), w_last=True)
+    base_forward = quat_apply(env.simulator.base_quat, base_forward_vector(env), w_last=True)
     base_yaw = torch.atan2(base_forward[:, 1], base_forward[:, 0])
 
     # Calculate perpendicular distance in base-local coordinates
@@ -216,7 +193,7 @@ def penalty_close_feet_xy(env: LeggedRobotLocomotionManager, close_feet_threshol
 
 
 def base_height(
-    env: LeggedRobotLocomotionManager,
+    env: PolicyTask,
     desired_base_height: float = 0.89,
     zero_vel_penalty_scale: float = 1.0,
     stance_penalty_scale: float = 1.0,
@@ -253,9 +230,7 @@ def base_height(
     return base_height_penalty
 
 
-def feet_phase(
-    env: LeggedRobotLocomotionManager, swing_height: float = 0.08, tracking_sigma: float = 0.25
-) -> torch.Tensor:
+def feet_phase(env: PolicyTask, swing_height: float = 0.08, tracking_sigma: float = 0.25) -> torch.Tensor:
     """Reward for tracking desired foot height based on gait phase.
 
     Based on MuJoCo Playground's implementation.
@@ -289,7 +264,7 @@ def feet_phase(
 
 
 def pose(
-    env: LeggedRobotLocomotionManager,
+    env: PolicyTask,
     pose_weights: list[float],
 ) -> torch.Tensor:
     """Reward for maintaining default pose.
@@ -319,7 +294,7 @@ def pose(
     return torch.sum(weighted_error, dim=1)
 
 
-def penalty_stumble(env: LeggedRobotLocomotionManager) -> torch.Tensor:
+def penalty_stumble(env: PolicyTask) -> torch.Tensor:
     """Penalize feet hitting vertical surfaces.
 
     Args:
@@ -328,14 +303,11 @@ def penalty_stumble(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     Returns:
         Reward tensor [num_envs]
     """
-    return torch.any(
-        torch.norm(env.simulator.contact_forces[:, env.feet_indices, :2], dim=2)
-        > 4 * torch.abs(env.simulator.contact_forces[:, env.feet_indices, 2]),
-        dim=1,
-    )
+    feet_forces = env.simulator.contact_forces[:, _feet_indices(env)]
+    return torch.any(torch.norm(feet_forces[..., :2], dim=2) > 4 * torch.abs(feet_forces[..., 2]), dim=1)
 
 
-def alive(env: LeggedRobotLocomotionManager) -> torch.Tensor:
+def alive(env: PolicyTask) -> torch.Tensor:
     """Reward for staying alive.
 
     Args:

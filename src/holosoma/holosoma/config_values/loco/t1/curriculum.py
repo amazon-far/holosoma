@@ -6,7 +6,7 @@ t1_29dof_curriculum = CurriculumManagerCfg(
     setup_terms={
         "average_episode_tracker": CurriculumTermCfg(
             func="holosoma.managers.curriculum.terms.locomotion:AverageEpisodeLengthTracker",
-            params={},
+            params={"base_num_envs": 4096},
         ),
         "penalty_curriculum": CurriculumTermCfg(
             func="holosoma.managers.curriculum.terms.locomotion:PenaltyCurriculum",
@@ -30,7 +30,7 @@ t1_29dof_curriculum_fast_sac = CurriculumManagerCfg(
     setup_terms={
         "average_episode_tracker": CurriculumTermCfg(
             func="holosoma.managers.curriculum.terms.locomotion:AverageEpisodeLengthTracker",
-            params={},
+            params={"base_num_envs": 4096},
         ),
         "penalty_curriculum": CurriculumTermCfg(
             func="holosoma.managers.curriculum.terms.locomotion:PenaltyCurriculum",

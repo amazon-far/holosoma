@@ -118,7 +118,7 @@ class EvalOverridesConfig:
 class ExperimentConfig:
     """Top-level experiment configuration used by the Tyro CLI."""
 
-    env_class: str = "holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager"
+    env_class: str = "holosoma.envs.policy_task.PolicyTask"
 
     device: str | None = None
     """Device for the task. None (the default) resolves from the simulator backend and process

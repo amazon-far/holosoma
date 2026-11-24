@@ -207,6 +207,27 @@ def test_qpos_npz_without_object_track(tmp_path: Path) -> None:
     assert clip.has_root and clip.num_frames == 3
 
 
+def test_holosoma_motion_file_plays_in_dof_order_at_its_own_rate(tmp_path: Path) -> None:
+    root = np.tile(np.array([[0.1, 0.2, 0.8, 1.0, 0.0, 0.0, 0.0]], dtype=np.float32), (3, 1))
+    joints = np.arange(6, dtype=np.float32).reshape(3, 2)  # columns: knee, hip
+    path = tmp_path / "motion.npz"
+    np.savez(
+        path,
+        fps=np.array([30.0]),
+        joint_names=np.array(["knee", "hip"]),
+        joint_pos=np.concatenate([root, joints], axis=1),
+        object_pos_w=np.zeros((3, 3), dtype=np.float32),
+        object_quat_w=np.tile(np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32), (3, 1)),
+    )
+
+    clip = PlaybackClip(
+        str(path), num_dof=2, num_objects=1, fps=50.0, quat_order="wxyz", device="cpu", dof_names=["hip", "knee"]
+    )
+
+    assert clip.fps == 30.0
+    assert torch.equal(clip.joint_pos, torch.tensor([[1.0, 0.0], [3.0, 2.0], [5.0, 4.0]]))
+
+
 def test_multi_array_npz_fails_loud(tmp_path: Path) -> None:
     f = tmp_path / "c.npz"
     np.savez(f, a=_matrix(), b=_matrix())
@@ -260,6 +281,7 @@ class _FakeSimulator:
         self.sim_device = "cpu"
         self.num_envs = num_envs
         self.num_dof = NUM_DOF
+        self.dof_names = [f"joint_{index}" for index in range(NUM_DOF)]
         self.dof_pos = torch.zeros(num_envs, NUM_DOF)
         self.dof_vel = torch.zeros(num_envs, NUM_DOF)
         self.robot_root_states = torch.zeros(num_envs, 13)
