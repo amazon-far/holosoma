@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import Any
 
 from holosoma.config_types.termination import TerminationManagerCfg, TerminationTermCfg
+from holosoma.managers.utils import resolve_callable
 from holosoma.utils.safe_torch_import import torch
 
 from .base import TerminationTermBase
@@ -55,7 +55,7 @@ class TerminationManager:
 
     def _initialize_terms(self) -> None:
         for term_name, term_cfg in self.cfg.terms.items():
-            func = self._resolve_function(term_cfg.func)
+            func = resolve_callable(term_cfg.func, context="termination term")
 
             if isinstance(func, type) and issubclass(func, TerminationTermBase):
                 instance = func(term_cfg, self.env)
@@ -65,19 +65,6 @@ class TerminationManager:
 
             self._term_names.append(term_name)
             self._term_cfgs.append(term_cfg)
-
-    def _resolve_function(self, func: Any | str) -> Any:
-        if isinstance(func, str):
-            if ":" not in func:
-                raise ValueError(f"Function string must be in format 'module:function', got: {func}")
-
-            module_path, func_name = func.split(":", 1)
-            try:
-                module = importlib.import_module(module_path)
-                return getattr(module, func_name)
-            except (ImportError, AttributeError) as exc:
-                raise ValueError(f"Failed to import termination function '{func}': {exc}") from exc
-        return func
 
     def check(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Evaluate termination terms.

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import Any
 
 import torch
 
 from holosoma.config_types.reward import RewardManagerCfg, RewardTermCfg
+from holosoma.managers.utils import resolve_callable
 
 from .base import RewardTermBase
 
@@ -63,7 +63,7 @@ class RewardManager:
                 continue
 
             # Resolve function or class
-            func = self._resolve_function(term_cfg.func)
+            func = resolve_callable(term_cfg.func, context="reward term")
 
             # Check if it's a class (stateful) or function (stateless)
             if isinstance(func, type) and issubclass(func, RewardTermBase):
@@ -76,37 +76,6 @@ class RewardManager:
 
             self._term_names.append(term_name)
             self._term_cfgs.append(term_cfg)
-
-    def _resolve_function(self, func: Any | str) -> Any:
-        """Resolve a reward callable or class from a string specification.
-
-        Parameters
-        ----------
-        func : Any or str
-            Function or class reference, or a string like ``"module:object_name"``.
-
-        Returns
-        -------
-        Any
-            Resolved callable or class.
-
-        Raises
-        ------
-        ValueError
-            If the string path is malformed or the target cannot be imported.
-        """
-        if isinstance(func, str):
-            # Parse string like "module.path:function_name"
-            if ":" not in func:
-                raise ValueError(f"Function string must be in format 'module:function', got: {func}")
-
-            module_path, func_name = func.split(":", 1)
-            try:
-                module = importlib.import_module(module_path)
-                return getattr(module, func_name)
-            except (ImportError, AttributeError) as e:
-                raise ValueError(f"Failed to import function '{func}': {e}") from e
-        return func
 
     @property
     def active_terms(self) -> list[str]:
