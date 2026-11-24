@@ -1,8 +1,9 @@
 """Expand exact names and ``#tag`` references for robot configs and task terms.
 
 Declare tags in ``RobotConfig.body_tags`` or ``joint_tags``, for example
-``{"#legs": ["#left_leg", "#right_leg"]}``. Expansion preserves first-seen order and rejects
-unknown tags, cycles, and names outside a supplied universe. ``#all`` selects the supplied universe
+``{"#legs": {"#left_leg", "#right_leg"}}``. Tags and selections are sets of names.
+Expansion collapses duplicates and uses canonical universe order, or lexical order without a universe.
+It rejects unknown tags, cycles, and names outside a supplied universe. ``#all`` selects the supplied universe
 and cannot be declared in a tag table. Regex and glob syntax are unsupported.
 """
 
@@ -11,7 +12,7 @@ from __future__ import annotations
 # Keep this module independent of torch and config_types so deployment readers can use saved fields directly.
 import math
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import TypeVar
 
 TAG_PREFIX = "#"
@@ -29,30 +30,26 @@ def is_tag(entry: str) -> bool:
 
 
 def expand_name_spec(
-    spec: Sequence[str],
-    tags: Mapping[str, Sequence[str]],
+    spec: Collection[str],
+    tags: Mapping[str, Collection[str]],
     universe: Sequence[str] | None = None,
     *,
     kind: str = "body",
-    dedupe: bool = True,
 ) -> list[str]:
-    """Expand ``spec`` (exact names and ``#tag`` references) into an ordered name list.
+    """Expand a selection into unique names in canonical universe order.
 
     Parameters
     ----------
-    spec : Sequence[str]
-        Exact names and/or ``#tag`` references, in the order they should appear.
-    tags : Mapping[str, Sequence[str]]
-        Tag table (``RobotConfig.body_tags`` or ``joint_tags``), keyed by the ``#tag`` name. Entries may
+    spec : Collection[str]
+        Exact names and/or ``#tag`` references. Declaration order has no meaning.
+    tags : Mapping[str, Collection[str]]
+        Tag table (``RobotConfig.body_tags`` or ``joint_tags``), keyed by the ``#tag`` name. Entries can
         reference other tags.
     universe : Sequence[str] | None
         When given, every expanded name must be in it (e.g. ``simulator.body_names``); ``None``
         skips the name check (used when only the tag structure is being validated).
     kind : str
         ``"body"`` or ``"joint"``; only used in error messages.
-    dedupe : bool
-        Drop repeated names (the default, for set-like specs). ``False`` keeps every occurrence, for
-        specs where multiplicity matters (a mirror pair list).
 
     Raises
     ------
@@ -64,11 +61,10 @@ def expand_name_spec(
     """
     if "#all" in tags:
         raise ValueError(f"{kind} tag '#all' is reserved and cannot be declared. Use a different tag for a subset.")
-    out: list[str] = []
     seen: set[str] = set()
     universe_set = set(universe) if universe is not None else None
 
-    def visit(entries: Sequence[str], chain: tuple[str, ...]) -> None:
+    def visit(entries: Collection[str], chain: tuple[str, ...]) -> None:
         if isinstance(entries, str):
             where = f"{kind} tag '{chain[-1]}'" if chain else f"{kind} spec"
             raise TypeError(
@@ -80,11 +76,7 @@ def expand_name_spec(
             if entry == "#all":
                 if universe is None:
                     raise ValueError(f"{kind} tag '#all' requires the known {_plural(kind)}.")
-                for name in universe:
-                    if dedupe and name in seen:
-                        continue
-                    seen.add(name)
-                    out.append(name)
+                seen.update(universe)
             elif is_tag(entry):
                 if entry in chain:
                     raise ValueError(f"{kind} tag cycle: {' -> '.join((*chain, entry))}")
@@ -99,18 +91,15 @@ def expand_name_spec(
                         f"Unknown {kind} name '{entry}' (from {list(spec)!r}); "
                         f"known {_plural(kind)}: {list(universe or ())}"
                     )
-                if dedupe and entry in seen:
-                    continue
                 seen.add(entry)
-                out.append(entry)
 
     visit(spec, ())
-    return out
+    return sorted(seen) if universe is None else [name for name in dict.fromkeys(universe) if name in seen]
 
 
 def resolve_single_name_spec(
     spec: str,
-    tags: Mapping[str, Sequence[str]],
+    tags: Mapping[str, Collection[str]],
     universe: Sequence[str],
     *,
     kind: str = "body",
@@ -122,7 +111,7 @@ def resolve_single_name_spec(
     return names[0]
 
 
-def validate_tag_table(tags: Mapping[str, Sequence[str]], universe: Sequence[str], *, kind: str = "body") -> None:
+def validate_tag_table(tags: Mapping[str, Collection[str]], universe: Sequence[str], *, kind: str = "body") -> None:
     """Check a whole tag table: ``#``-prefixed keys and every tag expandable against ``universe``.
 
     Raises ``ValueError`` on a key that does not start with ``#`` (a tag is declared and referenced in the
@@ -169,39 +158,9 @@ def expand_name_assignments(
     return values
 
 
-def expand_unique_name_spec(
-    spec: Sequence[str],
-    tags: Mapping[str, Sequence[str]],
-    universe: Sequence[str],
-    *,
-    what: str,
-    kind: str = "joint",
-) -> list[str]:
-    """Expand an ordered correspondence side, rejecting repetitions before any deduplication.
-
-    This differs from a selection: a repeated entity inside a single composed tag is also invalid.
-    Errors name the entity and the top-level source entries, including their positions.
-    """
-    if isinstance(spec, str):
-        raise TypeError(f"{what} must be a list of names, got the string {spec!r}")
-    names: list[str] = []
-    source_for: dict[str, tuple[int, str]] = {}
-    for index, key in enumerate(spec):
-        for name in expand_name_spec([key], tags, universe, kind=kind, dedupe=False):
-            if name in source_for:
-                previous_index, previous_key = source_for[name]
-                raise ValueError(
-                    f"{what} lists {kind} {name!r} more than once: source keys "
-                    f"{previous_key!r} (entry {previous_index}) and {key!r} (entry {index})."
-                )
-            source_for[name] = (index, key)
-            names.append(name)
-    return names
-
-
 def expand_joint_value_map(
     table: Mapping[str, float],
-    joint_tags: Mapping[str, Sequence[str]],
+    joint_tags: Mapping[str, Collection[str]],
     dof_names: Sequence[str],
     *,
     what: str = "joint values",

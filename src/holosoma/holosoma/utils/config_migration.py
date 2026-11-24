@@ -324,6 +324,85 @@ def _migrate_saved_simulator(out: dict[str, Any]) -> None:
         extra["gravity"] = gravity
 
 
+def _migrate_saved_symmetry(out: dict[str, Any], robot: dict[str, Any]) -> None:
+    """Convert historical ordered sides to exact pairs before tag members become sets."""
+    tags = robot.get("joint_tags") or {}
+    algo = _get_path(out, "algo.config")
+    symmetry = algo.get("symmetry") if algo is not None else None
+    old_sides = isinstance(symmetry, dict) and ("left" in symmetry or "right" in symmetry)
+    old_groups = "#mirror_left" in tags or "#mirror_right" in tags
+    if not old_sides and not old_groups and "#mirror_flip_sign" not in tags:
+        return
+
+    def ordered_names(entries: Any, chain: tuple[str, ...] = ()) -> list[str]:
+        if not isinstance(entries, (list, tuple)):
+            raise ValueError("Saved ordered symmetry sides must be arrays of joint names or tag references.")
+        names: list[str] = []
+        for entry in entries:
+            if not isinstance(entry, str):
+                raise ValueError(f"Saved symmetry entry must be a string, got {entry!r}.")
+            if entry.startswith("#"):
+                if entry in chain:
+                    raise ValueError(f"Saved symmetry tag cycle: {' -> '.join((*chain, entry))}")
+                if entry == "#all":
+                    selected = list(robot.get("dof_names") or [])
+                elif entry in tags:
+                    selected = ordered_names(tags[entry], (*chain, entry))
+                else:
+                    raise ValueError(f"Unknown saved symmetry joint tag {entry!r}.")
+                names.extend(selected)
+            else:
+                names.append(entry)
+        if len(set(names)) != len(names):
+            raise ValueError("Saved ordered symmetry side contains duplicate joints; its pairing is ambiguous.")
+        return names
+
+    if old_sides or old_groups:
+        saved_sides = symmetry if old_sides and isinstance(symmetry, dict) else {}
+        left = ordered_names(saved_sides.get("left", ["#mirror_left"]))
+        right = ordered_names(saved_sides.get("right", ["#mirror_right"]))
+        if len(left) != len(right):
+            raise ValueError("Saved ordered symmetry sides must contain the same number of joints.")
+        pairs = list(zip(left, right, strict=True))
+        if old_sides:
+            assert isinstance(symmetry, dict)
+            stored_pairs = symmetry.get("pairs")
+            if stored_pairs is not None and [list(pair) for pair in stored_pairs] != [list(pair) for pair in pairs]:
+                raise ValueError("Saved symmetry has conflicting pairs and ordered left/right definitions.")
+            symmetry.pop("left", None)
+            symmetry.pop("right", None)
+            symmetry["pairs"] = pairs or None
+        elif algo is not None:
+            symmetry = algo.setdefault("symmetry", {})
+            symmetry.setdefault("pairs", pairs or None)
+
+    renames = {
+        "#mirror_left": "#symmetry_left",
+        "#mirror_right": "#symmetry_right",
+        "#mirror_flip_sign": "#symmetry_flip_sign",
+    }
+
+    def rename(value: Any) -> Any:
+        if isinstance(value, str):
+            return renames.get(value, value)
+        if isinstance(value, list):
+            return [rename(entry) for entry in value]
+        if isinstance(value, dict):
+            rewritten: dict[str, Any] = {}
+            for key, entry in value.items():
+                next_key = renames.get(key, key)
+                next_entry = rename(entry)
+                if next_key in rewritten and rewritten[next_key] != next_entry:
+                    raise ValueError(f"Saved symmetry tag rename conflicts at {next_key!r}.")
+                rewritten[next_key] = next_entry
+            return rewritten
+        return value
+
+    renamed = rename(out)
+    out.clear()
+    out.update(renamed)
+
+
 def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
     """Return a deep copy of ``raw`` rewritten to the current schema.
 
@@ -341,6 +420,8 @@ def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
     robot = out.get("robot")
     if not isinstance(robot, dict):
         return out
+    _migrate_saved_symmetry(out, robot)
+    robot = out["robot"]
     # Saved tag tables can contain a generated membership list. Resolve #all from current names.
     for field in ("body_tags", "joint_tags"):
         tags = robot.get(field)
@@ -423,7 +504,7 @@ def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
     if body_tags:
         robot["body_tags"] = body_tags
 
-    # Symmetry data -> joint tags read by the algo's default JointSymmetryConfig. Names outside dof_names
+    # Symmetry data -> unordered pair tags read by the algorithm. Names outside dof_names
     # are dropped (the old SymmetryUtils skipped them); a pair goes when either side is stale.
     joint_tags: dict[str, list[str]] = dict(robot.get("joint_tags") or {})
     known_dofs = set(dof_names) if dof_names else None
@@ -459,19 +540,22 @@ def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
                     "applied such a map one-way, which is not a mirror; add the reverse entries, or set "
                     "algo.config.use_symmetry=False in the dump so the map is dropped."
                 )
-        if left and "#mirror_left" not in joint_tags and "#mirror_right" not in joint_tags:
-            joint_tags["#mirror_left"] = left
-            joint_tags["#mirror_right"] = right
-            changes.append(f"symmetry_joint_names -> joint_tags['#mirror_left'/'#mirror_right'] ({len(left)} pairs)")
+        for index, pair in enumerate(zip(left, right, strict=True)):
+            tag = f"#mirror_saved_{index}"
+            if tag in joint_tags and set(joint_tags[tag]) != set(pair):
+                raise ValueError(f"Saved symmetry_joint_names conflicts with joint tag {tag!r}.")
+            joint_tags[tag] = list(pair)
+        if left:
+            changes.append(f"symmetry_joint_names -> two-joint mirror tags ({len(left)} pairs)")
     flip = robot.get("flip_sign_joint_names")
-    if flip and "#mirror_flip_sign" not in joint_tags:
+    if flip and "#symmetry_flip_sign" not in joint_tags:
         kept = [str(n) for n in flip if known_dofs is None or n in known_dofs]
         stale = [str(n) for n in flip if str(n) not in kept]
         if stale:
             logger.warning(f"Legacy flip_sign_joint_names {stale} dropped: not in dof_names.")
         if kept:
-            joint_tags["#mirror_flip_sign"] = kept
-            changes.append("flip_sign_joint_names -> joint_tags['#mirror_flip_sign']")
+            joint_tags["#symmetry_flip_sign"] = kept
+            changes.append("flip_sign_joint_names -> joint_tags['#symmetry_flip_sign']")
     if joint_tags:
         robot["joint_tags"] = joint_tags
 

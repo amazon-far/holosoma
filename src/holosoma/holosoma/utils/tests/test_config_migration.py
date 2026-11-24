@@ -13,7 +13,7 @@ import yaml
 
 from holosoma.config_types.action import ActionTermCfg
 from holosoma.config_types.command import NoiseToInitialPoseConfig
-from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.experiment import ExperimentConfig, SupportsJointSymmetry
 from holosoma.config_values.experiment import EXPERIMENT_REGISTRY
 from holosoma.utils.config_migration import migrate_legacy_experiment_config
 from holosoma.utils.name_tags import expand_name_spec
@@ -109,13 +109,14 @@ def test_migrated_dump_constructs_and_matches_the_shipped_experiment(name: str) 
 
     # The dump's symmetry dict was key-sorted by yaml, so compare the pairing, not the order.
     def _pairs(r: Any) -> set[tuple[str, str]]:
-        left = expand_name_spec(["#mirror_left"], r.joint_tags, r.dof_names, kind="joint")
-        right = expand_name_spec(["#mirror_right"], r.joint_tags, r.dof_names, kind="joint")
+        from holosoma.config_types.algo import JointSymmetryConfig
+
+        left, right, _ = JointSymmetryConfig().resolve(r.joint_tags, r.dof_names)
         return set(zip(left, right, strict=False))
 
     assert _pairs(robot) == _pairs(cur_robot) and len(_pairs(robot)) == 13
-    assert set(expand_name_spec(["#mirror_flip_sign"], robot.joint_tags, robot.dof_names, kind="joint")) == set(
-        expand_name_spec(["#mirror_flip_sign"], cur_robot.joint_tags, cur_robot.dof_names, kind="joint")
+    assert set(expand_name_spec(["#symmetry_flip_sign"], robot.joint_tags, robot.dof_names, kind="joint")) == set(
+        expand_name_spec(["#symmetry_flip_sign"], cur_robot.joint_tags, cur_robot.dof_names, kind="joint")
     )
 
     # Task decisions moved into the consuming terms' params with the same resolved bodies.
@@ -505,7 +506,9 @@ def test_one_way_symmetry_map_is_dropped_when_symmetry_is_off(warnings: list[str
 
     cfg = ExperimentConfig(**migrate_legacy_experiment_config(raw))
 
-    left = expand_name_spec(["#mirror_left"], cfg.robot.joint_tags, cfg.robot.dof_names, kind="joint")
+    algo = cfg.algo.config
+    assert isinstance(algo, SupportsJointSymmetry)
+    left, _, _ = algo.symmetry.resolve(cfg.robot.joint_tags, cfg.robot.dof_names)
     assert "left_knee_joint" not in left and len(left) == 12  # the one-way pair is gone, the other 12 stay
     assert any("one-way, and use_symmetry is off" in m for m in warnings)
 
@@ -532,14 +535,17 @@ def test_existing_tags_win_over_derived_ones() -> None:
 
         derived = EXPERIMENT_REGISTRY["g1_29dof"].robot.body_tags[derived_tag]
         declared_after = {tag: names for tag, names in cfg.robot.body_tags.items() if tag != "#all"}
-        assert declared_after == {**raw["robot"]["body_tags"], derived_tag: derived}
+        assert declared_after == {
+            **{tag: frozenset(names) for tag, names in raw["robot"]["body_tags"].items()},
+            derived_tag: derived,
+        }
 
 
 def test_has_torso_false_still_derives_the_base_tag() -> None:
     raw = _legacy("g1_29dof")
     raw["robot"]["has_torso"] = False
     cfg = ExperimentConfig(**migrate_legacy_experiment_config(raw))
-    assert cfg.robot.body_tags["#base"] == ["torso_link"]
+    assert cfg.robot.body_tags["#base"] == frozenset({"torso_link"})
     assert cfg.randomization is not None
     assert cfg.randomization.setup_terms["mass_randomizer"].params["base_body"] == "#base"
     assert cfg.randomization.setup_terms["randomize_base_com_startup"].params["body"] == "#base"
@@ -575,7 +581,7 @@ def test_foot_pattern_matching_no_body_yields_no_tag_and_warns(warnings: list[st
     cfg = ExperimentConfig(**migrate_legacy_experiment_config(raw))
 
     assert "#feet_height" not in cfg.robot.body_tags
-    assert cfg.robot.body_tags["#feet"] == ["left_ankle_roll_link", "right_ankle_roll_link"]
+    assert cfg.robot.body_tags["#feet"] == frozenset({"left_ankle_roll_link", "right_ankle_roll_link"})
     assert any("foot_height_name='ghost_point' matches no body_names entry" in m for m in warnings)
 
 
@@ -585,7 +591,7 @@ def test_stale_flip_sign_name_is_dropped_with_a_warning(warnings: list[str]) -> 
 
     cfg = ExperimentConfig(**migrate_legacy_experiment_config(raw))  # use_symmetry=True: the validator runs
 
-    flipped = expand_name_spec(["#mirror_flip_sign"], cfg.robot.joint_tags, cfg.robot.dof_names, kind="joint")
+    flipped = expand_name_spec(["#symmetry_flip_sign"], cfg.robot.joint_tags, cfg.robot.dof_names, kind="joint")
     assert "ghost_joint" not in flipped and len(flipped) == 16
     assert any("flip_sign_joint_names ['ghost_joint'] dropped" in m for m in warnings)
 
@@ -599,8 +605,9 @@ def test_stale_mirror_pair_member_drops_the_whole_pair(warnings: list[str]) -> N
 
     cfg = ExperimentConfig(**migrate_legacy_experiment_config(raw))
 
-    left = expand_name_spec(["#mirror_left"], cfg.robot.joint_tags, cfg.robot.dof_names, kind="joint")
-    right = expand_name_spec(["#mirror_right"], cfg.robot.joint_tags, cfg.robot.dof_names, kind="joint")
+    algo = cfg.algo.config
+    assert isinstance(algo, SupportsJointSymmetry)
+    left, right, _ = algo.symmetry.resolve(cfg.robot.joint_tags, cfg.robot.dof_names)
     assert len(left) == len(right) == 12
     assert "left_knee_joint" not in left + right
     assert any("[('left_knee_joint', 'ghost_joint')] dropped" in m for m in warnings)

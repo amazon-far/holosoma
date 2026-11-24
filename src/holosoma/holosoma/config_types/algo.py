@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import field
 from typing import Any
 
-from pydantic import model_validator
+from pydantic import ConfigDict, model_validator
 from pydantic.dataclasses import dataclass
 
-from holosoma.utils.name_tags import expand_name_spec, expand_unique_name_spec
+from holosoma.utils.name_tags import expand_name_spec, validate_tag_table
 
 
 @dataclass(frozen=True)
@@ -117,54 +118,95 @@ class PPOModuleDictConfig:
     """Critic module configuration."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class JointSymmetryConfig:
     """Sagittal-plane joint mirror used by the symmetry augmentation.
 
-    Entries are exact joint names or ``#tag`` references into ``RobotConfig.joint_tags`` (see
-    ``holosoma.utils.name_tags``); the defaults point at the ``mirror_*`` tags the shipped robots declare.
-    Resolved against the robot at ``ExperimentConfig`` construction and by ``SymmetryUtils`` via the env.
+    Declare exact joint pairs, or discover two-joint tags using ``mirror_tag_pattern``.
+    The pattern matches the full tag name without its leading ``#``.
+    ExperimentConfig validates the relationships before a simulator starts.
     """
 
-    left: list[str] = field(default_factory=lambda: ["#mirror_left"])
-    """Joints on one side of the mirror, in order."""
+    pairs: list[tuple[str, str]] | None = None
+    """Explicit pairs of distinct exact joint names. None enables discovery from robot tags."""
 
-    right: list[str] = field(default_factory=lambda: ["#mirror_right"])
-    """Mirror image of ``left``: same length, ``right[i]`` mirrors ``left[i]``."""
+    mirror_tag_pattern: str = r"mirror_.*"
+    """Regex for pair tags. Every matched tag must resolve to exactly two distinct joints."""
 
-    flip_sign: list[str] = field(default_factory=lambda: ["#mirror_flip_sign"])
-    """Joints whose value negates under the mirror (roll/yaw axes)."""
+    flip_sign: list[str] | None = None
+    """Exact joints or tags whose values negate. None uses #symmetry_flip_sign when that tag exists."""
+
+    @model_validator(mode="after")
+    def _validate_definitions(self) -> JointSymmetryConfig:
+        if not self.mirror_tag_pattern:
+            raise ValueError("symmetry.mirror_tag_pattern must not be empty.")
+        try:
+            re.compile(self.mirror_tag_pattern)
+        except re.error as error:
+            raise ValueError(f"Invalid symmetry.mirror_tag_pattern {self.mirror_tag_pattern!r}: {error}") from error
+        if self.pairs is not None:
+            self._validate_pairs([(str(index), pair) for index, pair in enumerate(self.pairs)], "symmetry")
+        return self
+
+    @staticmethod
+    def _validate_pairs(pairs: list[tuple[str, tuple[str, str]]], what: str) -> None:
+        if not pairs:
+            raise ValueError(f"{what} requires at least one explicit pair or matching two-joint tag.")
+        source_for: dict[str, str] = {}
+        for source, (first, second) in pairs:
+            if first == second:
+                raise ValueError(f"{what} pair {source!r} must contain two distinct joints, got {first!r}.")
+            for name in (first, second):
+                if not name or name.startswith("#"):
+                    raise ValueError(f"{what} pair {source!r} requires exact joint names, got {name!r}.")
+                if name in source_for:
+                    raise ValueError(
+                        f"{what} joint {name!r} occurs in multiple mirror pairs: {source_for[name]!r} and {source!r}."
+                    )
+                source_for[name] = source
 
     def resolve(
         self,
-        joint_tags: Mapping[str, Sequence[str]],
+        joint_tags: Mapping[str, Collection[str]],
         dof_names: Sequence[str],
         *,
         what: str = "symmetry",
     ) -> tuple[list[str], list[str], list[str]]:
-        """Validate ordered pairs and return fresh left/right lists plus a deduplicated flip selection."""
-        left = expand_unique_name_spec(self.left, joint_tags, dof_names, what=f"{what}.left")
-        right = expand_unique_name_spec(self.right, joint_tags, dof_names, what=f"{what}.right")
-        flip = expand_name_spec(self.flip_sign, joint_tags, dof_names, kind="joint")
-        if not left or len(left) != len(right):
-            raise ValueError(
-                f"{what}.left ({len(left)} joints) and .right ({len(right)} joints) must be "
-                f"non-empty and the same length; right[i] mirrors left[i] "
-                f"(left={self.left!r}, right={self.right!r})."
-            )
-        overlap = sorted(set(left) & set(right))
-        if overlap:
-            raise ValueError(
-                f"{what}.left and .right share joints {overlap}; a joint appears on one side "
-                f"(left={self.left!r}, right={self.right!r})."
-            )
+        """Resolve validated mirror relationships independently of tag and pair declaration order."""
+        validate_tag_table(joint_tags, dof_names, kind="joint")
+        if self.pairs is None:
+            pairs = []
+            for tag in sorted(joint_tags):
+                if re.fullmatch(self.mirror_tag_pattern, tag[1:]) is None:
+                    continue
+                names = expand_name_spec([tag], joint_tags, dof_names, kind="joint")
+                if len(names) != 2:
+                    raise ValueError(f"{what} mirror tag {tag!r} must resolve to two distinct joints, got {names}.")
+                pairs.append((tag, (names[0], names[1])))
+        else:
+            pairs = [(str(index), pair) for index, pair in enumerate(self.pairs)]
+        self._validate_pairs(pairs, what)
+        indices = {name: index for index, name in enumerate(dof_names)}
+        unknown = sorted({name for _, pair in pairs for name in pair} - indices.keys())
+        if unknown:
+            raise ValueError(f"{what} has unknown joint names {unknown}; known joints: {list(dof_names)}.")
+        canonical_pairs = sorted(
+            (tuple(sorted(pair, key=indices.__getitem__)) for _, pair in pairs),
+            key=lambda pair: (indices[pair[0]], indices[pair[1]]),
+        )
+        left = [pair[0] for pair in canonical_pairs]
+        right = [pair[1] for pair in canonical_pairs]
+        flip_spec = self.flip_sign
+        if flip_spec is None:
+            flip_spec = ["#symmetry_flip_sign"] if "#symmetry_flip_sign" in joint_tags else []
+        flip = expand_name_spec(flip_spec, joint_tags, dof_names, kind="joint")
         flipped = set(flip)
         for left_name, right_name in zip(left, right, strict=False):
             if (left_name in flipped) != (right_name in flipped):
                 raise ValueError(
                     f"{what}.flip_sign must include both or neither joint in mirror pair "
                     f"{left_name!r} and {right_name!r}, so mirroring twice restores the input "
-                    f"(left={self.left!r}, right={self.right!r}, flip_sign={self.flip_sign!r})."
+                    f"(flip_sign={self.flip_sign!r})."
                 )
         return left, right, flip
 

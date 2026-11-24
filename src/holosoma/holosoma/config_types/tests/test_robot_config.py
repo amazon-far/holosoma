@@ -103,8 +103,8 @@ def test_all_tracks_replaced_robot_names(field: str, names: list[str], resolver_
     assert resolve_dof_properties(changed).armature == dict.fromkeys(changed.dof_names, 0.2)
     assert changed.default_dof_positions() == dict.fromkeys(changed.dof_names, 0.25)
     assert robot.dof_names == ["left", "right"] and robot.body_names == ["base", "tip"]
-    assert robot.joint_tags == changed.joint_tags == {"#whole": ["#all"]}
-    assert robot.body_tags == changed.body_tags == {"#whole": ["#all"]}
+    assert robot.joint_tags == changed.joint_tags == {"#whole": frozenset({"#all"})}
+    assert robot.body_tags == changed.body_tags == {"#whole": frozenset({"#all"})}
 
 
 @pytest.mark.parametrize("field", ["body_tags", "joint_tags"])
@@ -157,12 +157,11 @@ def test_every_shipped_humanoid_declares_the_tags_its_consumers_reference(name: 
     assert len(feet) == len(feet_height) == 2
     assert [_mirror(n) for n in (feet[0], feet_height[0])] == [feet[1], feet_height[1]]
     assert not set(feet) & set(feet_height)
-    assert {"#mirror_left", "#mirror_right", "#mirror_flip_sign"} <= set(robot.joint_tags)
-    left = expand_name_spec(["#mirror_left"], robot.joint_tags, robot.dof_names, kind="joint")
-    right = expand_name_spec(["#mirror_right"], robot.joint_tags, robot.dof_names, kind="joint")
+    from holosoma.config_types.algo import JointSymmetryConfig
+
+    left, right, flip = JointSymmetryConfig().resolve(robot.joint_tags, robot.dof_names)
     assert len(left) == len(right) > 0
     assert [_mirror(n) for n in left] == right  # index-corresponding sagittal pairs
-    flip = expand_name_spec(["#mirror_flip_sign"], robot.joint_tags, robot.dof_names, kind="joint")
     assert flip and set(flip) <= set(robot.dof_names)
 
 
@@ -288,7 +287,7 @@ def test_defaults_respect_configured_position_limits(
                 name: 0.0
                 if name.startswith("waist_")
                 else 0.1
-                if name in g1_29dof.joint_tags["#left_leg"] + g1_29dof.joint_tags["#right_leg"]
+                if name in g1_29dof.joint_tags["#left_leg"] | g1_29dof.joint_tags["#right_leg"]
                 else 0.2
                 for name in g1_29dof.dof_names
             },
@@ -320,7 +319,7 @@ def test_default_positions_map_preserves_serialized_config_and_dof_order() -> No
         joint_tags={"#knees": ["#left", "r_knee"], "#left": ["l_knee"]},
         init_state=RobotInitState(position=[0.0, 0.0, 0.5], default_joint_positions={"torso": -0.1, "#knees": 0.3}),
     )
-    serialized = json.dumps(dataclasses.asdict(robot))
+    serialized = pydantic.TypeAdapter[RobotConfig](RobotConfig).dump_json(robot)
     result = robot.default_dof_positions()
     assert list(result.items()) == [("r_knee", 0.3), ("torso", -0.1), ("l_knee", 0.3)]
     assert list(result.values()) == [0.3, -0.1, 0.3]
@@ -335,7 +334,7 @@ def test_default_positions_map_preserves_serialized_config_and_dof_order() -> No
 
     result["r_knee"] = 99.0
     assert robot.default_dof_positions()["r_knee"] == 0.3
-    assert json.dumps(dataclasses.asdict(robot)) == serialized
+    assert pydantic.TypeAdapter[RobotConfig](RobotConfig).dump_json(robot) == serialized
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
@@ -383,8 +382,8 @@ def test_body_and_joint_tags_are_validated_against_names() -> None:
         # The gain keys reference g1's pair tags, so the table is extended rather than replaced.
         joint_tags={**g1_29dof.joint_tags, "#knee_pair": ["#knees"]},
     )
-    assert ok.body_tags["#contacts"] == ["#feet", "pelvis"]
-    assert ok.joint_tags["#knee_pair"] == ["#knees"]
+    assert ok.body_tags["#contacts"] == frozenset({"#feet", "pelvis"})
+    assert ok.joint_tags["#knee_pair"] == frozenset({"#knees"})
     with pytest.raises(pydantic.ValidationError, match="Unknown body name 'left_foot'"):
         _replace_robot(g1_29dof, body_tags={"#feet": ["left_foot"]})
     with pytest.raises(pydantic.ValidationError, match="Unknown joint name 'pelvis'"):

@@ -22,19 +22,19 @@ class RobotNameResolver:
     def __init__(self, robot: RobotConfig, device: str):
         self.body_names = list(robot.body_names)
         self.dof_names = list(robot.dof_names)
-        self.body_tags = {key: list(names) for key, names in robot.body_tags.items()}
-        self.joint_tags = {key: list(names) for key, names in robot.joint_tags.items()}
+        self.body_tags = {key: frozenset(names) for key, names in robot.body_tags.items()}
+        self.joint_tags = {key: frozenset(names) for key, names in robot.joint_tags.items()}
         self.device = device
         self._cache: dict[tuple[str, tuple[str, ...]], Any] = {}
 
     def _resolve_cached(self, kind: str, spec: Sequence[str], compute: Callable[[], Any]) -> Any:
-        key = (kind, tuple(spec))
+        key = (kind, tuple(sorted(set(spec))))
         if key not in self._cache:
             self._cache[key] = compute()
         return self._cache[key]
 
     def resolve_body_names(self, spec: Sequence[str]) -> list[str]:
-        """Expand ``spec`` (exact body names and/or ``#tag`` references) to an ordered, deduped body-name list.
+        """Expand exact body names and ``#tag`` references in canonical body order.
 
         Uses the copied robot tag table. Cached by spec; unknown names/tags raise ValueError.
         """
@@ -46,7 +46,7 @@ class RobotNameResolver:
         return list(names)
 
     def resolve_joint_names(self, spec: Sequence[str]) -> list[str]:
-        """Expand ``spec`` (exact DOF names and/or ``#tag`` references) to an ordered, deduped DOF-name list.
+        """Expand exact DOF names and ``#tag`` references in canonical DOF order.
 
         Uses the copied robot tag table. Cached by spec; unknown names/tags raise ValueError.
         """
@@ -61,7 +61,7 @@ class RobotNameResolver:
         """Return the canonical body index of each body in ``resolve_body_names(spec)``.
 
         LongTensor on ``self.device``, one entry per resolved body (shape ``[0]`` for an empty spec).
-        Cached by ``tuple(spec)``: repeated calls return the same tensor for use in per-step terms.
+        Cached by selection membership: repeated and reordered selections return the same tensor.
         """
 
         def compute() -> torch.Tensor:
@@ -74,7 +74,7 @@ class RobotNameResolver:
         """Return the position in ``self.dof_names`` of each DOF in ``resolve_joint_names(spec)``.
 
         LongTensor on ``self.device``, one entry per resolved DOF (shape ``[0]`` for an empty spec).
-        Cached by ``tuple(spec)``: repeated calls return the same tensor.
+        Cached by selection membership: repeated and reordered selections return the same tensor.
         """
 
         def compute() -> torch.Tensor:

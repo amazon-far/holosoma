@@ -61,11 +61,17 @@ def test_robot_tag_dicts_expose_per_key_flags(
     field: str, tag: str, value: str, untouched: str, original: list[str]
 ) -> None:
     cfg = tyro.cli(
-        ExperimentConfig, args=(f"--robot.{field.replace('_', '-')}.{tag}", repr([value])), config=TYRO_CONIFG
+        ExperimentConfig, args=(f"--robot.{field.replace('_', '-')}.{tag}", repr({value})), config=TYRO_CONIFG
     )
     tags = getattr(cfg.robot, field)
-    assert tags[tag] == [value]
-    assert tags[untouched] == original
+    assert tags[tag] == frozenset({value})
+    assert tags[untouched] == frozenset(original)
+
+
+@pytest.mark.parametrize("literal", ["{'left_knee_joint', 'left_knee_joint'}", "{'left_knee_joint'}"])
+def test_tag_members_collapse_duplicates_at_cli(literal: str) -> None:
+    cfg = tyro.cli(ExperimentConfig, args=("--robot.joint-tags.#legs", literal), config=TYRO_CONIFG)
+    assert cfg.robot.joint_tags["#legs"] == frozenset({"left_knee_joint"})
 
 
 def test_action_controller_gain_dict_keys_are_cli_flags() -> None:
@@ -103,7 +109,7 @@ def test_robot_joint_tag_override_feeds_gain_coverage_at_cli() -> None:
     with pytest.raises((SystemExit, ValidationError)) as exc, redirect_stdout(io.StringIO()), redirect_stderr(err):
         tyro.cli(
             ExperimentConfig,
-            args=("action:g1-29dof-joint-pos", "--robot.joint-tags.#knees", "['left_knee_joint']"),
+            args=("action:g1-29dof-joint-pos", "--robot.joint-tags.#knees", "{'left_knee_joint'}"),
             config=TYRO_CONIFG,
         )
     assert "joint controller stiffness has no key covering DOF(s) ['right_knee_joint']" in " ".join(
@@ -114,7 +120,7 @@ def test_robot_joint_tag_override_feeds_gain_coverage_at_cli() -> None:
 def test_robot_tag_with_unknown_body_rejected_at_cli() -> None:
     err = io.StringIO()
     with pytest.raises(SystemExit), redirect_stdout(io.StringIO()), redirect_stderr(err):
-        tyro.cli(ExperimentConfig, args=("--robot.body-tags.#feet", "['nope']"), config=TYRO_CONIFG)
+        tyro.cli(ExperimentConfig, args=("--robot.body-tags.#feet", "{'nope'}"), config=TYRO_CONIFG)
     # The exit must come from the RobotConfig validator (its message reaches stderr), not from a CLI usage
     # error, which is also a SystemExit. tyro wraps its output, so compare with whitespace collapsed.
     assert "Unknown body name 'nope'" in " ".join(err.getvalue().split())

@@ -44,10 +44,10 @@ def _robot(body_names: list[str] | None = None) -> RobotConfig:
         ),
         asset=dataclasses.replace(yam.asset, fix_base_link=False),
         body_tags={
-            "#root": ["anchor"],
-            "#mount": ["anchor"],
-            "#nested": ["#mount"],
-            "#pair": ["anchor", "reference"],
+            "#root": {"anchor"},
+            "#mount": {"anchor"},
+            "#nested": {"#mount"},
+            "#pair": {"anchor", "reference"},
         },
     )
 
@@ -229,7 +229,7 @@ def test_explicit_selector_can_choose_a_body_other_than_root_tag(tmp_path: Path,
     path = tmp_path / "alternate-root.npz"
     _write_clip(path, root_name="reference")
     robot = _robot()
-    robot.body_tags["#mount"] = ["reference"]
+    robot.body_tags["#mount"] = {"reference"}
     term, simulator = _command(robot, _motion(path, root_body=selector), physical_root="reference")
 
     term.time_steps[:] = torch.tensor([0, 2])
@@ -320,7 +320,7 @@ def test_transition_anchors_to_selected_body_and_restores_simulator(tmp_path: Pa
 def test_invalid_selector_fails_before_motion_loading_or_simulator_writes(tmp_path: Path, selector: str) -> None:
     robot = _robot()
     # Mutation after config construction exercises runtime validation too.
-    robot.body_tags["#empty"] = []
+    robot.body_tags["#empty"] = set()
     robot.body_tags.pop("#root")
     simulator = _Simulator(robot)
     before = simulator.robot_root_states.clone()

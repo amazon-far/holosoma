@@ -37,7 +37,7 @@ class _Sim:
     def __init__(self, *, robot: Any = None, now: float = 0.0, num_envs: int = 1) -> None:
         self.robot_config = robot or replace(
             test_arm_fixed,
-            joint_tags={"#hinges": ["shoulder_joint", "elbow_joint"]},
+            joint_tags={"#hinges": {"shoulder_joint", "elbow_joint"}},
             init_state=replace(test_arm_fixed.init_state, default_joint_positions={"#hinges": 0.2}),
         )
         self.simulator_config = SimpleNamespace(bridge=BridgeConfig(enabled=False))
@@ -118,9 +118,9 @@ def test_selection_expands_and_deduplicates_before_ordering_torques() -> None:
     plugin, sim = _plugin(cfg, sim)
     sim.now = 1.0
     sim.hooks.emit(Phase.PRE_STEP)
-    assert plugin.dof_indices == [2, 0]
-    assert sim.writes[-1][1] == [2, 0]
-    torch.testing.assert_close(sim.writes[-1][0], torch.tensor([[6.0, 0.6]]))
+    assert plugin.dof_indices == [0, 2]
+    assert sim.writes[-1][1] == [0, 2]
+    torch.testing.assert_close(sim.writes[-1][0], torch.tensor([[0.6, 6.0]]))
 
 
 @pytest.mark.parametrize(

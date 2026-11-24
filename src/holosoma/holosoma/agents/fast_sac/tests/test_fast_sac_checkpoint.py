@@ -39,4 +39,4 @@ def test_saved_checkpoint_loads_with_weights_only(tmp_path: Path) -> None:
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     assert checkpoint["global_step"] == 3 and checkpoint["experiment_config"] == {"algo": "fast_sac"}
     assert isinstance(checkpoint["args"]["symmetry"], dict)  # nested config stored as primitives
-    assert checkpoint["args"]["symmetry"]["left"] == ["#mirror_left"]
+    assert checkpoint["args"]["symmetry"] == {"pairs": None, "mirror_tag_pattern": "mirror_.*", "flip_sign": None}

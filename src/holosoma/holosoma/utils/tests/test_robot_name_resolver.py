@@ -66,7 +66,15 @@ def test_resolve_body_names_composes_tags_and_dedupes() -> None:
 
     names = resolver.resolve_body_names(["#legs", "left_foot", "pelvis"])
 
-    assert names == ["left_hip_link", "right_hip_link", "left_foot", "right_foot", "pelvis"]
+    assert names == ["pelvis", "left_hip_link", "right_hip_link", "left_foot", "right_foot"]
+
+
+def test_reordered_and_repeated_selections_share_canonical_indices() -> None:
+    resolver = _resolver()
+    first = resolver.resolve_body_indices(["#feet", "pelvis"])
+    second = resolver.resolve_body_indices(["pelvis", "#feet", "pelvis"])
+    assert second is first
+    assert first.tolist() == [0, 3, 4]
 
 
 def test_resolve_body_names_returns_a_copy() -> None:

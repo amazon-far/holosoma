@@ -290,4 +290,11 @@ class ExperimentConfig:
         """Return a JSON-friendly representation of the config."""
         # Directly using yaml.safe_dump does not handle string enums properly,
         # so round-trip through JSON to coerce typing objects into primitives.
-        return cast("dict[str, Any]", json.loads(json.dumps(dataclasses.asdict(self))))
+        return cast("dict[str, Any]", json.loads(json.dumps(dataclasses.asdict(self), default=_serialize_set)))
+
+
+def _serialize_set(value: Any) -> list[Any]:
+    """Encode tag sets as sorted arrays while retaining strict errors for unsupported values."""
+    if isinstance(value, (set, frozenset)):
+        return sorted(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")

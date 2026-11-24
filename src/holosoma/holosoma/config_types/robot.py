@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import field
 
-from pydantic import ConfigDict, model_validator
+from pydantic import ConfigDict, field_serializer, model_validator
 from pydantic.dataclasses import dataclass
 
 from holosoma.config_types.scene import PhysicsConfig
@@ -179,20 +179,24 @@ class RobotConfig:
     bridge: RobotBridgeConfig = field(default_factory=RobotBridgeConfig)
     """Bridge SDK configuration for this robot."""
 
-    body_tags: dict[str, list[str]] = field(default_factory=dict)
+    body_tags: dict[str, set[str]] = field(default_factory=dict)
     """Named groups of robot bodies, declared and referenced with a leading ``#``
     (``{"#feet": ["left_ankle_roll_link", "right_ankle_roll_link"]}``). Entries are exact ``body_names``
     entries or other ``#tags``. ``#all`` always selects every current body and cannot be declared. Used by
     tag-aware term parameters, e.g. a termination term's ``bodies=["#root", "#hip_links"]`` or the
     mass-randomization ``link_bodies``; see ``holosoma.utils.name_tags``."""
 
-    joint_tags: dict[str, list[str]] = field(default_factory=dict)
+    joint_tags: dict[str, set[str]] = field(default_factory=dict)
     """Named groups of robot DOFs, same syntax as ``body_tags`` over ``dof_names``.
-    Tag expansion preserves the declared order. Symmetry pairs joints by position.
+    Tags are sets. Duplicate members collapse, and declaration order has no meaning.
     ``#all`` always selects every current DOF and cannot be declared. Used by action/controller parameters,
     ``default_joint_positions`` keys, or
-    algorithm configs such as the symmetry augmentation's
-    ``#mirror_left`` / ``#mirror_right`` pairs."""
+    algorithm configurations such as symmetry augmentation's two-joint ``#mirror_*`` tags."""
+
+    @field_serializer("body_tags", "joint_tags")
+    def _serialize_tags(self, tags: dict[str, set[str]]) -> dict[str, list[str]]:
+        """Serialize set membership as sorted arrays for saved configurations."""
+        return {tag: sorted(members) for tag, members in sorted(tags.items())}
 
     def default_dof_positions(self) -> dict[str, float]:
         """Return a fresh, validated map of exact DOF names to default joint positions.

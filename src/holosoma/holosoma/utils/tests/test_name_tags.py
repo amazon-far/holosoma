@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Collection
 
 import pytest
 
@@ -10,7 +11,6 @@ from holosoma.utils.name_tags import (
     expand_joint_value_map,
     expand_name_assignments,
     expand_name_spec,
-    expand_unique_name_spec,
     resolve_single_name_spec,
     validate_tag_table,
 )
@@ -26,11 +26,11 @@ _TAGS = {
 _UNIVERSE = ["l_hip", "l_knee", "r_hip", "r_knee", "torso"]
 
 
-def test_exact_names_pass_through_in_order() -> None:
-    assert expand_name_spec(["torso", "l_hip"], _TAGS, _UNIVERSE) == ["torso", "l_hip"]
+def test_exact_names_follow_canonical_order() -> None:
+    assert expand_name_spec(["torso", "l_hip"], _TAGS, _UNIVERSE) == ["l_hip", "torso"]
 
 
-def test_tag_expands_and_composes_preserving_first_seen_order() -> None:
+def test_tag_expands_and_composes_in_canonical_order() -> None:
     assert expand_name_spec(["#legs"], _TAGS, _UNIVERSE) == ["l_hip", "l_knee", "r_hip", "r_knee"]
     # Composition + duplicates: knees are already present from #legs, torso appended last.
     assert expand_name_spec(["#legs", "#knees", "torso"], _TAGS, _UNIVERSE) == [
@@ -82,7 +82,7 @@ def test_diamond_reference_expands_once_without_a_cycle_error() -> None:
 
 
 def test_universe_none_skips_name_check() -> None:
-    assert expand_name_spec(["nope", "#knees"], _TAGS, None) == ["nope", "l_knee", "r_knee"]
+    assert expand_name_spec(["nope", "#knees"], _TAGS, None) == ["l_knee", "nope", "r_knee"]
 
 
 def test_cycle_reports_chain() -> None:
@@ -141,16 +141,14 @@ def test_joint_value_map_all_is_reserved_and_covers_every_dof() -> None:
 @pytest.mark.parametrize("kind", ["body", "joint"])
 def test_all_expands_current_names_through_composed_tags_without_storing_membership(kind: str) -> None:
     tags = {"#whole": ["#all"]}
-    assert expand_name_spec(["b", "#whole"], tags, ["a", "b"], kind=kind) == ["b", "a"]
+    assert expand_name_spec(["b", "#whole"], tags, ["a", "b"], kind=kind) == ["a", "b"]
     assert expand_name_spec(["#whole"], tags, ["b", "c", "a"], kind=kind) == ["b", "c", "a"]
     assert expand_name_spec(["#whole"], tags, [], kind=kind) == []
     assert tags == {"#whole": ["#all"]}
 
 
-def test_all_preserves_multiplicity_for_ordered_specs() -> None:
-    assert expand_name_spec(["b", "#all"], {}, ["a", "b"], dedupe=False) == ["b", "a", "b"]
-    with pytest.raises(ValueError, match="'b'.*more than once"):
-        expand_unique_name_spec(["b", "#all"], {}, ["a", "b"], what="pairs.left")
+def test_all_and_repeated_exact_names_collapse() -> None:
+    assert expand_name_spec(["b", "#all", "b", "#all"], {}, ["a", "b"]) == ["a", "b"]
 
 
 def test_all_requires_a_name_universe() -> None:
@@ -239,9 +237,9 @@ def test_generic_assignments_preserve_values_and_first_seen_order() -> None:
         kind="body",
     )
     assert list(expanded.items()) == [
-        ("torso", (0.8, 1.2)),
         ("l_knee", (0.8, 1.2)),
         ("r_knee", (0.8, 1.2)),
+        ("torso", (0.8, 1.2)),
         ("l_hip", (0.9, 1.1)),
     ]
     assert (tags, assignments) == snapshot
@@ -261,20 +259,12 @@ def test_generic_assignment_conflict_names_entity_and_both_keys(second: str) -> 
     assert "both cover body 'l_knee'" in str(error.value)
 
 
-def test_ordered_spec_keeps_tag_and_entry_order() -> None:
-    assert expand_unique_name_spec(["torso", "#right_leg", "#left_leg"], _TAGS, _UNIVERSE, what="pairs.left") == [
-        "torso",
-        "r_hip",
-        "r_knee",
-        "l_hip",
-        "l_knee",
-    ]
-
-
 @pytest.mark.parametrize("spec", [["#left_leg", "l_knee"], ["#repeated"]])
-def test_ordered_spec_rejects_repetitions_including_within_one_key(spec: list[str]) -> None:
+def test_repetitions_inside_composed_tags_collapse(spec: list[str]) -> None:
     tags = {**_TAGS, "#repeated": ["#left_leg", "l_knee"]}
-    with pytest.raises(ValueError, match=r"pairs.left.*l_knee.*more than once.*source keys") as error:
-        expand_unique_name_spec(spec, tags, _UNIVERSE, what="pairs.left")
-    assert repr(spec[0]) in str(error.value)
-    assert repr(spec[-1]) in str(error.value)
+    assert expand_name_spec(spec, tags, _UNIVERSE) == ["l_hip", "l_knee"]
+
+
+@pytest.mark.parametrize("members", [["l_knee", "l_hip", "l_knee"], {"l_hip", "l_knee"}, ("l_knee", "l_hip")])
+def test_tag_membership_has_no_declaration_order(members: Collection[str]) -> None:
+    assert expand_name_spec(["#selected"], {"#selected": members}, _UNIVERSE) == ["l_hip", "l_knee"]

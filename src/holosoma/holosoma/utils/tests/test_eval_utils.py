@@ -323,7 +323,7 @@ def test_load_saved_experiment_config_migrates_legacy_checkpoint(tmp_path: Path,
     torch.save({"experiment_config": raw}, checkpoint_path)
 
     loaded_cfg, _ = load_saved_experiment_config(CheckpointConfig(checkpoint=str(checkpoint_path)))
-    assert loaded_cfg.robot.body_tags["#feet"] == ["left_ankle_roll_link", "right_ankle_roll_link"]
+    assert loaded_cfg.robot.body_tags["#feet"] == frozenset({"left_ankle_roll_link", "right_ankle_roll_link"})
     assert loaded_cfg.robot.init_state.orientation == [0.8, 0.0, 0.6, 0.0]
     assert loaded_cfg.robot.init_state.orientation_xyzw == [0.0, 0.6, 0.0, 0.8]
     assert loaded_cfg.robot.init_state.default_joint_positions == expected_defaults

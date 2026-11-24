@@ -84,7 +84,7 @@ def _onelink_robot(link_physics: PhysicsConfig | None) -> RobotConfig:
         body_names=["baseLink"],
         init_state=_INIT_STATE,
         asset=_onelink_asset(link_physics),
-        body_tags={"#base": ["baseLink"]},
+        body_tags={"#base": {"baseLink"}},
     )
 
 
@@ -164,7 +164,7 @@ test_arm_fixed = RobotConfig(
         default_dof_drive_mode=3,
         fix_base_link=True,
     ),
-    body_tags={"#base": ["base_link"]},
+    body_tags={"#base": {"base_link"}},
 )
 
 TEST_ARM_CONTROLLER = JointControllerCfg(

@@ -64,9 +64,9 @@ def test_g1_locomotion_resolves_its_tags_and_steps(tmp_path: Path) -> None:
         env.reset_envs_idx()
         env.compute_reset_observations()
 
-        # Terrain: feet-height raycasts on the two #feet_height bodies, in the tag's (left, right) order.
+        # Terrain: feet-height raycasts follow canonical body order.
         terrain_state = cast("TerrainLocomotion", env.terrain_manager.get_state("locomotion_terrain"))
-        feet_height_bodies = robot.body_tags["#feet_height"]
+        feet_height_bodies = [name for name in robot.body_names if name in robot.body_tags["#feet_height"]]
         assert feet_height_bodies == ["left_foot_contact_point", "right_foot_contact_point"]
         assert terrain_state._feet_height_indices.tolist() == _body_indices(env, feet_height_bodies)
         assert terrain_state.feet_heights.shape == (_NUM_ENVS, 2)

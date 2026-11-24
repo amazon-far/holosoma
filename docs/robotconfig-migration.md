@@ -50,7 +50,7 @@ Apply the rows below in order. Import the preset after each group of edits. Beca
 | `init_state.default_joint_angles` | Rename to `default_joint_positions`. Values are radians for hinges and metres for slides; omitted joints default to zero. Keep exact-name and tag keys as authored; checkpoint migration renames this field without expanding it. Conflicting old and new maps are rejected. |
 | `foot_body_name`, `foot_height_name`, `torso_name` | Replace with exact-name body tags such as `#feet`, `#feet_height`, and `#base`. Expand the old substring against `body_names`, inspect the matches, and remove accidental matches. |
 | `upper_*`, `lower_*`, arm, ankle, knee, hip, or waist DOF groups | Delete unused groups. Preserve groups still used by consumers as `joint_tags`. |
-| `symmetry_joint_names`, `flip_sign_joint_names` | Declare `#mirror_left`, `#mirror_right`, and `#mirror_flip_sign`. For a reciprocal pair `{L: R, R: L}`, add `L` and `R` once at the same index and skip self-maps. The left and right lists must be non-empty, equal in length, disjoint, and free of duplicates, including inside nested tags. Sign flips include both or neither member of each pair. |
+| `symmetry_joint_names`, `flip_sign_joint_names` | Declare one two-joint `#mirror_*` tag per reciprocal pair, or set `JointSymmetryConfig.pairs` to exact joint pairs. Declare sign changes in `#symmetry_flip_sign`, or set `flip_sign` explicitly. Every joint belongs to at most one pair. Sign changes include both or neither member of each pair. |
 | `robot.control` | Move controller type, stiffness, damping and torque clipping to the joint action term's `controller`; move action scaling and clipping to that action term. |
 | Substring keys in `control.stiffness` or `control.damping` | Replace each key with an exact DOF name or a `#joint_tag` on the destination controller. Every controlled DOF must be covered exactly once under `P` or `V` control. If old keys overlapped, preserve the old rule that the last matching dict entry won. |
 | `soft_dof_pos_limit` | Move a non-default value to `MotionConfig.noise_to_initial_pose.soft_dof_pos_limit`. Do not copy it into `limits_dof_pos` rewards: those terms already owned their own parameter before the refactor. |
@@ -73,6 +73,12 @@ complete intended motor tuple.
 
 Declare every tag referenced by the selected task, action and algorithm presets. Do not assume that tags with
 similar roles identify the same body.
+
+Tags are sets. Duplicate members collapse, and declaration order has no meaning.
+Selections follow canonical `body_names` or `dof_names` order.
+Replace ordered `#mirror_left` and `#mirror_right` groups with individual two-joint tags or explicit pairs.
+The symmetry regex defaults to `mirror_.*` and matches full tag names without the leading `#`.
+Keep sign selections outside that pattern, for example in `#symmetry_flip_sign`.
 
 WBT's `MotionConfig.root_body=None` discovers the loaded articulation's physical root. That body must appear in
 `robot.body_names` and the motion data. An explicit name/tag must identify that same root; `body_name_ref` remains
@@ -118,6 +124,7 @@ Overrides are not migrated automatically:
 - `robot.init-state.pos` becomes `robot.init-state.position`.
 - `robot.init-state.rot: [x, y, z, w]` becomes `robot.init-state.orientation: [w, x, y, z]`.
 - `robot.init-state.default-joint-angles` becomes `robot.init-state.default-joint-positions`.
+- Tag overrides use set literals, for example `--robot.joint-tags.#knees "{'left_knee_joint', 'right_knee_joint'}"`.
 - Controller gain overrides target the action term or plugin that owns the controller. For example:
   `action:g1-29dof-joint-pos --action.terms.joint-control.controller.stiffness.#hip-yaw 50`.
 
@@ -127,6 +134,10 @@ Overrides are not migrated automatically:
 `holosoma_config.yaml`. It renames fields, converts positional properties using the saved DOF order, derives tags,
 moves task parameters, moves `robot.control` into the joint action term, and expands substring gain keys with the
 last-match rule, including when every key is a complete DOF name. Unknown robot keys are dropped with a warning.
+
+The loader converts saved ordered symmetry sides to explicit pairs before tag members become sets.
+It preserves the saved relationships without depending on the new set order.
+Historical group tags receive names outside the mirror-discovery pattern.
 
 These legacy inputs need attention:
 

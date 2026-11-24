@@ -93,7 +93,7 @@ then run it on each backend you intend to support.
 `dof_names` defines canonical joint order and `body_names` defines body-observation order. Every DOF must be a named
 one-dimensional hinge/revolute or slide/prismatic joint. Names must match the asset exactly; the asset may
 enumerate them differently. Tags select these names to express common behavior across robots, for example
-`joint_tags={"#waist": ["waist_pitch_joint"]}`.
+`joint_tags={"#waist": {"waist_pitch_joint"}}`.
 
 `#all` is reserved and always selects every current body or DOF in canonical order.
 Use it in selections or assignment keys, including inside another tag.
@@ -113,11 +113,33 @@ radians for hinges and metres for slides. `robot.default_dof_positions()` return
 canonical order without expanding the stored map in place. Controller gains, action scaling and action clipping
 belong to the action term or plugin that applies them.
 
-Selections deduplicate names in first-seen order. Assignment maps reject overlap between keys, even for equal values.
-Ordered symmetry selections reject repeated joints. Resolve selections with
+Tags are sets of names or references to other tags. Repeated members collapse automatically.
+Declaration order has no meaning. Selections return unique names in canonical robot order.
+Assignment maps reject overlap between keys, even for equal values. Resolve selections with
 [`name_tags.py`](../src/holosoma/holosoma/utils/name_tags.py) and physical properties with
 [`robot_properties.py`](../src/holosoma/holosoma/utils/robot_properties.py).
 Task terms can use `env.robot_names.resolve_body_indices(...)` and the corresponding name/joint methods.
+
+Symmetry uses explicit joint pairs or discovers pair tags through `JointSymmetryConfig.mirror_tag_pattern`.
+The default regex, `mirror_.*`, matches full tag names after removing the leading `#`.
+Every matched tag must expand to exactly two distinct joints. A joint can appear in only one mirror pair.
+Unknown joints, invalid regex syntax, and overlapping pairs fail validation.
+
+```python
+joint_tags={"#mirror_knees": {"left_knee_joint", "right_knee_joint"}}
+
+# Discover mirror tags with the default pattern.
+symmetry=JointSymmetryConfig()
+
+# Explicit pairs take precedence over tag discovery.
+symmetry=JointSymmetryConfig(pairs=[("left_knee_joint", "right_knee_joint")])
+```
+
+`flip_sign` selects joints whose values negate. Its default uses `#symmetry_flip_sign` when that tag exists.
+Use `flip_sign=[]` to disable sign changes. A mirrored pair must include both members or neither member in the sign selection.
+Unpaired joints keep their indices and can still receive a sign change.
+CLI tag overrides use set literals, for example `--robot.joint-tags.#knees "{'left_knee_joint', 'right_knee_joint'}"`.
+Saved JSON and YAML use sorted arrays, which load as sets.
 
 For Unitree and Booster, `bridge.controlled_dof_names` must give SDK motor order. Their wire messages contain
 unnamed motor slots, so reordering policy actions must not reorder the hardware protocol. Other bridges may use

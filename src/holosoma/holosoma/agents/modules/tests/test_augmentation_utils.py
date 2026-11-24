@@ -9,6 +9,7 @@ This test suite verifies that:
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock
@@ -33,7 +34,7 @@ def _step_observations(manager: ObservationManager) -> dict[str, torch.Tensor]:
     return manager.step()
 
 
-def _install_joint_resolver(env: MagicMock, dof_names: list[str], joint_tags: dict[str, list[str]]) -> None:
+def _install_joint_resolver(env: MagicMock, dof_names: list[str], joint_tags: Mapping[str, Collection[str]]) -> None:
     """Supply the robot names and tags consumed by SymmetryUtils."""
     env.dof_names = dof_names
     env.robot_config = SimpleNamespace(joint_tags=joint_tags)
@@ -52,9 +53,12 @@ _LEG_DOF_NAMES = [
     "right_ankle",
 ]
 _LEG_JOINT_TAGS = {
-    "#mirror_left": ["left_hip_yaw", "left_hip_roll", "left_hip_pitch", "left_knee", "left_ankle"],
-    "#mirror_right": ["right_hip_yaw", "right_hip_roll", "right_hip_pitch", "right_knee", "right_ankle"],
-    "#mirror_flip_sign": ["left_hip_yaw", "right_hip_yaw"],  # yaw joints get sign flipped
+    "#mirror_hip_yaw": ["left_hip_yaw", "right_hip_yaw"],
+    "#mirror_hip_roll": ["left_hip_roll", "right_hip_roll"],
+    "#mirror_hip_pitch": ["left_hip_pitch", "right_hip_pitch"],
+    "#mirror_knee": ["left_knee", "right_knee"],
+    "#mirror_ankle": ["left_ankle", "right_ankle"],
+    "#symmetry_flip_sign": ["left_hip_yaw", "right_hip_yaw"],
 }
 
 
@@ -143,7 +147,7 @@ def test_joint_index_map_and_sign_flip_mask(mock_env_with_history: MagicMock) ->
 
 def test_explicit_joint_names_and_unpaired_joints(mock_env_with_history: MagicMock) -> None:
     """A spec of exact names works without tags; unpaired joints keep their index."""
-    symmetry = JointSymmetryConfig(left=["left_knee", "left_ankle"], right=["right_knee", "right_ankle"], flip_sign=[])
+    symmetry = JointSymmetryConfig(pairs=[("left_knee", "right_knee"), ("left_ankle", "right_ankle")], flip_sign=[])
     symmetry_utils = SymmetryUtils(mock_env_with_history, symmetry)
 
     assert symmetry_utils.joint_index_map.tolist() == [0, 1, 2, 8, 9, 5, 6, 7, 3, 4]
@@ -151,25 +155,24 @@ def test_explicit_joint_names_and_unpaired_joints(mock_env_with_history: MagicMo
 
 
 @pytest.mark.parametrize(
-    ("left", "right", "message"),
+    ("pairs", "message"),
     [
-        ([], [], "non-empty"),
-        (["left_knee"], ["left_knee"], "share"),
+        ([], "at least one"),
+        ([("left_knee", "left_knee")], "distinct"),
     ],
 )
 def test_runtime_rejects_invalid_pair_sets(
-    mock_env_with_history: MagicMock, left: list[str], right: list[str], message: str
+    mock_env_with_history: MagicMock, pairs: list[tuple[str, str]], message: str
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        SymmetryUtils(mock_env_with_history, JointSymmetryConfig(left=left, right=right, flip_sign=[]))
+        SymmetryUtils(mock_env_with_history, JointSymmetryConfig(pairs=pairs, flip_sign=[]))
 
 
-def test_tagged_and_explicit_correspondences_preserve_pair_order(mock_env_with_history: MagicMock) -> None:
-    left, right = ["left_knee", "left_ankle"], ["right_ankle", "right_knee"]
-    tags = {**_LEG_JOINT_TAGS, "#ordered_left": left, "#ordered_right": right}
+def test_tagged_and_explicit_pairs_ignore_declaration_order(mock_env_with_history: MagicMock) -> None:
+    tags = {"#chosen_ankle": ["right_knee", "left_ankle"], "#chosen_knee": ["right_ankle", "left_knee"]}
     _install_joint_resolver(mock_env_with_history, _LEG_DOF_NAMES, tags)
-    tagged = JointSymmetryConfig(left=["#ordered_left"], right=["#ordered_right"], flip_sign=[])
-    explicit = JointSymmetryConfig(left=left, right=right, flip_sign=[])
+    tagged = JointSymmetryConfig(mirror_tag_pattern="chosen_.*", flip_sign=[])
+    explicit = JointSymmetryConfig(pairs=[("right_knee", "left_ankle"), ("right_ankle", "left_knee")], flip_sign=[])
     actions = torch.arange(10, dtype=torch.float32).unsqueeze(0)
     expected = torch.tensor([[0, 1, 2, 9, 8, 5, 6, 7, 4, 3]], dtype=torch.float32)
     for config in (tagged, explicit):
@@ -177,8 +180,8 @@ def test_tagged_and_explicit_correspondences_preserve_pair_order(mock_env_with_h
         mirrored = symmetry.augment_actions(actions)[1:]
         torch.testing.assert_close(mirrored, expected)
         torch.testing.assert_close(symmetry.augment_actions(mirrored)[1:], actions)
-    assert tagged.left == ["#ordered_left"]
-    assert tagged.right == ["#ordered_right"]
+    assert tagged.pairs is None
+    assert explicit.pairs == [("right_knee", "left_ankle"), ("right_ankle", "left_knee")]
 
 
 def test_shipped_g1_mirror_tags_pair_left_with_right() -> None:
@@ -244,9 +247,8 @@ def _manager_env(cfg: ObservationManagerCfg) -> SimpleNamespace:
         dof_names=["left", "right"],
         robot_config=SimpleNamespace(
             joint_tags={
-                "#mirror_left": ["left"],
-                "#mirror_right": ["right"],
-                "#mirror_flip_sign": ["left", "right"],
+                "#mirror_joint": ["left", "right"],
+                "#symmetry_flip_sign": ["left", "right"],
             }
         ),
         history_length={name: group.history_length for name, group in cfg.groups.items()},
@@ -446,9 +448,8 @@ def test_different_history_lengths(history_length: int) -> None:
         env,
         ["left_joint", "right_joint"],
         {
-            "#mirror_left": ["left_joint"],
-            "#mirror_right": ["right_joint"],
-            "#mirror_flip_sign": ["left_joint", "right_joint"],
+            "#mirror_joint": ["left_joint", "right_joint"],
+            "#symmetry_flip_sign": ["left_joint", "right_joint"],
         },
     )
 
