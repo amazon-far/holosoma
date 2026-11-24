@@ -67,8 +67,9 @@ class Phase(str, Enum):
     playback also emits ``EPISODE_*`` at clip boundaries. The names are engine-agnostic — they don't
     assume what drives the outer tick (a policy, a bridge, ...). Episode events fire once per batch of
     environments that end or start together, with their ids as a long tensor. ``RESET`` fires on every
-    reset call, once the task's managers have reset, with the reset ids; they are empty on the frames
-    where no environment resets.
+    reset call, between ``EPISODE_END`` and ``EPISODE_START``, with the reset ids; they are empty on the
+    frames where no environment resets. The task runs its own steps as hooks on ``PRE_STEP``,
+    ``FRAME_END`` and ``RESET`` (see ``TaskHook``).
     """
 
     payload: tuple[str, ...]
