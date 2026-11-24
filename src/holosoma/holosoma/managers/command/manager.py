@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import importlib
 from typing import TYPE_CHECKING, Any
 
 from omegaconf import DictConfig, OmegaConf
 
 from holosoma.config_types.command import CommandManagerCfg, CommandTermCfg
+from holosoma.managers.utils import resolve_callable
 
 from .base import CommandTermBase
 
@@ -82,7 +82,7 @@ class CommandManager:
     def _initialize_terms(self) -> None:
         """Resolve command term implementations and register their lifecycle hooks."""
         for term_name, term_cfg in self.cfg.setup_terms.items():
-            resolved = self._resolve_function(term_cfg.func)
+            resolved = resolve_callable(term_cfg.func, context="command term")
             if isinstance(resolved, type):
                 if not issubclass(resolved, CommandTermBase):
                     raise TypeError(f"Class-based command term '{term_name}' must inherit from CommandTermBase.")
@@ -93,7 +93,7 @@ class CommandManager:
             self._setup_cfgs.append(term_cfg)
 
         for term_name, term_cfg in self.cfg.reset_terms.items():
-            resolved = self._resolve_function(term_cfg.func)
+            resolved = resolve_callable(term_cfg.func, context="command term")
             if isinstance(resolved, type):
                 if not issubclass(resolved, CommandTermBase):
                     raise TypeError(f"Class-based command term '{term_name}' must inherit from CommandTermBase.")
@@ -104,7 +104,7 @@ class CommandManager:
             self._reset_cfgs.append(term_cfg)
 
         for term_name, term_cfg in self.cfg.step_terms.items():
-            resolved = self._resolve_function(term_cfg.func)
+            resolved = resolve_callable(term_cfg.func, context="command term")
             if isinstance(resolved, type):
                 if not issubclass(resolved, CommandTermBase):
                     raise TypeError(f"Class-based command term '{term_name}' must inherit from CommandTermBase.")
@@ -113,35 +113,6 @@ class CommandManager:
                 self._step_funcs[term_name] = resolved
             self._step_names.append(term_name)
             self._step_cfgs.append(term_cfg)
-
-    def _resolve_function(self, func: Any | str) -> Any:
-        """Resolve a callable or class from a string specification.
-
-        Parameters
-        ----------
-        func : Any or str
-            Function reference or string path like ``"module:function"``.
-
-        Returns
-        -------
-        Any
-            Resolved callable or class.
-
-        Raises
-        ------
-        ValueError
-            If the string path is malformed or the target cannot be imported.
-        """
-        if isinstance(func, str):
-            if ":" not in func:
-                raise ValueError(f"Function string must be in format 'module:function', got: {func}")
-            module_path, func_name = func.split(":", 1)
-            try:
-                module = importlib.import_module(module_path)
-                return getattr(module, func_name)
-            except (ImportError, AttributeError) as exc:
-                raise ValueError(f"Failed to import command function '{func}': {exc}") from exc
-        return func
 
     def setup(self) -> None:
         for entry in self._class_entries:

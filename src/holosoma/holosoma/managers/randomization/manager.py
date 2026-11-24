@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import Any
 
 from holosoma.config_types.randomization import RandomizationManagerCfg, RandomizationTermCfg
 from holosoma.managers.randomization.exceptions import RandomizerNotSupportedError
+from holosoma.managers.utils import resolve_callable
 from holosoma.utils.sampler import STAGE_RESET, STAGE_SETUP, STAGE_STEP, TermSampler
 
 from .base import RandomizationTermBase
@@ -64,7 +64,7 @@ class RandomizationManager:
         """Initialize randomization terms and resolve their functions/classes."""
         # Setup terms
         for term_name, term_cfg in self.cfg.setup_terms.items():
-            resolved = self._resolve_function(term_cfg.func)
+            resolved = resolve_callable(term_cfg.func, context="randomization term")
             if isinstance(resolved, type):
                 if not issubclass(resolved, RandomizationTermBase):
                     raise TypeError(
@@ -78,7 +78,7 @@ class RandomizationManager:
 
         # Reset terms
         for term_name, term_cfg in self.cfg.reset_terms.items():
-            resolved = self._resolve_function(term_cfg.func)
+            resolved = resolve_callable(term_cfg.func, context="randomization term")
             if isinstance(resolved, type):
                 if not issubclass(resolved, RandomizationTermBase):
                     raise TypeError(
@@ -92,7 +92,7 @@ class RandomizationManager:
 
         # Step terms
         for term_name, term_cfg in self.cfg.step_terms.items():
-            resolved = self._resolve_function(term_cfg.func)
+            resolved = resolve_callable(term_cfg.func, context="randomization term")
             if isinstance(resolved, type):
                 if not issubclass(resolved, RandomizationTermBase):
                     raise TypeError(
@@ -158,35 +158,6 @@ class RandomizationManager:
             Stateful term instance if found, otherwise ``None``.
         """
         return self._state_terms.get(term_name)
-
-    def _resolve_function(self, func: Any | str) -> Any:
-        """Resolve a randomization callable or class from a string specification.
-
-        Parameters
-        ----------
-        func : Any or str
-            Function reference or string path like ``"module:function"``.
-
-        Returns
-        -------
-        Any
-            Resolved callable or class.
-
-        Raises
-        ------
-        ValueError
-            If the string path is malformed or the target cannot be imported.
-        """
-        if isinstance(func, str):
-            if ":" not in func:
-                raise ValueError(f"Function string must be in format 'module:function', got: {func}")
-            module_path, func_name = func.split(":", 1)
-            try:
-                module = importlib.import_module(module_path)
-                return getattr(module, func_name)
-            except (ImportError, AttributeError) as exc:
-                raise ValueError(f"Failed to import randomization function '{func}': {exc}") from exc
-        return func
 
     def setup(self) -> None:
         """Run startup hooks."""
