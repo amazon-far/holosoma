@@ -149,10 +149,10 @@ class SimEngineConfig:
     ``kinematic_enabled``), not this global one."""
 
     num_rerenders_on_reset: Annotated[int, Field(ge=0)] = 0
-    """Renders after a reset so reset envs observe their new state. Isaac Sim RTX cameras render
-    this many times; any value above 0 re-renders every other camera and every LiDAR once. At 0
-    those sensors keep their pre-reset frame for one control step. Ray-cast cameras always
-    re-render."""
+    """Renders on ``EPISODE_START`` so starting envs observe their new state. Isaac Sim RTX
+    cameras render this many times; any value above 0 re-renders every other camera and every
+    LiDAR once. At 0 those sensors keep their pre-reset frame for one control step. Ray-cast
+    cameras always re-render."""
 
     mujoco: MujocoConfig = field(default_factory=MujocoConfig)
     """Native MuJoCo settings. None preserves existing behavior; other simulators ignore this block."""

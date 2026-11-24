@@ -33,7 +33,8 @@ class SensorRecord:
     effective_decimation: int = 1
     rerender: Callable[[torch.Tensor], None] | None = None
     """Re-render only the given env ids into the existing buffers, or ``None`` if the backend
-    can only render every env. Called after resets/teleports (``SensorManager.rerender``)."""
+    can only render every env. Called from ``BaseSimulator.rerender_sensors`` on episode starts
+    and teleports."""
     mount_poses: torch.Tensor | None = None
     """Runtime offsets ``[N, 7]`` in XYZ + XYZW order, independent of the immutable config."""
     write_mount_pose: Callable[[torch.Tensor, torch.Tensor], None] | None = None
@@ -304,8 +305,8 @@ class SensorManager:
     def rerender(self, env_ids: torch.Tensor) -> None:
         """Re-render ``env_ids`` for every sensor that supports partial rendering.
 
-        Sensors without a ``rerender`` callback keep their last frame, so for one control step
-        these envs observe the state from before their reset or teleport."""
+        Sensors without a ``rerender`` callback are left to the simulator's backend re-render
+        (``sim.num_rerenders_on_reset``) and otherwise keep their last frame."""
         records: list[SensorRecord] = [*self.cameras, *self.lidars]
         for record in records:
             if record.rerender is not None:

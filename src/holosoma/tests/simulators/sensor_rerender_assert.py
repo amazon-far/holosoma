@@ -1,7 +1,7 @@
 """Cross-backend ``sim.num_rerenders_on_reset`` assertion harness.
 
 A downward depth camera and a downward LiDAR ride the robot base. After one capture, the robot is
-raised 0.3 m in some envs and ``rerender_sensors`` runs for those envs:
+raised 0.3 m in some envs and ``EPISODE_START`` is emitted for them, which re-renders their sensors:
 
   1. With ``num_rerenders_on_reset=0`` both sensors keep their frame.
   2. With ``num_rerenders_on_reset=2`` the raised envs see the ground farther away, every other env
@@ -26,6 +26,7 @@ from holosoma.config_types.sensor import (
     LidarSensorConfig,
     SensorMountConfig,
 )
+from holosoma.simulator.base_simulator.hooks import Phase
 from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
 
 _RAISE = 0.3
@@ -111,7 +112,7 @@ def main() -> int:
 
         fails: list[str] = []
         sim.simulator_config = _with_rerenders(sim.simulator_config, 0)
-        sim.rerender_sensors(moved)
+        sim.hooks.emit(Phase.EPISODE_START, moved)
         depth, ranges = _frames()
         if not torch.equal(depth, depth0) or not torch.equal(ranges, ranges0):
             fails.append("num_rerenders_on_reset=0 changed a sensor frame")
@@ -119,7 +120,7 @@ def main() -> int:
             fails.append(f"num_rerenders_on_reset=0 cast the LiDAR {casts.call_count} time(s)")
 
         sim.simulator_config = _with_rerenders(sim.simulator_config, 2)
-        sim.rerender_sensors(moved)
+        sim.hooks.emit(Phase.EPISODE_START, moved)
         depth, ranges = _frames()
         if casts.call_count != 1:
             fails.append(f"num_rerenders_on_reset=2 cast the LiDAR {casts.call_count} times, want 1")
