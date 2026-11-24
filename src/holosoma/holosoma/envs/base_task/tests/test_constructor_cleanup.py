@@ -50,7 +50,6 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
     class _Simulator:
         def __init__(self, *, hooks: HookRegistry, **_kwargs: object) -> None:
             self.sim_dt = 0.005
-            self.simulator_config = SimpleNamespace(reset_manager=object())
             self.hooks = hooks
             self.prepared = False
             events.append("simulator")
@@ -81,10 +80,6 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
             events.append("plugins")
             task.hooks.add(Phase.POST_STEP, lambda: None, name="probe.post_step")
 
-    def create_reset_manager(*_args: object) -> object:
-        events.append("reset_manager")
-        return object()
-
     simulator_config = SimpleNamespace(
         _target_="test.Simulator",
         config=SimpleNamespace(name="test", sim=SimpleNamespace(fps=200, control_decimation_steps=4)),
@@ -106,7 +101,6 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
     monkeypatch.setattr(base_task_module, "get_class", lambda _target: _Simulator)
     monkeypatch.setattr(base_task_module, "FullSimConfig", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(base_task_module, "TerrainManager", lambda *_args: SimpleNamespace())
-    monkeypatch.setattr(base_task_module, "ResetEventManager", create_reset_manager)
     monkeypatch.setattr(BaseTask, "_load_assets", lambda _task: None)
     monkeypatch.setattr(BaseTask, "_create_envs", lambda _task: None)
     monkeypatch.setattr(BaseTask, "_setup_robot_body_indices", lambda _task: None)
@@ -120,5 +114,5 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
     task = BaseTask(config)  # type: ignore[arg-type]
 
     assert events[-1] == "plugins"
-    assert {"viewer", "managers", "reset_manager"} <= set(events[:-1])
+    assert {"viewer", "managers"} <= set(events[:-1])
     assert task.hooks.names(Phase.POST_STEP) == ("probe.post_step", "task.viewer")
