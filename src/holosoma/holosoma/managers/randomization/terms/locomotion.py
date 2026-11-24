@@ -365,7 +365,7 @@ def randomize_spawn(
     after the task's reset writes the robot state, so resets to explicit ``target_states`` are randomized too.
     """
     idx = _ensure_env_ids_tensor(env, env_ids)
-    if idx.numel() == 0:
+    if idx.numel() == 0 or env.robot_config.asset.fix_base_link:
         return
     root_states = env.simulator.robot_root_states
     terrain_state = env.terrain_manager.get_state("locomotion_terrain")

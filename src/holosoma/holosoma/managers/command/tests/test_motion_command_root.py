@@ -156,6 +156,7 @@ def _environment(robot: RobotConfig, simulator: _Simulator) -> Any:
         dt=0.02,
         viewer=False,
         is_evaluating=True,
+        episode_length_buf=torch.zeros(2, dtype=torch.long),
         default_dof_pos_base=torch.tensor([list(robot.default_dof_positions().values())]),
     )
 

@@ -37,7 +37,7 @@ SIMULATORS = {
 def fixed_base_arm_experiment(backend: str, num_envs: int, log_root: Path) -> ExperimentConfig:
     """The fixed-base arm experiment for ``backend`` (a ``SIMULATORS`` key) with ``num_envs`` envs."""
     return ExperimentConfig(
-        env_class="holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager",
+        env_class="holosoma.envs.policy_task.PolicyTask",
         training=TrainingConfig(num_envs=num_envs, headless=True, seed=0, project="fixed_base_arm", name=backend),
         algo=dataclasses.replace(
             algo.ppo,

@@ -23,7 +23,7 @@ from holosoma.managers.observation.manager import ObservationManager
 from holosoma.managers.observation.terms.locomotion import base_lin_vel
 
 if TYPE_CHECKING:
-    from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
+    from holosoma.envs.policy_task import PolicyTask
 
 pytestmark = pytest.mark.no_sim
 
@@ -252,14 +252,14 @@ def _manager_env(cfg: ObservationManagerCfg) -> SimpleNamespace:
         history_length={name: group.history_length for name, group in cfg.groups.items()},
         base_quat=roots[:, 3:7],
         default_dof_pos=torch.zeros(1, 2),
-        simulator=SimpleNamespace(robot_root_states=roots, dof_pos=torch.zeros(2, 2)),
+        simulator=SimpleNamespace(robot_root_states=roots, base_quat=roots[:, 3:7], dof_pos=torch.zeros(2, 2)),
     )
     env.observation_manager = ObservationManager(cfg, env, env.device)
     return env
 
 
 def _planar_base_lin_vel(env: SimpleNamespace) -> torch.Tensor:
-    return base_lin_vel(cast("LeggedRobotLocomotionManager", env))[:, :2]
+    return base_lin_vel(cast("PolicyTask", env))[:, :2]
 
 
 def test_mirror_xz_plane_history_is_term_major() -> None:

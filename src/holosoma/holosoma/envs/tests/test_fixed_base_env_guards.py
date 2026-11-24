@@ -14,12 +14,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from holosoma.config_types.randomization import RandomizationTermCfg
-from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
-from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.randomization.terms.locomotion import (
     PushRandomizerState,
     apply_pushes,
     randomize_push_schedule,
+    randomize_spawn,
 )
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.sampler import STAGE_RESET, TermSampler
@@ -29,10 +29,6 @@ pytestmark = pytest.mark.no_sim
 _NUM_ENVS = 4
 _ENV_IDS = torch.tensor([0, 2])
 _OTHER_IDS = torch.tensor([1, 3])
-_MANAGERS = [
-    pytest.param(LeggedRobotLocomotionManager, 2, id="locomotion"),
-    pytest.param(WholeBodyTrackingManager, 6, id="wbt"),
-]
 
 
 def _root_states() -> torch.Tensor:
@@ -41,8 +37,8 @@ def _root_states() -> torch.Tensor:
 
 
 def _env_stub(*, floating_base: bool, push_dim: int) -> Any:
-    """The attributes ``_reset_root_states`` / ``_push_robots`` read on either manager."""
-    stub: Any = object.__new__(LeggedRobotLocomotionManager)
+    """Task buffers consumed by the reset callback and spawn term."""
+    stub: Any = object.__new__(PolicyTask)
     stub.robot_config = SimpleNamespace(asset=SimpleNamespace(fix_base_link=not floating_base))
     stub.device = "cpu"
     stub.num_envs = _NUM_ENVS
@@ -53,9 +49,6 @@ def _env_stub(*, floating_base: bool, push_dim: int) -> Any:
     stub.default_dof_pos = torch.ones(_NUM_ENVS, 2)
     stub.need_to_refresh_envs = torch.zeros(_NUM_ENVS, dtype=torch.bool)
     stub.randomization_manager = None
-    stub._max_push_vel = torch.ones(push_dim)
-    stub.push_robot_vel_buf = torch.zeros(_NUM_ENVS, push_dim)
-    stub.record_push_robot_vel_buf = torch.zeros(_NUM_ENVS, push_dim)
     stub.base_init_state = torch.tensor([0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 1.0] + [0.0] * 6)
     terrain = SimpleNamespace(env_origins=torch.arange(_NUM_ENVS * 3, dtype=torch.float).view(_NUM_ENVS, 3))
     terrain.custom_origins = False
@@ -79,6 +72,7 @@ def test_reset_root_states_writes_spawn_pose(floating_base: bool) -> None:
     origins = env.terrain_manager.get_state("locomotion_terrain").env_origins
 
     env._reset_robot_states_callback(_ENV_IDS)
+    randomize_spawn(env, _ENV_IDS, sampler=_sampler())
 
     states = env.simulator.robot_root_states
     assert torch.equal(states[_ENV_IDS, :3], env.base_init_state[:3] + origins[_ENV_IDS])
@@ -104,6 +98,7 @@ def test_reset_root_states_spawn_jitter_is_floating_base_only() -> None:
         ]
 
         env._reset_robot_states_callback(_ENV_IDS)
+        randomize_spawn(env, _ENV_IDS, sampler=_sampler())
 
         offset = env.simulator.robot_root_states[_ENV_IDS, :2] - spawn_xy
         if floating_base:
@@ -113,37 +108,15 @@ def test_reset_root_states_spawn_jitter_is_floating_base_only() -> None:
 
 
 @pytest.mark.parametrize("floating_base", [True, False], ids=["floating", "fixed"])
-def test_reset_root_states_target_adds_origins(floating_base: bool) -> None:
+def test_reset_root_states_target_uses_world_coordinates(floating_base: bool) -> None:
     env = _env_stub(floating_base=floating_base, push_dim=2)
-    origins = env.terrain_manager.get_state("locomotion_terrain").env_origins
     target = torch.ones(len(_ENV_IDS), 13)
 
     env._reset_robot_states_callback(_ENV_IDS, {"root_states": target, "dof_states": torch.zeros(len(_ENV_IDS), 2, 2)})
 
     states = env.simulator.robot_root_states
-    assert torch.equal(states[_ENV_IDS, :3], target[:, :3] + origins[_ENV_IDS])
+    assert torch.equal(states[_ENV_IDS, :3], target[:, :3])
     assert torch.equal(states[_ENV_IDS, 3:], target[:, 3:])
-
-
-# --------------------------------------------------------------------------- _push_robots
-
-
-@pytest.mark.parametrize(("manager", "push_dim"), _MANAGERS)
-def test_push_robots_floating_base_updates_selected_velocities(manager: type[Any], push_dim: int) -> None:
-    env = _env_stub(floating_base=True, push_dim=push_dim)
-    before = env.simulator.robot_root_states.clone()
-
-    manager._push_robots(env, _ENV_IDS)
-
-    env.simulator.set_actor_root_state_tensor_robots.assert_not_called()
-    pushed = env.push_robot_vel_buf[_ENV_IDS]
-    assert (pushed.abs() <= env._max_push_vel).all()
-    states = env.simulator.robot_root_states
-    if manager is LeggedRobotLocomotionManager:
-        assert torch.equal(states[_ENV_IDS, 7:9], pushed)  # planar velocity is overwritten
-    else:
-        assert torch.equal(states[_ENV_IDS, 7:13], before[_ENV_IDS, 7:13] + pushed)  # 6-dof additive push
-    assert torch.equal(states[_OTHER_IDS], before[_OTHER_IDS])
 
 
 # --------------------------------------------------------------------------- push guard (both entry points)
@@ -161,7 +134,7 @@ def _push_env(*, floating_base: bool, enabled: bool) -> tuple[Any, PushRandomize
         dt=0.02,
         is_evaluating=False,
         robot_config=SimpleNamespace(asset=SimpleNamespace(fix_base_link=not floating_base)),
-        _push_robots=MagicMock(),
+        simulator=SimpleNamespace(robot_root_states=_root_states()),
     )
     cfg = RandomizationTermCfg(
         func="holosoma.managers.randomization.terms.locomotion.PushRandomizerState",
@@ -200,7 +173,8 @@ def test_push_enabled_on_fixed_base_raises(entry: Any, via_param: bool) -> None:
     if entry in _PUSH_ENTRY_FLAGS:
         assert not hasattr(env, _PUSH_ENTRY_FLAGS[entry])
     assert not hasattr(env, "_max_push_vel")
-    env._push_robots.assert_not_called()
+    assert state.push_count is not None
+    assert not state.push_count.any()
 
 
 @pytest.mark.parametrize("entry", _PUSH_ENTRIES)
@@ -210,7 +184,8 @@ def test_push_disabled_on_fixed_base_does_not_raise(entry: Any) -> None:
     if entry in _PUSH_ENTRY_FLAGS:
         assert getattr(env, _PUSH_ENTRY_FLAGS[entry]) is False
     assert not state.enabled
-    env._push_robots.assert_not_called()
+    assert state.push_count is not None
+    assert not state.push_count.any()
 
 
 def test_apply_pushes_enabled_on_floating_base_pushes_the_due_envs() -> None:
@@ -221,12 +196,16 @@ def test_apply_pushes_enabled_on_floating_base_pushes_the_due_envs() -> None:
     state.push_robot_counter[:] = interval_steps - 1  # one step short
     state.push_robot_counter[0] = interval_steps  # due
 
+    before = env.simulator.robot_root_states.clone()
     apply_pushes(env, sampler=_sampler())
 
     assert env._push_robots_enabled is True
-    env._push_robots.assert_called_once()
-    assert env._push_robots.call_args.args[0].tolist() == [0]
-    assert torch.equal(env._max_push_vel, state.max_push_vel)
+    assert state.push_count is not None
+    assert state.push_count.tolist() == [1, 0, 0, 0]
+    velocities = env.simulator.robot_root_states[:, 7:9]
+    assert (velocities[0].abs() <= state.max_push_vel).all()
+    assert velocities[0].abs().sum() > 0
+    assert torch.equal(velocities[1:], before[1:, 7:9])
     assert state.push_robot_counter[0] == 0
     assert (state.push_robot_counter[1:] == interval_steps - 1).all()
     assert 5.0 <= float(state.push_interval_s[0]) <= 16.0  # env 0's interval was redrawn
@@ -241,7 +220,27 @@ def test_push_schedule_enabled_on_floating_base_resamples() -> None:
     randomize_push_schedule(env, _ENV_IDS, sampler=_sampler())
 
     assert state.enabled
-    assert torch.equal(env._max_push_vel, state.max_push_vel)
     assert not state.push_robot_counter[_ENV_IDS].any()
     assert (state.push_robot_counter[_OTHER_IDS] == 7).all()
     assert ((state.push_interval_s >= 5.0) & (state.push_interval_s <= 16.0)).all()
+
+
+@pytest.mark.parametrize("push_dim", [2, 6], ids=["planar", "twist"])
+def test_push_state_updates_only_selected_velocities(push_dim: int) -> None:
+    env, state = _push_env(floating_base=True, enabled=True)
+    state.configure(max_push_vel=[1.0] * push_dim)
+    before = env.simulator.robot_root_states.clone()
+
+    state.push(_ENV_IDS, _sampler())
+
+    after = env.simulator.robot_root_states
+    delta = after[_ENV_IDS, 7 : 7 + push_dim]
+    if push_dim == 6:
+        delta = delta - before[_ENV_IDS, 7 : 7 + push_dim]
+    assert (delta.abs() <= 1.0).all()
+    assert delta.abs().sum() > 0
+    assert torch.equal(after[_OTHER_IDS], before[_OTHER_IDS])
+    assert torch.equal(after[_ENV_IDS, :7], before[_ENV_IDS, :7])
+    assert torch.equal(after[_ENV_IDS, 7 + push_dim :], before[_ENV_IDS, 7 + push_dim :])
+    assert state.push_count is not None
+    assert state.push_count.tolist() == [1, 0, 1, 0]

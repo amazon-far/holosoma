@@ -37,6 +37,8 @@ def _unit_quats(*shape: int, gen: torch.Generator) -> torch.Tensor:
 
 
 class _StubSimulator:
+    base_quat: torch.Tensor
+
     def __init__(self, gen: torch.Generator) -> None:
         self._rigid_body_rot = _unit_quats(NUM_ENVS, NUM_BODIES, gen=gen)
         self._rigid_body_pos = torch.randn(NUM_ENVS, NUM_BODIES, 3, generator=gen)
@@ -57,7 +59,7 @@ class _StubEnv:
         self.num_envs = NUM_ENVS
         self.device = "cpu"
         self.simulator = _StubSimulator(gen)
-        self.base_quat = _unit_quats(NUM_ENVS, gen=gen)
+        self.simulator.base_quat = _unit_quats(NUM_ENVS, gen=gen)
         self.resolve_calls: list[tuple[str, ...]] = []
         self.feet_heights = torch.rand(NUM_ENVS, 2, generator=gen) * 0.1
         self.phase = torch.rand(NUM_ENVS, 2, generator=gen) * 2 * torch.pi - torch.pi
@@ -122,7 +124,7 @@ def test_penalty_feet_ori_rejects_invalid_sole_axes(sole_axes: tuple[Any, ...]) 
 )
 def test_penalty_close_feet_uses_lateral_distance_and_strict_threshold(yaw_quat: list[float]) -> None:
     env = _env()
-    env.base_quat[:] = torch.tensor(yaw_quat)
+    env.simulator.base_quat[:] = torch.tensor(yaw_quat)
     env.simulator._rigid_body_pos.zero_()
     # Distances bracket the threshold, including equality and negative separation.
     distance = torch.tensor([0.05, 0.099, 0.1, 0.101, -0.05])

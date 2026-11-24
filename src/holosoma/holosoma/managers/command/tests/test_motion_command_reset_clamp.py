@@ -32,13 +32,17 @@ JOINT_VEL = 0.25
 def _term(*, soft_factor: float, dof_pos_noise: float) -> tuple[Any, Any]:
     """A ``MotionCommand`` with the reset-path state set by hand; returns ``(term, simulator)``."""
     term: Any = MotionCommand.__new__(MotionCommand)
-    term.motion_cfg = SimpleNamespace(use_adaptive_timesteps_sampler=False, start_at_timestep_zero_prob=0.0)
+    term.motion_cfg = SimpleNamespace(
+        use_adaptive_timesteps_sampler=False, start_at_timestep_zero_prob=0.0, body_names_to_track=["root", "tip"]
+    )
     # Root noise stays zero so the root write can be checked exactly; only the DOF noise is exercised.
     term.init_pose_cfg = NoiseToInitialPoseConfig(
         overall_noise_scale=1.0, dof_pos=dof_pos_noise, soft_dof_pos_limit=soft_factor
     )
     term._soft_dof_pos_limits = None
     term.root_body_index = 0
+    term.ref_body_index = 1
+    term.tracked_body_indexes = torch.arange(NUM_BODIES)
     term.num_envs, term.device = NUM_ENVS, "cpu"
     term.time_steps = torch.zeros(NUM_ENVS, dtype=torch.long)
     term.motion_ids = torch.zeros(NUM_ENVS, dtype=torch.long)
@@ -63,9 +67,13 @@ def _term(*, soft_factor: float, dof_pos_noise: float) -> tuple[Any, Any]:
         dof_pos=torch.full((NUM_ENVS, NUM_DOF), 7.0),
         dof_vel=torch.full((NUM_ENVS, NUM_DOF), 7.0),
         robot_root_states=torch.zeros(NUM_ENVS, 13),
+        _rigid_body_pos=torch.zeros(NUM_ENVS, NUM_BODIES, 3),
+        _rigid_body_rot=torch.tensor([0.0, 0.0, 0.0, 1.0]).repeat(NUM_ENVS, NUM_BODIES, 1),
         scene=SimpleNamespace(env_origins=torch.tensor([[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [10.0, 0.0, 0.0]])),
     )
-    term._env = SimpleNamespace(simulator=simulator, is_evaluating=False)
+    term._env = SimpleNamespace(
+        simulator=simulator, is_evaluating=False, episode_length_buf=torch.zeros(NUM_ENVS, dtype=torch.long)
+    )
     return term, simulator
 
 

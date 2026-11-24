@@ -571,7 +571,11 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
 def test_saved_task_subclass_configs_load_onto_policy_task_with_the_terms_that_replace_them(
     fixture_name: str, locomotion: bool, tmp_path: Path
 ) -> None:
-    loaded = _load_through("checkpoint", _previous_schema(fixture_name), tmp_path)
+    saved = _previous_schema(fixture_name)
+    if not locomotion:
+        # This historical Warp fixture needs an explicit former motion-column-zero body.
+        saved["command"]["setup_terms"]["motion_command"]["params"]["motion_config"]["root_body"] = "pelvis"
+    loaded = _load_through("checkpoint", saved, tmp_path)
 
     assert loaded.env_class == "holosoma.envs.policy_task.PolicyTask"
     assert loaded.randomization is not None

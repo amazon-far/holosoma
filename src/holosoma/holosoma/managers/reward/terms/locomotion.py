@@ -119,30 +119,6 @@ def penalty_feet_ori(
 
 
 # ================================================================================================
-# Limit Rewards
-# ================================================================================================
-
-
-def limits_dof_pos(env: PolicyTask, soft_dof_pos_limit: float = 0.95) -> torch.Tensor:
-    """Penalize joint positions too close to limits.
-
-    Args:
-        env: The environment instance
-        soft_dof_pos_limit: Soft limit as fraction of hard limit
-
-    Returns:
-        Reward tensor [num_envs]
-    """
-    lower_soft_limit, upper_soft_limit = soft_limits(
-        env.simulator.get_dof_limits_properties()[0], soft_dof_pos_limit
-    ).unbind(1)
-
-    out_of_limits = -(env.simulator.dof_pos - lower_soft_limit).clip(max=0.0)  # lower limit
-    out_of_limits += (env.simulator.dof_pos - upper_soft_limit).clip(min=0.0)
-    return torch.sum(out_of_limits, dim=1)
-
-
-# ================================================================================================
 # Tracking and Task Rewards
 # ================================================================================================
 
