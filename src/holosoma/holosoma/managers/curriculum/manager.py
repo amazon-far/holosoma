@@ -11,7 +11,7 @@ from loguru import logger
 
 from holosoma.config_types.curriculum import CurriculumManagerCfg
 from holosoma.managers.staged_terms import StagedTerms
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.simulator.base_simulator.hooks import HookRef, Phase
 from holosoma.utils.safe_torch_import import torch
 
 from .base import CurriculumTermBase
@@ -55,11 +55,20 @@ class CurriculumManager:
     def install(self) -> None:
         """Set up the terms and drive them from the task's hooks.
 
-        ``reset`` runs on every ``Phase.RESET`` and ``step`` on every ``Phase.FRAME_BEGIN``; the task
-        also collects this manager's term metrics.
+        ``reset`` runs on every ``Phase.RESET``, after the task's managers reset and before it refreshes
+        kinematics, and ``step`` on every ``Phase.FRAME_BEGIN``; the task also collects this manager's
+        term metrics.
         """
+        from holosoma.envs.base_task.task_hooks import TASK_SLOT, TaskHook
+
         self.setup()
-        self.env.hooks.add(Phase.RESET, self.reset, name="curriculum.reset")
+        self.env.hooks.add(
+            Phase.RESET,
+            self.reset,
+            name="curriculum.reset",
+            after=HookRef(TASK_SLOT, TaskHook.MANAGERS_RESET),
+            before=HookRef(TASK_SLOT, TaskHook.REFRESH),
+        )
         self.env.hooks.add(Phase.FRAME_BEGIN, self.step, name="curriculum.step")
         self.env.add_metric_source(self)
 

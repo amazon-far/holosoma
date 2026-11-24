@@ -192,7 +192,7 @@ A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=No
 | `POST_STEP` | after each physics substep (freshest sim time) | — | physics `fps` |
 | `FRAME_END` | after the frame's last substep (read state here) | — | control rate |
 | `EPISODE_START` / `EPISODE_END` | on reset boundaries, once per batch of envs | `env_ids` (long tensor) | per batch |
-| `RESET` | on every reset call, after the task's managers reset; `env_ids` is empty on frames with no reset | `env_ids` (long tensor) | every frame, plus each explicit reset |
+| `RESET` | on every reset call, between `EPISODE_END` and `EPISODE_START`; the task's state writes, manager resets and kinematics refresh run in it; `env_ids` is empty on frames with no reset | `env_ids` (long tensor) | every frame, plus each explicit reset |
 | `CLOSE` | teardown (release resources); `before`/`after` describe execution here too, and ties go to the latest registered | — | once |
 
 ### Ordering
@@ -225,6 +225,21 @@ Take the slot through your own config, as sensor routes do; slot keys belong to 
 **`hooks.validate()` runs at the end of `install_plugins`**, resolving every phase without calling anything, so a cycle or an unresolved target stops the run before the first step. Hooks registered later are checked when their phase next resolves. `hooks.names(phase)` returns the resolved order.
 
 **`CLOSE` sorts like every other phase** but breaks ties toward the latest registered, so teardown reverses construction while `before`/`after` still describe execution: a node's cleanup declares `before=[runtime.close_hook]`. It is one pass that stops at the first failing callback.
+
+### Ordering against the task's steps
+
+The task runs its own work as hooks published under the reserved slot `"task"` (`TASK_SLOT`), keyed by `TaskHook`: applying actions first on `PRE_STEP`; on `FRAME_END`, after the phase's other hooks, termination, reward, metrics, the reset, the manager steps and observations; and on `RESET` the state writes, each manager's reset and the kinematics refresh. `TaskHook` lists them in run order, and `hooks.names(phase)` shows the resolved order of a running task. Plugins share the task's registry through `simulator.hooks`.
+
+Order against a step with a `HookRef`. One edge only places your hook somewhere after (or before) the step, and among hooks that are free to run, the task's earlier-registered steps go first, so a hook that declares only `after=` a `FRAME_END` step runs after the rest of the task's steps. To run right after a step, also name the next one:
+
+```python
+simulator.hooks.add(
+    Phase.FRAME_END, self.shape_reward, name="my_plugin.shape_reward",
+    after=HookRef(TASK_SLOT, TaskHook.REWARD), before=HookRef(TASK_SLOT, TaskHook.METRICS),
+)
+```
+
+`RESET` fires on every reset call, with empty `env_ids` on frames where nothing resets; a scene reset that writes state goes `before=HookRef(TASK_SLOT, TaskHook.REFRESH)` and skips an empty batch.
 
 ### Cadence
 

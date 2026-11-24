@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -9,11 +10,12 @@ from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.termination import TerminationManagerCfg
+from holosoma.envs.base_task.task_hooks import TASK_SLOT, TaskHook
 from holosoma.managers.randomization import RandomizationManager
 from holosoma.managers.termination import TerminationManager
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, _warn_deprecated
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.simulator.base_simulator.hooks import HookHandle, Phase
 from holosoma.simulator.session import get_local_rank, get_process_seed, resolve_simulation_device
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.common import seeding
@@ -122,6 +124,7 @@ class BaseTask:
             tyro_config=full_sim_config, terrain_manager=self.terrain_manager, device=self.device
         )
         self.hooks = self.simulator.hooks
+        self._register_substep_hooks()
 
         self.headless = training_config.headless
         self.simulator.set_headless(self.headless)
@@ -152,6 +155,7 @@ class BaseTask:
         self._initialize_task_managers()
 
         self._episode_open = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self._reset_targets: tuple[dict[str, Any] | None, dict[str, Any] | None] = (None, None)
         self._init_buffers()
 
         # Prepare fields required by managers (BEFORE setup calls)
@@ -161,7 +165,60 @@ class BaseTask:
         # Call setup for managers that need it
         self._setup_task_managers()
 
+        self._register_step_hooks()
         self._add_pacing_hooks()
+
+    def _register_substep_hooks(self) -> None:
+        """Apply actions first on ``PRE_STEP``: registered before the simulator adds its substep hooks."""
+        with self.hooks.installing(TASK_SLOT):
+            self.hooks.add(
+                Phase.PRE_STEP,
+                lambda: self._apply_force_in_physics_step(),
+                name=_step_name(TaskHook.APPLY_ACTIONS),
+                key=TaskHook.APPLY_ACTIONS,
+            )
+
+    def _register_step_hooks(self) -> None:
+        """Register the ``FRAME_END`` and ``RESET`` steps, each ordered after the one before it.
+
+        Registered after the plugins are installed, so plugin hooks that declare no order run first.
+        """
+        with self.hooks.installing(TASK_SLOT):
+            previous: HookHandle | None = None
+            for key, frame_step in self._frame_end_steps():
+                previous = self.hooks.add(
+                    Phase.FRAME_END, frame_step, name=_step_name(key), key=key, after=previous or ()
+                )
+            previous_reset: HookHandle | None = None
+            for key, reset_step in self._reset_steps():
+                previous_reset = self.hooks.add(
+                    Phase.RESET, reset_step, name=_step_name(key), key=key, after=previous_reset or ()
+                )
+
+    def _frame_end_steps(self) -> list[tuple[TaskHook, Callable[[], None]]]:
+        """The task's ``FRAME_END`` steps in run order. Each looks up its method when it runs."""
+        return [
+            (TaskHook.COUNT_FRAME, lambda: self._count_frame()),
+            (TaskHook.TERMINATION, lambda: self._check_termination()),
+            (TaskHook.RESET, lambda: self.reset_envs_idx(self.reset_buf.nonzero(as_tuple=False).flatten())),
+            (TaskHook.RANDOMIZATION_STEP, lambda: self.randomization_manager.step()),
+        ]
+
+    def _reset_steps(self) -> list[tuple[TaskHook, Callable[[torch.Tensor], None]]]:
+        """The task's ``RESET`` steps in run order. Each looks up its method when it runs."""
+        return [
+            (TaskHook.PREPARE_RESET, _skip_empty(lambda env_ids: self._prepare_reset(env_ids))),
+            (
+                TaskHook.WRITE_STATE,
+                _skip_empty(lambda env_ids: self._reset_envs_idx_impl(env_ids, *self._reset_targets)),
+            ),
+            (TaskHook.COUNT_EPISODE, _skip_empty(lambda env_ids: self._count_episode(env_ids))),
+            (TaskHook.RANDOMIZATION_RESET, lambda env_ids: self.randomization_manager.reset(env_ids)),
+            (TaskHook.TERMINATION_RESET, lambda env_ids: self.termination_manager.reset(env_ids)),
+            (TaskHook.MANAGERS_RESET, lambda _env_ids: None),
+            (TaskHook.REFRESH, _skip_empty(lambda env_ids: self._refresh_envs_after_reset(env_ids))),
+            (TaskHook.AFTER_RESET_SYNC, _skip_empty(lambda env_ids: self._after_reset_synchronization(env_ids))),
+        ]
 
     def _add_pacing_hooks(self) -> None:
         """Draw the viewer every ``viewer_update_decimation`` and pace physics to ``time_scale``.
@@ -224,29 +281,23 @@ class BaseTask:
         else:
             env_ids = self._ensure_long_tensor(env_ids)
         if env_ids.numel() == 0:
-            # Managers' reset hooks run every control frame, resets or not; there is no state to apply.
-            self._reset_task_managers(env_ids)
+            # RESET runs every control frame, resets or not; its state-writing steps skip an empty batch.
             self.hooks.emit(Phase.RESET, env_ids)
             return
 
         # Initial reset starts an episode without inventing a preceding episode end.
         self._end_episodes(env_ids[self._episode_open[env_ids]])
-
-        self._prepare_reset(env_ids)
-
-        self._reset_envs_idx_impl(env_ids, target_states, target_buf)
-
-        # Reset all managers AFTER state changes
-        # Advance the per-env episode counter BEFORE reset DR draws, so each env's k-th reset is
-        # keyed by episode == k (independent of when, or alongside whom, it reset).
-        self.episode_count[env_ids.to("cpu")] += 1
-        self._reset_task_managers(env_ids)
-        self.hooks.emit(Phase.RESET, env_ids)
-
-        self._refresh_envs_after_reset(env_ids)
-        self._after_reset_synchronization(env_ids)
-
+        self._reset_targets = (target_states, target_buf)
+        try:
+            self.hooks.emit(Phase.RESET, env_ids)
+        finally:
+            self._reset_targets = (None, None)
         self._start_episodes(env_ids)
+
+    def _count_episode(self, env_ids: torch.Tensor) -> None:
+        # Before the reset randomization draws, so each env's k-th reset is keyed by episode == k
+        # (independent of when, or alongside whom, it reset).
+        self.episode_count[env_ids.to("cpu")] += 1
 
     def _reset_envs_idx_impl(
         self,
@@ -397,11 +448,6 @@ class BaseTask:
         states[:, 7:] = init_vels  # configured initial velocity
         self.simulator.set_actor_states(object_names, env_ids, states)
 
-    def _reset_task_managers(self, env_ids: torch.Tensor) -> None:
-        """Reset the task's managers; specializations extend it to reset their own."""
-        self.randomization_manager.reset(env_ids)
-        self.termination_manager.reset(env_ids)
-
     def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
         """Update task state after reset writes have been synchronized."""
 
@@ -417,31 +463,20 @@ class BaseTask:
         decimation = self.config.simulator.config.sim.control_decimation_steps
         self.hooks.emit(Phase.FRAME_BEGIN)
         for _ in range(decimation):
-            self._apply_force_in_physics_step()
             self.hooks.emit(Phase.PRE_STEP)
             self.simulator.simulate_at_each_physics_step()
             self.hooks.emit(Phase.POST_STEP)
 
     def _apply_force_in_physics_step(self) -> None:
-        """Apply task-specific controls during each physics substep."""
+        """Apply task-specific controls during each physics substep, as the first ``PRE_STEP`` hook."""
 
     def _post_physics_step(self) -> Any:
-        # Cameras render and egress consumers publish here, as FRAME_END plugins (consumers
-        # declare `after` the sensor render hook, so buffers are fresh on read).
+        # Cameras render and egress consumers publish on FRAME_END (consumers declare `after` the
+        # sensor render hook), before the task's own steps there.
         self.hooks.emit(Phase.FRAME_END)
+
+    def _count_frame(self) -> None:
         self.episode_length_buf += 1
-        self._check_termination()
-        env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
-        self._evaluate_frame(env_ids)
-        self.reset_envs_idx(env_ids)
-        self._step_managers()
-
-    def _evaluate_frame(self, env_ids: torch.Tensor) -> None:
-        """Evaluate the frame on the state ``env_ids``' episodes ended in, before they reset."""
-
-    def _step_managers(self) -> None:
-        """Step managers once per control frame, after resets."""
-        self.randomization_manager.step()
 
     def _check_termination(self) -> None:
         self.reset_buf[:] = 0
@@ -464,3 +499,17 @@ class BaseTask:
     def _refresh_sim_tensors(self) -> None:
         """Deprecated no-op: simulator state tensors are current at every read."""
         _warn_deprecated("_refresh_sim_tensors", "drop the call; state is current at every read")
+
+
+def _step_name(key: TaskHook) -> str:
+    return f"task.{key.name.lower()}"
+
+
+def _skip_empty(step: Callable[[torch.Tensor], None]) -> Callable[[torch.Tensor], None]:
+    """Run ``step`` only for a non-empty batch of environments."""
+
+    def run(env_ids: torch.Tensor) -> None:
+        if env_ids.numel():
+            step(env_ids)
+
+    return run

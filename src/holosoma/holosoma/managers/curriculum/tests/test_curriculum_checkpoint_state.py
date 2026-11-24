@@ -19,6 +19,7 @@ import torch.multiprocessing as mp
 
 from holosoma.agents.base_algo.base_algo import BaseAlgo
 from holosoma.config_types.curriculum import CurriculumManagerCfg, CurriculumTermCfg
+from holosoma.envs.base_task.task_hooks import TASK_SLOT, TaskHook
 from holosoma.managers.curriculum.manager import CurriculumManager
 from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker, PenaltyCurriculum
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
@@ -90,6 +91,10 @@ class _Task:
         self._pending_episode_lengths = torch.zeros(self.num_envs, dtype=torch.long)
         self._pending_episode_update_mask = torch.zeros(self.num_envs, dtype=torch.bool)
         self.hooks = HookRegistry()
+        # The reset steps the curriculum orders itself between.
+        with self.hooks.installing(TASK_SLOT):
+            managers_reset = self.hooks.add(Phase.RESET, lambda _ids: None, key=TaskHook.MANAGERS_RESET)
+            self.hooks.add(Phase.RESET, lambda _ids: None, key=TaskHook.REFRESH, after=managers_reset)
         self.metric_sources: list[Any] = []
 
     def add_metric_source(self, source: Any) -> None:

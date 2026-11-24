@@ -829,6 +829,10 @@ class BaseSimulator:
         # Mark the stage before construction. A failed plugin install is terminal for this
         # simulator; the outer lifecycle owner will emit CLOSE for callbacks already registered.
         self._plugins_installed = True
+        from holosoma.envs.base_task.task_hooks import TASK_SLOT
+
+        if TASK_SLOT in self.plugin_config:
+            raise ValueError(f"Plugin slot {TASK_SLOT!r} is reserved for the task's own hooks; use another key.")
         for key, cfg in self.plugin_config.items():
             # Scoped so the plugin's published keys belong to its slot, for HookRef to resolve.
             with self.hooks.installing(key):
