@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import dataclasses
 from typing import Any
 
@@ -18,7 +17,6 @@ from holosoma.config_values.experiment import EXPERIMENT_REGISTRY
 from holosoma.config_values.loco.g1.experiment import g1_29dof, g1_29dof_fast_sac
 from holosoma.config_values.loco.t1.experiment import t1_29dof
 from holosoma.config_values.robot import g1_29dof as g1_robot
-from holosoma.utils.config_migration import migrate_legacy_experiment_config
 from holosoma.utils.name_tags import expand_name_spec
 
 pytestmark = pytest.mark.no_sim
@@ -207,47 +205,3 @@ def test_robot_stores_sets_and_serializes_arrays() -> None:
     encoded = TypeAdapter[RobotConfig](RobotConfig).dump_python(robot, mode="json")
     assert encoded["joint_tags"]["#repeated"] == ["#knees"]
     assert TypeAdapter[RobotConfig](RobotConfig).validate_python(encoded) == robot
-
-
-def test_saved_ordered_groups_convert_before_set_normalization() -> None:
-    raw = g1_29dof.to_serializable_dict()
-    tags = raw["robot"]["joint_tags"]
-    for tag in list(tags):
-        if tag.startswith("#mirror_"):
-            del tags[tag]
-    left = ["left_knee_joint", "left_ankle_pitch_joint"]
-    right = ["right_ankle_pitch_joint", "right_knee_joint"]
-    tags["#mirror_left"] = left
-    tags["#mirror_right"] = right
-    tags["#mirror_flip_sign"] = tags.pop("#symmetry_flip_sign")
-    raw["algo"]["config"]["symmetry"] = {"left": ["#mirror_left"], "right": ["#mirror_right"], "flip_sign": []}
-    original = copy.deepcopy(raw)
-    migrated = migrate_legacy_experiment_config(raw)
-    loaded = ExperimentConfig(**migrated)
-    assert _symmetry_config(loaded).symmetry.pairs == list(zip(left, right, strict=True))
-    resolved = _symmetry_config(loaded).symmetry.resolve(loaded.robot.joint_tags, loaded.robot.dof_names)
-    assert resolved == (left, right, [])
-    assert raw == original
-    assert migrate_legacy_experiment_config(migrated) == migrated
-
-
-@pytest.mark.parametrize("conflicting", [False, True])
-def test_saved_json_pairs_must_agree_with_ordered_sides(conflicting: bool) -> None:
-    raw = g1_29dof.to_serializable_dict()
-    left, right = "left_knee_joint", "right_knee_joint"
-    raw["algo"]["config"]["symmetry"] = {
-        "left": [left],
-        "right": [right],
-        "pairs": [[left, "right_ankle_pitch_joint" if conflicting else right]],
-        "flip_sign": [],
-    }
-    if conflicting:
-        with pytest.raises(ValueError, match="conflicting pairs"):
-            migrate_legacy_experiment_config(raw)
-    else:
-        loaded = ExperimentConfig(**migrate_legacy_experiment_config(raw))
-        assert _symmetry_config(loaded).symmetry.resolve(loaded.robot.joint_tags, loaded.robot.dof_names) == (
-            [left],
-            [right],
-            [],
-        )

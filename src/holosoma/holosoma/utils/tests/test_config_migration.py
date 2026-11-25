@@ -229,7 +229,7 @@ def test_current_or_tagged_defaults_remain_strict_with_legacy_schema_markers(sig
         defaults = {"#all": 0.1}
         init["default_joint_angles"] = defaults
     elif signal in ("joint-tags", "empty-joint-tags"):
-        raw["robot"]["joint_tags"] = {"#all": raw["robot"]["dof_names"]} if signal == "joint-tags" else {}
+        raw["robot"]["joint_tags"] = {"#active": ["#all"]} if signal == "joint-tags" else {}
     elif signal in ("current-key", "both-keys"):
         init["default_joint_positions"] = defaults
         if signal == "current-key":
@@ -620,7 +620,9 @@ def test_all_stale_symmetry_names_emit_no_mirror_tags() -> None:
 
     migrated = migrate_legacy_experiment_config(raw)
 
-    assert not {"#mirror_left", "#mirror_right", "#mirror_flip_sign"} & set(migrated["robot"].get("joint_tags", {}))
+    tags = migrated["robot"].get("joint_tags", {})
+    assert not any(tag.startswith("#mirror_") for tag in tags)
+    assert "#symmetry_flip_sign" not in tags
     with pytest.raises(pydantic.ValidationError, match="set use_symmetry=False"):
         ExperimentConfig(**migrated)
     migrated["algo"]["config"]["use_symmetry"] = False

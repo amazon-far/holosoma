@@ -1,8 +1,9 @@
-"""Convert saved ``ExperimentConfig`` dictionaries to the current robot schema.
+"""Convert pre-PR ``ExperimentConfig`` dictionaries to the current robot schema.
 
 Use ``migrate_legacy_experiment_config`` before constructing a config from checkpoint metadata or
 ``holosoma_config.yaml``. It preserves legacy gain matching, logs conversions and dropped fields, and
 returns a copy. For source presets and overrides, follow ``docs/robotconfig-migration.md``.
+The migration source is the schema on main before the RobotConfig PR.
 """
 
 from __future__ import annotations
@@ -271,7 +272,7 @@ def _migrate_robot_control(
     changes.append("robot.control -> JointPositionActionTerm controller/scale/clip")
 
 
-def _migrate_motion_root(out: dict[str, Any], robot: Mapping[str, Any], *, legacy_body_schema: bool) -> None:
+def _migrate_motion_root(out: dict[str, Any], robot: Mapping[str, Any]) -> None:
     """Preserve the old WBT column-zero choice only when its body identity is known."""
     for term in _iter_terms(out.get("command"), ("setup_terms", "reset_terms", "step_terms")):
         if term.get("func") not in _MOTION_COMMAND_FUNCS:
@@ -280,9 +281,7 @@ def _migrate_motion_root(out: dict[str, Any], robot: Mapping[str, Any], *, legac
         if motion is None or "root_body" in motion:
             continue
         simulator = _get_path(out, "simulator") or {}
-        if legacy_body_schema and simulator.get("_target_") not in {
-            "holosoma.simulator.isaacsim.isaacsim.IsaacSim",
-        }:
+        if simulator.get("_target_") != "holosoma.simulator.isaacsim.isaacsim.IsaacSim":
             raise ValueError(
                 "Cannot infer MotionConfig.root_body for this pre-refactor simulator: its runtime body "
                 "order was not guaranteed to match robot.body_names. Set root_body to the exact body "
@@ -324,85 +323,6 @@ def _migrate_saved_simulator(out: dict[str, Any]) -> None:
         extra["gravity"] = gravity
 
 
-def _migrate_saved_symmetry(out: dict[str, Any], robot: dict[str, Any]) -> None:
-    """Convert historical ordered sides to exact pairs before tag members become sets."""
-    tags = robot.get("joint_tags") or {}
-    algo = _get_path(out, "algo.config")
-    symmetry = algo.get("symmetry") if algo is not None else None
-    old_sides = isinstance(symmetry, dict) and ("left" in symmetry or "right" in symmetry)
-    old_groups = "#mirror_left" in tags or "#mirror_right" in tags
-    if not old_sides and not old_groups and "#mirror_flip_sign" not in tags:
-        return
-
-    def ordered_names(entries: Any, chain: tuple[str, ...] = ()) -> list[str]:
-        if not isinstance(entries, (list, tuple)):
-            raise ValueError("Saved ordered symmetry sides must be arrays of joint names or tag references.")
-        names: list[str] = []
-        for entry in entries:
-            if not isinstance(entry, str):
-                raise ValueError(f"Saved symmetry entry must be a string, got {entry!r}.")
-            if entry.startswith("#"):
-                if entry in chain:
-                    raise ValueError(f"Saved symmetry tag cycle: {' -> '.join((*chain, entry))}")
-                if entry == "#all":
-                    selected = list(robot.get("dof_names") or [])
-                elif entry in tags:
-                    selected = ordered_names(tags[entry], (*chain, entry))
-                else:
-                    raise ValueError(f"Unknown saved symmetry joint tag {entry!r}.")
-                names.extend(selected)
-            else:
-                names.append(entry)
-        if len(set(names)) != len(names):
-            raise ValueError("Saved ordered symmetry side contains duplicate joints; its pairing is ambiguous.")
-        return names
-
-    if old_sides or old_groups:
-        saved_sides = symmetry if old_sides and isinstance(symmetry, dict) else {}
-        left = ordered_names(saved_sides.get("left", ["#mirror_left"]))
-        right = ordered_names(saved_sides.get("right", ["#mirror_right"]))
-        if len(left) != len(right):
-            raise ValueError("Saved ordered symmetry sides must contain the same number of joints.")
-        pairs = list(zip(left, right, strict=True))
-        if old_sides:
-            assert isinstance(symmetry, dict)
-            stored_pairs = symmetry.get("pairs")
-            if stored_pairs is not None and [list(pair) for pair in stored_pairs] != [list(pair) for pair in pairs]:
-                raise ValueError("Saved symmetry has conflicting pairs and ordered left/right definitions.")
-            symmetry.pop("left", None)
-            symmetry.pop("right", None)
-            symmetry["pairs"] = pairs or None
-        elif algo is not None:
-            symmetry = algo.setdefault("symmetry", {})
-            symmetry.setdefault("pairs", pairs or None)
-
-    renames = {
-        "#mirror_left": "#symmetry_left",
-        "#mirror_right": "#symmetry_right",
-        "#mirror_flip_sign": "#symmetry_flip_sign",
-    }
-
-    def rename(value: Any) -> Any:
-        if isinstance(value, str):
-            return renames.get(value, value)
-        if isinstance(value, list):
-            return [rename(entry) for entry in value]
-        if isinstance(value, dict):
-            rewritten: dict[str, Any] = {}
-            for key, entry in value.items():
-                next_key = renames.get(key, key)
-                next_entry = rename(entry)
-                if next_key in rewritten and rewritten[next_key] != next_entry:
-                    raise ValueError(f"Saved symmetry tag rename conflicts at {next_key!r}.")
-                rewritten[next_key] = next_entry
-            return rewritten
-        return value
-
-    renamed = rename(out)
-    out.clear()
-    out.update(renamed)
-
-
 def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
     """Return a deep copy of ``raw`` rewritten to the current schema.
 
@@ -420,13 +340,6 @@ def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
     robot = out.get("robot")
     if not isinstance(robot, dict):
         return out
-    _migrate_saved_symmetry(out, robot)
-    robot = out["robot"]
-    # Saved tag tables can contain a generated membership list. Resolve #all from current names.
-    for field in ("body_tags", "joint_tags"):
-        tags = robot.get(field)
-        if isinstance(tags, dict):
-            tags.pop("#all", None)
     _migrate_dof_property_lists(robot)
 
     init_raw = robot.get("init_state")
@@ -443,7 +356,8 @@ def migrate_legacy_experiment_config(raw: Mapping[str, Any]) -> dict[str, Any]:
     # Neither object nor default_joint_angles alone identifies that schema.
     legacy_gain_schema = bool(legacy_robot - {"object"}) or "pos" in init_state or "rot" in init_state
     legacy_gains = legacy_gain_schema and not any(str(key).startswith("#") for key in gain_keys)
-    _migrate_motion_root(out, robot, legacy_body_schema=legacy_gain_schema)
+    if legacy_gain_schema:
+        _migrate_motion_root(out, robot)
     if not _unknown_robot_keys(robot) and not substring_gain_keys:
         return out
 

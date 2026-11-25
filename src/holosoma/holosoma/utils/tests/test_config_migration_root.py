@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 import yaml
 
+from holosoma.config_types.command import MotionConfig
 from holosoma.config_values.experiment import EXPERIMENT_REGISTRY
 from holosoma.utils.config_migration import migrate_legacy_experiment_config
 
@@ -93,21 +94,19 @@ def test_explicit_selector_is_preserved_even_for_legacy_mujoco(selector: str) ->
     assert _motion(migrated)["root_body"] == selector
 
 
-def test_pre_selector_canonical_dump_preserves_first_body_despite_different_root_tag(warnings: list[str]) -> None:
+def test_current_dump_without_optional_root_keeps_runtime_discovery(warnings: list[str]) -> None:
     raw = EXPERIMENT_REGISTRY["g1_29dof_wbt"].to_serializable_dict()
     _motion(raw).pop("root_body")
-    # Canonical order was already independent of backend order in this schema.
     raw["simulator"]["_target_"] = "holosoma.simulator.mujoco.mujoco.MuJoCo"
     raw["robot"]["body_names"] = list(reversed(raw["robot"]["body_names"]))
-    expected = raw["robot"]["body_names"][0]
     original = copy.deepcopy(raw)
 
     migrated = migrate_legacy_experiment_config(raw)
 
-    assert _motion(migrated)["root_body"] == expected
-    assert migrated["robot"] == original["robot"]
+    assert migrated == original
+    assert MotionConfig(**_motion(migrated)).root_body is None
     assert raw == original
-    assert len(warnings) == 1 and "MotionConfig.root_body" in warnings[0]
+    assert warnings == []
 
 
 def test_current_dump_is_unchanged_and_silent(warnings: list[str]) -> None:

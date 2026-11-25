@@ -144,6 +144,13 @@ def _terms_named(manager: Any, func_suffix: str) -> list[dict[str, Any]]:
 def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConfig:
     """Transition historical saved fields; CLI/YAML inputs keep the current schema."""
     data = _fold_task_subclass(migrate_legacy_experiment_config(config_data))
+    # Stored metadata cannot define membership for the reserved canonical-name selection.
+    robot = data.get("robot")
+    if isinstance(robot, dict):
+        for field in ("body_tags", "joint_tags"):
+            tags = robot.get(field)
+            if isinstance(tags, dict):
+                tags.pop("#all", None)
     simulator = data.get("simulator", {}).get("config", {})
     if "mujoco_warp" in simulator:
         native = simulator["sim"].setdefault("mujoco", {})

@@ -1,10 +1,12 @@
-# Migrate a pre-refactor `RobotConfig`
+# Migrate the pre-PR `RobotConfig`
 
-Use this checklist to migrate a robot preset, its task presets, overrides, and direct consumers from the
-pre-2026-09 schema. The field definitions in `holosoma/config_types/robot.py` are the source of truth. For the
-current contract, see [Adding a robot](writing-extensions.md#adding-a-robot-robotconfig).
+This guide covers migration from the `RobotConfig` schema on `main` before PR #236.
+That schema uses morphology fields, positional property lists, `robot.control`, and `symmetry_joint_names`.
+Use this guide for robot presets, task presets, overrides, and direct consumers.
+The field definitions in `holosoma/config_types/robot.py` define the current schema.
+For the current contract, see [Adding a robot](writing-extensions.md#adding-a-robot-robotconfig).
 
-## MuJoCo behavior changes in 0.1.0
+## MuJoCo behavior changes
 
 MuJoCo now applies configured joint friction, armature, and effort limits when it loads a robot.
 For MJCF robots, earlier versions retained authored friction, armature, and actuator ranges despite preset overrides.
@@ -47,7 +49,7 @@ Apply the rows below in order. Import the preset after each group of edits. Beca
 |---|---|
 | `num_bodies`, `dof_obs_size`, `algo_obs_dim_dict`, `actions_dim`, `policy_obs_dim`, `critic_obs_dim`, `key_bodies`, `num_feet`, `knee_name`, `has_torso`, `has_upper_body_dof`, `penalize_contacts_on`, `knee_joint_min_threshold`, `lidar_height_offset`, `termination_close_to_dof_pos_limit`, `object`, `asset.armature`, `asset.mesh_root` | Delete. |
 | `RobotInitState(pos=..., rot=[x, y, z, w], ...)` | Rename to `position` and `orientation`, and reorder the quaternion to `[w, x, y, z]`. A missed reorder is silent because both layouts can contain a unit quaternion. Zero velocities and identity orientation already have defaults. |
-| `init_state.default_joint_angles` | Rename to `default_joint_positions`. Values are radians for hinges and metres for slides; omitted joints default to zero. Keep exact-name and tag keys as authored; checkpoint migration renames this field without expanding it. Conflicting old and new maps are rejected. |
+| `init_state.default_joint_angles` | Rename to `default_joint_positions`. Values use radians for hinges and meters for slides. Omitted joints default to zero. Keep exact joint names, or group assignments with new joint tags. |
 | `foot_body_name`, `foot_height_name`, `torso_name` | Replace with exact-name body tags such as `#feet`, `#feet_height`, and `#base`. Expand the old substring against `body_names`, inspect the matches, and remove accidental matches. |
 | `upper_*`, `lower_*`, arm, ankle, knee, hip, or waist DOF groups | Delete unused groups. Preserve groups still used by consumers as `joint_tags`. |
 | `symmetry_joint_names`, `flip_sign_joint_names` | Declare one two-joint `#mirror_*` tag per reciprocal pair, or set `JointSymmetryConfig.pairs` to exact joint pairs. Declare sign changes in `#symmetry_flip_sign`, or set `flip_sign` explicitly. Every joint belongs to at most one pair. Sign changes include both or neither member of each pair. |
@@ -74,20 +76,24 @@ complete intended motor tuple.
 Declare every tag referenced by the selected task, action and algorithm presets. Do not assume that tags with
 similar roles identify the same body.
 
+Tags are a new way to group body or joint names.
 Tags are sets. Duplicate members collapse, and declaration order has no meaning.
 Selections follow canonical `body_names` or `dof_names` order.
-Replace ordered `#mirror_left` and `#mirror_right` groups with individual two-joint tags or explicit pairs.
+For each reciprocal `symmetry_joint_names` pair, declare one two-joint mirror tag or one explicit algorithm pair.
+Self-mapped central joints need no mirror pair.
 The symmetry regex defaults to `mirror_.*` and matches full tag names without the leading `#`.
-Keep sign selections outside that pattern, for example in `#symmetry_flip_sign`.
+Move `flip_sign_joint_names` into `#symmetry_flip_sign`, or set the algorithm's `flip_sign` directly.
 
 WBT's `MotionConfig.root_body=None` discovers the loaded articulation's physical root. That body must appear in
 `robot.body_names` and the motion data. An explicit name/tag must identify that same root; `body_name_ref` remains
 the independent tracking reference.
 
-For saved configs without this field, checkpoint migration records the former first body when its identity
-can be recovered from the saved order. This preserves old behavior without guessing a physical root.
-Pre-refactor MuJoCo and unknown simulator dumps require an explicit `root_body`, because their runtime body
-order may differ from the saved list. Check this selection when correcting an old config's root identity.
+For pre-PR Isaac Sim checkpoints, migration records the saved first body as `root_body`.
+That backend's former body order identifies the old motion root.
+Pre-PR MuJoCo and unknown simulator checkpoints require an explicit `root_body`.
+Their runtime body order can differ from the saved list.
+If you correct an old configuration's root identity, make sure that this selection identifies the intended body.
+Current configurations can omit `root_body` to retain runtime discovery.
 
 ## 3. Move task settings to their terms
 
@@ -135,9 +141,9 @@ Overrides are not migrated automatically:
 moves task parameters, moves `robot.control` into the joint action term, and expands substring gain keys with the
 last-match rule, including when every key is a complete DOF name. Unknown robot keys are dropped with a warning.
 
-The loader converts saved ordered symmetry sides to explicit pairs before tag members become sets.
-It preserves the saved relationships without depending on the new set order.
-Historical group tags receive names outside the mirror-discovery pattern.
+The loader converts reciprocal `symmetry_joint_names` entries into two-joint mirror tags.
+It skips self-mapped central joints and drops pairs with names outside the saved `dof_names`.
+It converts `flip_sign_joint_names` into `#symmetry_flip_sign`, without names outside the saved `dof_names`.
 
 These legacy inputs need attention:
 
