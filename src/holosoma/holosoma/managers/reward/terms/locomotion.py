@@ -116,10 +116,10 @@ def penalty_feet_ori(env: PolicyTask) -> torch.Tensor:
         Reward tensor [num_envs]
     """
     feet = _feet_index_list(env)
-    left_quat = env.simulator._rigid_body_rot[:, feet[0]]
+    left_quat = env.simulator.rigid_body_quat_w[:, feet[0]]
     gravity = gravity_vector(env)
     left_gravity = quat_rotate_inverse(left_quat, gravity, w_last=True)
-    right_quat = env.simulator._rigid_body_rot[:, feet[1]]
+    right_quat = env.simulator.rigid_body_quat_w[:, feet[1]]
     right_gravity = quat_rotate_inverse(right_quat, gravity, w_last=True)
     return (
         torch.sum(torch.square(left_gravity[:, :2]), dim=1) ** 0.5
@@ -191,8 +191,8 @@ def penalty_close_feet_xy(env: PolicyTask, close_feet_threshold: float = 0.05) -
         Reward tensor [num_envs]
     """
     feet = _feet_index_list(env)
-    left_foot_xy = env.simulator._rigid_body_pos[:, feet[0], :2]
-    right_foot_xy = env.simulator._rigid_body_pos[:, feet[1], :2]
+    left_foot_xy = env.simulator.rigid_body_pos_w[:, feet[0], :2]
+    right_foot_xy = env.simulator.rigid_body_pos_w[:, feet[1], :2]
 
     # Get base orientation
     base_forward = quat_apply(env.simulator.base_quat, base_forward_vector(env), w_last=True)

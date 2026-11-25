@@ -15,7 +15,7 @@ from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.hooks import HookHandle, HookRegistry, Phase
-from holosoma.simulator.base_simulator.state import SimState, StateTensor
+from holosoma.simulator.base_simulator.state import DERIVED, STATE, SimState, StateTensor
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
@@ -50,7 +50,7 @@ class BaseSimulator:
     ``self.state`` (:class:`~holosoma.simulator.base_simulator.state.SimState`). They are current at
     every read, and written by assigning into them in place; call :meth:`forward_kinematics` when a
     write must be visible before the next physics step. Code that changes the simulation's state
-    through the backend instead must wrap the change in ``with sim.state.mutation():``, so the served
+    through the backend instead must wrap the change in ``with sim.state.mutation(STATE):``, so the served
     tensors are re-read afterwards.
 
     Actor Concept
@@ -135,7 +135,7 @@ class BaseSimulator:
     >>> sim.apply_external_force("obj0", forces=f, torques=t, env_ids=env_ids)
 
     **Robot rigid-body kinematics (cross-backend)**: read per-body world-frame pose/velocity of the
-    robot's link frames via the zero-cost properties :attr:`rigid_body_pos_w`,
+    robot's link frames via the state tensors :attr:`rigid_body_pos_w`,
     :attr:`rigid_body_quat_w` (xyzw), :attr:`rigid_body_lin_vel_w`,
     :attr:`rigid_body_ang_vel_w` — each ``[num_envs, num_bodies, k]`` in holosoma body order.
     Position and linear velocity refer to the same link-frame origin (not the inertial COM). Index
@@ -158,6 +158,9 @@ class BaseSimulator:
     robot_root_states = StateTensor(
         "Robot root state ``[num_envs, 13]``: position, orientation (xyzw), world-frame linear and angular velocity."
     )
+    object_root_states = StateTensor(
+        "Non-robot root states ``[num_envs, num_objects, 13]`` in ``object_state_names`` order; world-frame, xyzw."
+    )
     base_linear_acc = StateTensor("Robot root linear acceleration, ``[num_envs, 3]``.")
     contact_forces = StateTensor("Net contact force per robot body, ``[num_envs, num_bodies, 3]``.")
     contact_recorder: ContactSubstepRecorder
@@ -179,12 +182,13 @@ class BaseSimulator:
 
     debug_viz_enabled: bool = False
 
-    # Robot per-body kinematics, [num_envs, num_bodies, k] in holosoma body order, _rigid_body_rot xyzw.
-    # Read via the rigid_body_*_w properties below.
-    _rigid_body_pos = StateTensor("Robot per-body world positions.")
-    _rigid_body_rot = StateTensor("Robot per-body world orientations (xyzw).")
-    _rigid_body_vel = StateTensor("Robot link-origin world linear velocities.")
-    _rigid_body_ang_vel = StateTensor("Robot per-body world angular velocities.")
+    env_origins: torch.Tensor
+
+    # Robot per-body kinematics, [num_envs, num_bodies, k] in holosoma body order.
+    rigid_body_pos_w = StateTensor("Robot per-body world positions, ``[num_envs, num_bodies, 3]``.")
+    rigid_body_quat_w = StateTensor("Robot per-body world orientations (xyzw), ``[num_envs, num_bodies, 4]``.")
+    rigid_body_lin_vel_w = StateTensor("Robot link-origin world linear velocities, ``[num_envs, num_bodies, 3]``.")
+    rigid_body_ang_vel_w = StateTensor("Robot per-body world angular velocities, ``[num_envs, num_bodies, 3]``.")
 
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         """
@@ -214,16 +218,20 @@ class BaseSimulator:
         self.headless = False
         self.debug_viz_enabled = self.simulator_config.debug_viz
         self.object_registry = ObjectRegistry(device)
+        self._object_state_pairs: tuple[tuple[str, torch.Tensor], ...] = ()
         # External-force accumulator (apply_external_force / flush_external_wrench). Composed
         # helper, like the bridge/gantry below; allocates per-actor buffers lazily on first use.
         self._external_wrench = ExternalWrenchAccumulator(self)
         self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
-        self._kinematic_time = 0.0
+        # The clock time() reports under kinematic playback: one sim dt per step, or as a caller sets it.
+        self.kinematic_time = 0.0
         self.hooks = HookRegistry(base_rates=self._hook_base_rates())
-        # Egress consumers follow this handle, so it runs ahead of them whatever order they
-        # register in. No-ops until a backend registers sensors.
+        # Buffer-filling hooks order between capture and render; egress consumers follow render.
+        self.sensor_capture_hook: HookHandle = self.hooks.add(
+            Phase.FRAME_END, self.render_sensors, name="sensors.capture"
+        )
         self.sensor_render_hook: HookHandle = self.hooks.add(
-            Phase.FRAME_END, self.render_sensors, name="sensors.render"
+            Phase.FRAME_END, self._sensors_rendered, name="sensors.render", after=self.sensor_capture_hook
         )
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
@@ -247,7 +255,10 @@ class BaseSimulator:
         # The registry stays available even without sensors; native resources are created at setup.
         sim_cfg = self.simulator_config.sim
         self.sensor_manager = SensorManager(
-            device, sim_cfg.fps / sim_cfg.control_decimation_steps, num_envs=self.training_config.num_envs
+            device,
+            sim_cfg.fps / sim_cfg.control_decimation_steps,
+            num_envs=self.training_config.num_envs,
+            state=self.state,
         )
 
         # To be overridden by subclasses
@@ -392,6 +403,15 @@ class BaseSimulator:
         for name, object_type, position, pose, velocity in entries:
             self.object_registry.register_object(name, object_type, position, pose, velocity)
         self.object_registry.finalize_registration()
+        # Resolved once, so cache refreshes need no host readback and keep one ordering.
+        self._object_state_pairs = tuple(
+            (name, env_ids) for name, env_ids in self.object_registry.resolved_objects() if name != "robot"
+        )
+
+    @property
+    def object_state_names(self) -> tuple[str, ...]:
+        """Names of all non-robot actors in the cached root-state column order."""
+        return tuple(name for name, _env_ids in self._object_state_pairs)
 
     def _collect_spawned_actors(
         self,
@@ -442,32 +462,6 @@ class BaseSimulator:
             int: Index of the rigid body.
         """
         raise NotImplementedError("The 'find_rigid_body_indice' method must be implemented in subclasses.")
-
-    # ----- Robot rigid-body kinematics (public, cross-backend) -----
-    #
-    # Bare properties, not getters: each returns the served _rigid_body_* tensor, which keeps its
-    # identity across steps. Treat as read-only — mutate state via set_actor_states /
-    # apply_external_force, not through these tensors.
-
-    @property
-    def rigid_body_pos_w(self) -> torch.Tensor:
-        """Robot per-body world positions, ``[num_envs, num_bodies, 3]`` (holosoma body order)."""
-        return self._rigid_body_pos
-
-    @property
-    def rigid_body_quat_w(self) -> torch.Tensor:
-        """Robot per-body world orientations (xyzw), ``[num_envs, num_bodies, 4]``."""
-        return self._rigid_body_rot
-
-    @property
-    def rigid_body_lin_vel_w(self) -> torch.Tensor:
-        """Robot link-origin world linear velocities, ``[num_envs, num_bodies, 3]``."""
-        return self._rigid_body_vel
-
-    @property
-    def rigid_body_ang_vel_w(self) -> torch.Tensor:
-        """Robot per-body world angular velocities, ``[num_envs, num_bodies, 3]``."""
-        return self._rigid_body_ang_vel
 
     # ----- External forces (public, cross-backend) -----
 
@@ -630,7 +624,7 @@ class BaseSimulator:
         """
         self._advance_substep()
         if self.kinematic_playback:
-            self._kinematic_time += 1.0 / self.simulator_config.sim.fps
+            self.kinematic_time += 1.0 / self.simulator_config.sim.fps
 
     def _advance_substep(self) -> None:
         """Advance the simulation by one substep: one integration step, or one kinematics pass.
@@ -651,7 +645,7 @@ class BaseSimulator:
 
         In-place writes otherwise land at the next physics step. No dynamics, rendering or time advance.
         """
-        with self.state.mutation():
+        with self.state.mutation(DERIVED):
             self._forward_kinematics()
 
     def _forward_kinematics(self) -> None:
@@ -675,6 +669,20 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'render' method must be implemented in subclasses.")
 
+    def native_env_origins(self) -> torch.Tensor | None:
+        """Origins this backend always places environments at, or ``None`` if it honours the origins it is given."""
+        return None
+
+    def match_env_origins(self, origins: torch.Tensor) -> None:
+        """Place render-only environments at ``origins`` ``[num_envs, 3]``, where a source simulated them.
+
+        Backends that honour the origins they are built with keep them; check :attr:`env_origins` afterwards.
+        """
+
+    def render_applied_state(self) -> None:
+        """Flush applied state and bring body poses and renderers up to date, without integrating physics."""
+        self.forward_kinematics()
+
     def time(self) -> float:
         """Get current simulation time in seconds.
 
@@ -683,7 +691,7 @@ class BaseSimulator:
         to allow policies (especially WBT policies) to advance motion timesteps
         in sync with the simulation.
 
-        Under ``sim.kinematic_playback`` this is the kinematic clock (one sim dt per step);
+        Under ``sim.kinematic_playback`` this is :attr:`kinematic_time` (one sim dt per step);
         the engine's own clock does not advance without integration.
 
         Returns
@@ -696,7 +704,7 @@ class BaseSimulator:
         SimulatorBridge.transport_step : Publishes this time via ClockPub
         """
         if self.kinematic_playback:
-            return self._kinematic_time
+            return self.kinematic_time
         return self._physics_time()
 
     def _physics_time(self) -> float:
@@ -829,6 +837,7 @@ class BaseSimulator:
         # Mark the stage before construction. A failed plugin install is terminal for this
         # simulator; the outer lifecycle owner will emit CLOSE for callbacks already registered.
         self._plugins_installed = True
+        self._register_mount_poses()
         for key, cfg in self.plugin_config.items():
             # Scoped so the plugin's published keys belong to its slot, for HookRef to resolve.
             with self.hooks.installing(key):
@@ -836,6 +845,39 @@ class BaseSimulator:
         if self.installed_plugins:
             logger.info(f"Installed plugins: {sorted(self.installed_plugins)}")
         self.hooks.validate()
+
+    def _register_mount_poses(self) -> None:
+        """Serve each sensor's mount offsets as writable state ``mount_pose/<sensor>``, ``[E, 7]`` XYZ + XYZW."""
+        manager, state = self.sensor_manager, self.state
+
+        def register(record: Any) -> None:
+            def write(rows: torch.Tensor, poses: torch.Tensor) -> None:
+                # Unchanged rows skip the backend writer, which is costly on some renderers.
+                rows = rows[(poses[rows] != record.mount_poses[rows]).any(-1)]
+                if not rows.numel():
+                    return
+                try:
+                    manager.set_mount_pose(record.name, poses[rows], rows, notify=False)
+                finally:
+                    # The buffer holds what the sensor stores: normalised, or unchanged after a rejected write.
+                    # Only differing rows are written, so a buffer served from elsewhere stays untouched.
+                    stored = record.mount_poses[rows]
+                    differs = (poses[rows] != stored).any(-1)
+                    if differs.any():
+                        poses[rows[differs]] = stored[differs]
+
+            state.register(
+                f"mount_pose/{record.name}",
+                lambda: record.mount_poses,
+                write=write,
+                stale_with=(STATE,),
+                stales=(),
+            )
+
+        for record in [*manager.cameras, *manager.lidars]:
+            if record.mount_poses is not None:
+                register(record)
+        manager.on_mount_pose_set = lambda name: state.mark_stale(f"mount_pose/{name}")
 
     def close(self) -> None:
         """Emit the one-pass simulator teardown phase.
@@ -1011,6 +1053,16 @@ class BaseSimulator:
         cheap cached reads through the camera/LiDAR accessors."""
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
 
+    def _sensors_rendered(self) -> None:
+        """Check that every due remote camera has been given a frame."""
+        due = self.sensor_manager.last_due
+        if unserved := {
+            record.name: record.config.remote
+            for record in self.sensor_manager.cameras
+            if record.config.remote and record.name in due and not record.written
+        }:
+            raise RuntimeError(f"Remote cameras are due but their plugins did not fill them: {unserved}")
+
     def rerender_sensors(self, env_ids: torch.Tensor) -> None:
         """Re-render ``env_ids`` for sensors that support partial rendering; other sensors keep their frame.
 
@@ -1049,11 +1101,11 @@ class BaseSimulator:
             Absolute environment indices into ``[0, num_envs)`` to return (every camera renders
             all envs, so these index the full buffer); ``None`` returns all environments.
         device : torch.device | str | None, default=None
-            Where to return the tensor. ``None`` keeps the sim device (no copy). Any other device
-            (e.g. ``"cpu"``) returns a cached cross-device copy of the FULL buffer: the first caller
-            per ``(data_type, device)`` this render pays the transfer, later callers reuse it (so
-            several egress consumers reading the same camera on host cost one device->host sync, not
-            one each). The returned tensor is **read-only** — do not mutate it in place; it is shared.
+            Where to return the tensor. ``None`` returns the camera's output itself (SimState
+            ``camera/<name>/<data_type>``), rewritten in place every frame; clone a frame that must
+            outlive the step. A device (even the sim device) returns a snapshot of the current frame
+            there, cached per ``(data_type, device)`` until the next frame, so several consumers share
+            one transfer and a snapshot never changes. Either is **read-only**.
 
         Raises
         ------
@@ -1064,10 +1116,10 @@ class BaseSimulator:
             created = self.sensor_manager.camera_names
             raise NotImplementedError(f"{type(self).__name__} has no camera '{name}'. Created cameras: {created}.")
         record = self.sensor_manager.get(name)
-        if data_type not in record.buffers:
+        if data_type not in record.rendered:
             raise RuntimeError(
                 f"Camera '{name}' has no '{data_type}' frame. Ensure '{data_type}' is in the camera's "
-                f"data_types and render_sensors() has run. Buffered: {sorted(record.buffers)}."
+                f"data_types and render_sensors() has run. Rendered: {sorted(record.rendered)}."
             )
         buf = record.buffer_on(data_type, device)
         return buf if env_ids is None else buf[env_ids]
@@ -1088,16 +1140,18 @@ class BaseSimulator:
         ``points`` is ``float32 [N, R, 3]`` in the sensor optical frame (``-Z`` forward,
         ``+Y`` up). ``ranges`` is ``float32 [N, R]`` in meters. No-return values follow the
         LiDAR's ``range_clipping_behavior``: the default ``"none"`` uses XYZ NaNs and ``+inf``;
-        ``"max"`` uses the ray endpoint at ``far``; and ``"zero"`` uses the sensor origin.
+        ``"max"`` uses the ray endpoint at ``far``; and ``"zero"`` uses the sensor origin. ``device``
+        behaves as in :meth:`get_camera_data`: ``None`` returns the output itself (``lidar/<name>/<output>``),
+        a device returns a per-frame snapshot.
         """
         if not self.sensor_manager.has_lidar(name):
             created = self.sensor_manager.lidar_names
             raise NotImplementedError(f"{type(self).__name__} has no LiDAR '{name}'. Created LiDARs: {created}.")
         record = self.sensor_manager.get_lidar(name)
-        if data_type not in record.buffers:
+        if data_type not in record.rendered:
             raise RuntimeError(
                 f"LiDAR '{name}' has no '{data_type}' output. Ensure render_sensors() has run. "
-                f"Buffered: {sorted(record.buffers)}."
+                f"Rendered: {sorted(record.rendered)}."
             )
         buf = record.buffer_on(data_type, device)
         return buf if env_ids is None else buf[env_ids]
@@ -1486,7 +1540,7 @@ class BaseSimulator:
         """Deprecated: state tensors are current at every read."""
         _warn_deprecated("refresh_sim_tensors", "drop the call; call forward_kinematics() to apply writes now")
         self.state.flush_writes()
-        self.state.mark_stale()
+        self.state.mark_stale((STATE, DERIVED))
 
     def _deprecated_env_ids(self, env_ids: torch.Tensor | None) -> torch.Tensor:
         if env_ids is None:

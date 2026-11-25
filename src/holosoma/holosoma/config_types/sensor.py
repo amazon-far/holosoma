@@ -604,6 +604,11 @@ class CameraSensorConfig:
     mujoco: MujocoCameraConfig = field(default_factory=MujocoCameraConfig)
     """MuJoCo camera settings. Unset fields retain native defaults."""
 
+    remote: str | None = None
+    """Plugin slot (the ``<key>`` in ``plugin.<key>:<preset>``) that supplies this camera's images instead of
+    rendering it locally, such as a ``cosim-render`` plugin. The backend creates no renderer for a remote camera,
+    and it has no runtime mount-pose writer."""
+
     @model_validator(mode="after")
     def validate_camera(self) -> CameraSensorConfig:
         """Validate resolution, clipping range, modalities, cadence, and mount target."""

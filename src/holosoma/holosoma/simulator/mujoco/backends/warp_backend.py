@@ -32,6 +32,8 @@ to ClassicBackend (CPU-only simulation).
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 import mujoco
@@ -231,6 +233,7 @@ class WarpBackend(IMujocoBackend):
         # Initialize Warp runtime
         wp.init()
         self.mjw_device = wp.get_device(device)
+        self.fk_graph: Graph | None = None
         if not self.mjw_device.is_cuda:
             raise ValueError(f"device={device!r}: WarpBackend requires a CUDA device")
 
@@ -291,7 +294,6 @@ class WarpBackend(IMujocoBackend):
         self._cam_ids: dict[str, int] = {}
         self._render_context: Any = None
         self._render_rgb_out: dict[int, Any] = {}
-        self._render_depth_out: dict[int, Any] = {}
         self._render_graph: Graph | None = None
         self._torch_render_stream: torch.cuda.Stream | None = None
 
@@ -375,7 +377,7 @@ class WarpBackend(IMujocoBackend):
             # Captured after the model-field expansion above, for the same reason as the step graph.
             with wp.ScopedCapture() as capture:
                 self._launch_forward_kinematics()
-            self.fk_graph: Graph | None = capture.graph
+            self.fk_graph = capture.graph
         logger.info("CUDA graph captured successfully")
 
         logger.info(
@@ -427,12 +429,12 @@ class WarpBackend(IMujocoBackend):
         ``subtree_com``/``cvel`` the body-velocity read uses, and the renderer's geom/camera poses)
         rather than full ``mjw.forward`` —
         forward's solver/collision stages allocate per call and are useless without a step.
-        Launched as a CUDA graph captured next to the step graph, into the same mjw_data;
-        ``mjw_data.time`` is untouched (only integrators advance it).
+        Launched as a CUDA graph captured next to the step graph, into the same mjw_data, and ordered with
+        Torch's current stream; ``mjw_data.time`` is untouched (only integrators advance it).
         """
         import warp as wp
 
-        with wp.ScopedDevice(self.mjw_device):
+        with self._torch_ordered(), wp.ScopedDevice(self.mjw_device):
             if self.fk_graph is None:
                 self._launch_forward_kinematics()
             else:
@@ -444,6 +446,17 @@ class WarpBackend(IMujocoBackend):
         mjw.com_pos(self.mjw_model, self.mjw_data)
         mjw.camlight(self.mjw_model, self.mjw_data)
         mjw.com_vel(self.mjw_model, self.mjw_data)
+
+    @contextmanager
+    def _torch_ordered(self) -> Iterator[None]:
+        """Order native Warp work after Torch writes and before Torch readers."""
+        consumer = torch.cuda.current_stream(self.device)
+        physics = torch.cuda.ExternalStream(wp.get_stream(self.mjw_device).cuda_stream, device=self.device)
+        physics.wait_stream(consumer)
+        try:
+            yield
+        finally:
+            consumer.wait_stream(physics)
 
     def step(self) -> None:
         """Advance batched simulation by one timestep using CUDA graph.
@@ -458,7 +471,7 @@ class WarpBackend(IMujocoBackend):
         """
         import warp as wp
 
-        with wp.ScopedDevice(self.mjw_device):
+        with self._torch_ordered(), wp.ScopedDevice(self.mjw_device):
             wp.capture_launch(self.step_graph)
             # No wp.synchronize() - let GPU work in parallel with CPU
         self._physics_time += float(self.model.opt.timestep)
@@ -607,13 +620,6 @@ class WarpBackend(IMujocoBackend):
                 for cam in cameras
                 if "rgb" in cam.config.data_types
             }
-            self._render_depth_out = {
-                self._cam_ids[cam.name]: wp.zeros(
-                    (self.num_envs, cam.config.height, cam.config.width), dtype=wp.float32, device=self.mjw_device
-                )
-                for cam in cameras
-                if "depth" in cam.config.data_types
-            }
             self._depth_far = max(c.config.far for c in cameras)
             self._torch_render_stream = torch.cuda.ExternalStream(wp.get_stream(self.mjw_device).cuda_stream)
         self._render_graph = None
@@ -631,7 +637,6 @@ class WarpBackend(IMujocoBackend):
         self.fk_graph = None
         self._render_graph = None
         self._render_rgb_out.clear()
-        self._render_depth_out.clear()
         self._render_context = None
         self._lidar_render_context = None
         self._lidar_render_context_groups = None
@@ -680,23 +685,25 @@ class WarpBackend(IMujocoBackend):
 
             # The float render buffers are reused. Convert them on Warp's stream so the next render
             # cannot overwrite one while Torch is reading it, then hand the outputs to the caller's
-            # Torch stream with a GPU-side wait rather than synchronizing the entire device.
+            # Torch stream with a GPU-side wait rather than synchronizing the entire device. The
+            # camera outputs are rewritten in place, so first wait for readers of the previous frame.
+            self._torch_render_stream.wait_stream(consumer_stream)
             with torch.cuda.stream(self._torch_render_stream):
                 for cam in cameras:
                     cam_id = self._cam_ids[cam.name]
                     if "rgb" in cam.config.data_types:
                         mjw.get_rgb(self._render_context, cam_id, self._render_rgb_out[cam_id])
                         rgb_f = wp.to_torch(self._render_rgb_out[cam_id])  # [N,H,W,3] float32 in [0,1]
-                        cam.set_buffer("rgb", (rgb_f.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8))
+                        with cam.writing("rgb") as rgb:
+                            rgb.copy_(rgb_f.clamp_(0.0, 1.0).mul_(255.0).round_())
                     if "depth" in cam.config.data_types:
                         # mjw.get_depth writes clamp(val/depth_scale, 0, 1): a normalized [0,1] image,
                         # NOT meters. Pass depth_scale=depth_far so [0,far]->[0,1], then multiply back by
                         # far to recover meters across the full range. No-hit comes back 0 ->
                         # remap to +inf (the no-hit sentinel).
-                        mjw.get_depth(self._render_context, cam_id, self._depth_far, self._render_depth_out[cam_id])
-                        dep = wp.to_torch(self._render_depth_out[cam_id]) * self._depth_far  # [N,H,W] meters
-                        dep = torch.where(dep <= 0, float("inf"), dep)
-                        cam.set_buffer("depth", dep.unsqueeze(-1))  # [N,H,W,1]
+                        with cam.writing("depth") as depth:  # [N,H,W,1]
+                            mjw.get_depth(self._render_context, cam_id, self._depth_far, wp.from_torch(depth[..., 0]))
+                            depth.mul_(self._depth_far).masked_fill_(depth <= 0, float("inf"))
         consumer_stream.wait_stream(self._torch_render_stream)
 
     def get_ctrl_tensor(self) -> torch.Tensor:
