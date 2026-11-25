@@ -51,7 +51,12 @@ def test_missing_lidar_output_raises_runtime_error() -> None:
 def test_returns_latest_output_and_env_subset() -> None:
     points = torch.arange(3 * 2 * 3, dtype=torch.float32).reshape(3, 2, 3)
     ranges = torch.arange(3 * 2, dtype=torch.float32).reshape(3, 2)
-    record = LidarRecord(name="scan", config=None, buffers={"points": points, "ranges": ranges})  # type: ignore[arg-type]
+    record = LidarRecord(
+        name="scan",
+        config=None,  # type: ignore[arg-type]
+        buffers={"points": points, "ranges": ranges},
+        rendered={"points", "ranges"},
+    )
     sim = _sim(_Manager({"scan": record}))
 
     assert sim.get_lidar_data("scan") is points

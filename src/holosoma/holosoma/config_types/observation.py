@@ -32,6 +32,11 @@ class ObsTermCfg:
     """Whether ``ObservationManagerCfg.clip_observations`` applies to this term. Set ``False`` for image
     terms, whose values (e.g. uint8 RGB, the depth ``+inf`` no-hit sentinel) must not be clipped."""
 
+    copy: bool = True
+    """Copy the term's output when no scale, clip or noise already did. ``False`` returns what the term
+    reads, e.g. a camera's output buffer, which is rewritten in place every frame; not allowed in a
+    group with ``history_length > 1``."""
+
 
 @dataclass(frozen=True)
 class ObsGroupCfg:

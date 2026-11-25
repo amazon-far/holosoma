@@ -123,6 +123,8 @@ def test_camera_depth_uses_the_shared_range_clipping_policy(
         CameraSensorConfig(
             mount=_MOUNT,
             data_types=["depth"],
+            width=6,
+            height=1,
             near=0.2,
             far=4.0,
             depth_clipping_behavior=behavior,
@@ -216,3 +218,13 @@ def test_sensor_names_must_be_unique_across_types() -> None:
     sm.register_camera("sensor", _cam())
     with pytest.raises(ValueError, match="already registered"):
         sm.register_lidar("sensor", LidarSensorConfig(mount=_MOUNT))
+
+
+def test_setting_a_stored_mount_pose_again_changes_no_bits() -> None:
+    manager = SensorManager("cpu", 50.0, num_envs=256)
+    manager.register_camera("cam", _cam()).write_mount_pose = lambda _ids, _poses: None
+    quaternions = torch.nn.functional.normalize(torch.randn(256, 4, generator=torch.Generator().manual_seed(0)), dim=-1)
+    manager.set_mount_pose("cam", torch.cat([torch.zeros(256, 3), quaternions], dim=-1))
+    stored = manager.get_mount_pose("cam")
+    manager.set_mount_pose("cam", stored)
+    assert torch.equal(manager.get_mount_pose("cam"), stored)

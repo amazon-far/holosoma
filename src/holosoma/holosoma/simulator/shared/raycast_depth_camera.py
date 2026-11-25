@@ -166,12 +166,10 @@ class RayCastDepthCamera:
         self._to_pinhole = torch.tensor(_OPTICAL_TO_PINHOLE_XYZW, dtype=torch.float32, device=dev).repeat(num_envs, 1)
         self._cam_pos = torch.zeros(num_envs, 3, device=dev)
         self._cam_quat = torch.zeros(num_envs, 4, device=dev)
-        self._image = torch.zeros(num_envs, cfg.height, cfg.width, device=dev)
         self._all_envs = torch.arange(num_envs, dtype=torch.int32, device=dev)
         # Warp views sharing the buffers' memory; the buffers are only ever written in place.
         self._wp_cam_pos = wp.from_torch(self._cam_pos, dtype=wp.vec3)
         self._wp_cam_quat = wp.from_torch(self._cam_quat, dtype=wp.quat)
-        self._wp_image = wp.from_torch(self._image, dtype=wp.float32)
         self._wp_all_envs = wp.from_torch(self._all_envs, dtype=wp.int32)
         self._ready = True
 
@@ -193,17 +191,23 @@ class RayCastDepthCamera:
         render covers every env."""
         if not self._ready:
             raise RuntimeError("RayCastDepthCamera must be initialized after scene loading and before rendering.")
-        if "depth" not in record.buffers:
+        if "depth" not in record.rendered:
             env_ids = None
         ids = self._all_envs if env_ids is None else env_ids.to(device=self.device, dtype=torch.int32).contiguous()
         if ids.numel() == 0:
             return
         self._update_poses(record)
         wp_ids = self._wp_all_envs if env_ids is None else wp.from_torch(ids, dtype=wp.int32)
-        cfg = self.config
         # On torch's current stream, so the launch is ordered after the pose updates above and
-        # before the reads below without a host sync, whichever stream torch is using.
+        # before the depth clip that follows without a host sync, whichever stream torch is using.
         stream = wp.stream_from_torch(self.device) if self._wp_device.is_cuda else None
+        long_ids = None if env_ids is None else ids.long()
+        with record.writing("depth", long_ids) as depth:
+            self._launch(depth, ids, wp_ids, stream)
+
+    def _launch(self, depth: torch.Tensor, ids: torch.Tensor, wp_ids: Any, stream: Any) -> None:
+        """Ray-cast the ``ids`` rows of the ``[N, H, W, 1]`` depth output in place."""
+        cfg = self.config
         wp.launch(
             _render_depth_kernel,
             dim=(ids.numel(), cfg.height, cfg.width),
@@ -218,13 +222,8 @@ class RayCastDepthCamera:
                 self._k_inv,
                 float(cfg.near),
                 float(cfg.far),
-                self._wp_image,
+                wp.from_torch(depth[..., 0], dtype=wp.float32),
             ],
             device=self._wp_device,
             stream=stream,
         )
-        if env_ids is None:
-            record.set_buffer("depth", self._image.unsqueeze(-1))
-        else:
-            long_ids = ids.long()
-            record.set_buffer_rows("depth", long_ids, self._image[long_ids].unsqueeze(-1))
