@@ -57,7 +57,7 @@ from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera, R
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
-    from holosoma.simulator.shared.sensor_manager import CameraRecord
+    from holosoma.simulator.shared.sensor_manager import CameraRecord, LidarRecord
 
 
 def build_cameras(sim: IsaacSim) -> None:
@@ -700,9 +700,9 @@ def _app_updates_without_physics() -> Iterator[None]:
         settings.set_bool("/app/player/playSimulations", previous)
 
 
-def render_lidars(sim: IsaacSim, env_ids: torch.Tensor | None = None, *, all_sensors: bool = False) -> None:
-    """Scan the due LiDARs, or every LiDAR with ``all_sensors``, writing only the ``env_ids`` rows when given."""
-    for lidar_record in sim.sensor_manager.collect_lidars_due(all_sensors):
+def render_lidars(sim: IsaacSim, due: list[LidarRecord], env_ids: torch.Tensor | None = None) -> None:
+    """Scan the ``due`` LiDARs, writing only the ``env_ids`` rows when given."""
+    for lidar_record in due:
         pattern = lidar_record.pattern_at(sim.time())
         sensor = sim.scene.sensors.get(lidar_record.name)
         if not isinstance(sensor, MutableMultiMeshRayCaster):
@@ -759,9 +759,11 @@ def render_sensors(sim: IsaacSim, env_ids: torch.Tensor | None = None, num_rende
     ``num_renders=0`` or an empty ``env_ids`` renders nothing."""
     if num_renders == 0 or (env_ids is not None and env_ids.numel() == 0):
         return
-    all_sensors = num_renders is not None
-    due = sim.sensor_manager.collect_due(all_sensors)
-    tiled = [record for record in due if record.name in sim.tiled_cameras]
+    manager = sim.sensor_manager
+    # A forced render takes every sensor; only the per-step render advances update cadence.
+    cameras = manager.cameras if num_renders is not None else manager.collect_due()
+    lidars = manager.lidars if num_renders is not None else manager.collect_lidars_due()
+    tiled = [record for record in cameras if record.name in sim.tiled_cameras]
     if num_renders is None:
         recording = sim.video_recorder is not None and sim.video_recorder.is_recording
         if tiled or recording:
@@ -777,5 +779,5 @@ def render_sensors(sim: IsaacSim, env_ids: torch.Tensor | None = None, num_rende
         for record in tiled:
             outdated = sim.tiled_cameras[record.name]._is_outdated
             outdated[slice(None) if env_ids is None else env_ids.to(outdated.device)] = True
-    render_cameras(sim, due, env_ids)
-    render_lidars(sim, env_ids, all_sensors=all_sensors)
+    render_cameras(sim, cameras, env_ids)
+    render_lidars(sim, lidars, env_ids)

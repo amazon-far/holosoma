@@ -277,20 +277,13 @@ class SensorManager:
                 due.append(record)
         return due
 
-    def collect_due(self, all_sensors: bool = False) -> list[CameraRecord]:
-        """Cameras due this control step, advancing their cadence.
-
-        With ``all_sensors``, every camera instead, leaving cadence and :attr:`last_due` alone."""
-        if all_sensors:
-            return self.cameras
+    def collect_due(self) -> list[CameraRecord]:
+        """Advance camera cadence (compatibility name retained for camera backends)."""
         due = self._collect_due(self.cameras)
         self._last_camera_due = {record.name for record in due}
         return due
 
-    def collect_lidars_due(self, all_sensors: bool = False) -> list[LidarRecord]:
-        """LiDARs due this control step, or every LiDAR with ``all_sensors``; see :meth:`collect_due`."""
-        if all_sensors:
-            return self.lidars
+    def collect_lidars_due(self) -> list[LidarRecord]:
         due = self._collect_due(self.lidars)
         self._last_lidar_due = {record.name for record in due}
         return due

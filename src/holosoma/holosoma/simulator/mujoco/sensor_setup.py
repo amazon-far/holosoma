@@ -122,13 +122,6 @@ def initialize_camera_mounts(sim: MuJoCo) -> None:
         sim.sensor_manager.set_mount_pose(camera.name, sim.sensor_manager.get_mount_pose(camera.name))
 
 
-def render_cameras(sim: MuJoCo, env_ids: torch.Tensor | None = None, *, all_sensors: bool = False) -> None:
-    """Render due cameras, or every camera with ``all_sensors``, writing only the ``env_ids`` rows when given."""
-    due = sim.sensor_manager.collect_due(all_sensors)
-    if due:
-        sim.backend.render_cameras(due, env_ids)
-
-
 def register_lidars(sim: MuJoCo, manager: SensorManager) -> None:
     """Register configured LiDARs and resolve their compiled query ids."""
     assert sim.root_model is not None
@@ -377,9 +370,8 @@ def _render_warp(
     finalize_lidar_returns(sensor_record, directions_local, distances, geom_ids=geom_ids, env_ids=env_ids)
 
 
-def render_lidars(sim: MuJoCo, env_ids: torch.Tensor | None = None, *, all_sensors: bool = False) -> None:
-    """Scan the due LiDARs, or every LiDAR with ``all_sensors``, writing only the ``env_ids`` rows when given."""
-    due = sim.sensor_manager.collect_lidars_due(all_sensors)
+def render_lidars(sim: MuJoCo, due: list[LidarRecord], env_ids: torch.Tensor | None = None) -> None:
+    """Scan the ``due`` LiDARs, writing only the ``env_ids`` rows when given."""
     if isinstance(sim.backend, WarpBackend):
         if not due:
             return
@@ -421,6 +413,10 @@ def render_sensors(sim: MuJoCo, env_ids: torch.Tensor | None = None, num_renders
     if isinstance(sim.backend, WarpBackend):
         # Geometry may have moved since the last BVH refit (a physics step, or a state write).
         sim.backend.begin_sensor_render()
-    all_sensors = num_renders is not None
-    render_cameras(sim, env_ids, all_sensors=all_sensors)
-    render_lidars(sim, env_ids, all_sensors=all_sensors)
+    manager = sim.sensor_manager
+    # A forced render takes every sensor; only the per-step render advances update cadence.
+    cameras = manager.cameras if num_renders is not None else manager.collect_due()
+    lidars = manager.lidars if num_renders is not None else manager.collect_lidars_due()
+    if cameras:
+        sim.backend.render_cameras(cameras, env_ids)
+    render_lidars(sim, lidars, env_ids)
