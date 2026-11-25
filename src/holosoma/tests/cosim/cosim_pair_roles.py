@@ -118,7 +118,7 @@ def head(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bool
     saved: dict[str, Any] = {}
     with config(num_envs, loopback, endpoint=endpoint).create_task() as task:
         sim = task.simulator
-        cosim = sim.installed_plugins["cosim"]
+        cosim = task.installed_plugins["cosim"]
         sim.hooks.add(Phase.FRAME_END, lambda: capture(sim, saved), after=sim.sensor_render_hook)
         record_episodes(sim, saved)
         task.reset_envs_idx()
