@@ -40,7 +40,7 @@ class _FakeSimulator:
         )
         self.sensor_config = {"lidar": lidar}
         self.training_config = _TrainingConfig()
-        self.sensor_manager = SensorManager("cpu", control_hz=50.0)
+        self.sensor_manager = SensorManager("cpu", control_hz=50.0, physics_hz=50.0)
         self.sensor_manager.register_lidar("lidar", lidar)
         if include_rear_lidar:
             rear_lidar = LidarSensorConfig(

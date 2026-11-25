@@ -25,7 +25,7 @@ MOUNT_POSITION = [0.1, 0.0, 0.4]
 
 
 def _env(orientation: list[float] | None = None, *, writer: bool = True) -> tuple[Any, SensorManager]:
-    manager = SensorManager(device="cpu", control_hz=50.0, num_envs=NUM_ENVS)
+    manager = SensorManager(device="cpu", control_hz=50.0, physics_hz=50.0, num_envs=NUM_ENVS)
     mount = SensorMountConfig(
         target_kind="robot_link", target="torso_link", position=MOUNT_POSITION, orientation=orientation or [1, 0, 0, 0]
     )

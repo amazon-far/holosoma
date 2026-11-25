@@ -230,7 +230,7 @@ def test_clip_end_clears_only_teleported_contacts_and_observation_history(tmp_pa
     term, simulator = _command(_robot(), _motion(path, start_at_timestep_zero_prob=1.0))
     env = term._env
     env.log_dict = {}
-    simulator.sensor_manager = SensorManager("cpu", 50, num_envs=2)
+    simulator.sensor_manager = SensorManager("cpu", 50, physics_hz=50, num_envs=2)
     sample = torch.tensor([1.0, 2.0]).view(2, 1, 1, 1).expand(-1, 1, 1, 3)
     record = simulator.sensor_manager.register_contact("ground", ContactSensorConfig(), lambda: sample)
     simulator.sensor_manager.contact_step_completed()

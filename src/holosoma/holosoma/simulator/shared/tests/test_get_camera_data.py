@@ -42,7 +42,7 @@ def _sim(manager: Any) -> BaseSimulator:
 
 
 def test_empty_sensor_manager_raises_not_implemented() -> None:
-    sim = _sim(SensorManager("cpu", 50.0))
+    sim = _sim(SensorManager("cpu", 50.0, physics_hz=50.0))
     with pytest.raises(NotImplementedError, match="no camera 'head'"):
         sim.get_camera_data("head", "rgb")
 

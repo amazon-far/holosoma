@@ -18,7 +18,7 @@ pytestmark = pytest.mark.no_sim
 
 
 def test_contact_outputs_keep_grouped_opposing_forces() -> None:
-    manager = SensorManager("cpu", 50.0, num_envs=2)
+    manager = SensorManager("cpu", 50.0, physics_hz=50.0, num_envs=2)
     config = ContactSensorConfig(
         counterparts=[ContactTargetConfig(target_kind="actor", target="a"), ContactTargetConfig(target_kind="terrain")]
     )
@@ -39,7 +39,7 @@ def test_contact_outputs_keep_grouped_opposing_forces() -> None:
 
 
 def test_public_outputs_convert_backend_forces_to_float32() -> None:
-    manager = SensorManager("cpu", 50.0, num_envs=3)
+    manager = SensorManager("cpu", 50.0, physics_hz=50.0, num_envs=3)
     config = ContactSensorConfig(
         counterparts=[ContactTargetConfig(target_kind="actor", target="a"), ContactTargetConfig(target_kind="terrain")]
     )
@@ -64,7 +64,7 @@ def test_public_outputs_convert_backend_forces_to_float32() -> None:
 
 
 def test_multiple_contact_sensors_publish_at_independent_rates() -> None:
-    manager = SensorManager("cpu", 50.0)
+    manager = SensorManager("cpu", 50.0, physics_hz=50.0)
     sample = torch.ones(1, 1, 1, 3)
     fast = manager.register_contact("fast", ContactSensorConfig(), lambda: sample)
     slow = manager.register_contact("slow", ContactSensorConfig(update_decimation="25Hz"), lambda: sample)
@@ -89,7 +89,7 @@ def test_multiple_contact_sensors_publish_at_independent_rates() -> None:
 
 
 def test_reset_drops_stale_rows_and_device_copies_until_a_new_physics_sample() -> None:
-    manager = SensorManager("cpu", 50.0, num_envs=3)
+    manager = SensorManager("cpu", 50.0, physics_hz=50.0, num_envs=3)
     record = manager.register_contact("contacts", ContactSensorConfig(), lambda: torch.ones(3, 1, 1, 3))
     manager.contact_step_completed()
     old_frame = record.buffers["forces"]
@@ -108,7 +108,7 @@ def test_reset_drops_stale_rows_and_device_copies_until_a_new_physics_sample() -
 
 
 def test_contact_and_camera_names_share_one_namespace() -> None:
-    manager = SensorManager("cpu", 50.0)
+    manager = SensorManager("cpu", 50.0, physics_hz=50.0)
     manager.register_contact("same", ContactSensorConfig(), lambda: torch.zeros(1, 1, 1, 3))
     with pytest.raises(ValueError, match="already registered"):
         manager.register_camera("same", CameraSensorConfig(mount=SensorMountConfig(target_kind="world")))
@@ -117,7 +117,7 @@ def test_contact_and_camera_names_share_one_namespace() -> None:
 
 
 def test_simulator_accessor_selects_environments_and_rejects_bad_names() -> None:
-    manager = SensorManager("cpu", 50.0, num_envs=3)
+    manager = SensorManager("cpu", 50.0, physics_hz=50.0, num_envs=3)
     manager.register_contact(
         "contacts", ContactSensorConfig(), lambda: torch.arange(9, dtype=torch.float32).reshape(3, 1, 1, 3)
     )
@@ -153,7 +153,7 @@ def test_simulator_reserves_only_the_existing_robot_contact_name(name: str) -> N
 
 
 def test_bad_native_output_shape_fails_at_publication() -> None:
-    manager = SensorManager("cpu", 50.0)
+    manager = SensorManager("cpu", 50.0, physics_hz=50.0)
     manager.register_contact("bad", ContactSensorConfig(), lambda: torch.ones(1, 2, 3))
     with pytest.raises(RuntimeError, match="expected forces"):
         manager.contact_step_completed()
@@ -161,7 +161,7 @@ def test_bad_native_output_shape_fails_at_publication() -> None:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires a CUDA device")
 def test_publication_moves_cpu_backend_results_to_the_simulator_device() -> None:
-    manager = SensorManager("cuda:0", 50.0)
+    manager = SensorManager("cuda:0", 50.0, physics_hz=50.0)
     record = manager.register_contact("cpu_result", ContactSensorConfig(), lambda: torch.ones(1, 1, 1, 3))
     manager.contact_step_completed()
     for output in record.buffers.values():

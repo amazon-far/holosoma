@@ -37,7 +37,7 @@ def _sim(manager: Any) -> BaseSimulator:
 
 
 def test_missing_lidar_raises_not_implemented() -> None:
-    for manager in (SensorManager("cpu", 50.0), _Manager({})):
+    for manager in (SensorManager("cpu", 50.0, physics_hz=50.0), _Manager({})):
         with pytest.raises(NotImplementedError, match="no LiDAR 'scan'"):
             _sim(manager).get_lidar_data("scan")
 

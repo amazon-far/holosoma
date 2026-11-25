@@ -152,12 +152,12 @@ class SensorManager:
         device: str,
         control_hz: float,
         *,
+        physics_hz: float,
         num_envs: int = 1,
-        physics_hz: float | None = None,
     ) -> None:
         self.device = device
         self.control_hz = control_hz
-        self.physics_hz = physics_hz if physics_hz is not None else control_hz
+        self.physics_hz = physics_hz
         self.num_envs = num_envs
         self._cameras: dict[str, CameraRecord] = {}
         self._lidars: dict[str, LidarRecord] = {}

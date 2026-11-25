@@ -788,7 +788,7 @@ def test_registered_robot_filter_excludes_reserved_groups_and_none_preserves_aut
         body_filter=LidarBodyFilterConfig(target_kind="none"),
         mujoco=MujocoLidarConfig(geom_groups=[False, True, False, True, False, False]),
     )
-    manager = SensorManager("cpu", control_hz=10.0)
+    manager = SensorManager("cpu", control_hz=10.0, physics_hz=1.0 / model.opt.timestep)
     sim = SimpleNamespace(
         root_model=model,
         sensor_config={"scan": lidar, "unfiltered": unfiltered},
@@ -860,7 +860,7 @@ def test_registered_explicit_body_filter_renders_target_behind_shell() -> None:
         root_body="torso_link",
         body_names=["torso_link", "head_link"],
     )
-    manager = SensorManager("cpu", control_hz=10.0)
+    manager = SensorManager("cpu", control_hz=10.0, physics_hz=1.0 / model.opt.timestep)
     sim = SimpleNamespace(
         root_model=model,
         sensor_config={"scan": lidar},
@@ -922,7 +922,7 @@ def test_mjwarp_body_filter_recovers_return_behind_enclosing_body() -> None:
     )
     scene_manager = object.__new__(MujocoSceneManager)
     scene_manager.robot_spec_meta = ActorSpecMeta(prefix="", root_body="sensor_shell", body_names=[])
-    manager = SensorManager(device_name, control_hz=10.0)
+    manager = SensorManager(device_name, control_hz=10.0, physics_hz=1.0 / model.opt.timestep)
     sim = SimpleNamespace(
         root_model=model,
         sensor_config={"scan": lidar},
@@ -972,7 +972,7 @@ def test_mjwarp_robot_filter_excludes_reserved_groups_and_preserves_scene_groups
         body_filter=LidarBodyFilterConfig(target_kind="robot"),
         mujoco=MujocoLidarConfig(geom_groups=[False, True, False, True, False, False]),
     )
-    manager = SensorManager(device_name, control_hz=10.0)
+    manager = SensorManager(device_name, control_hz=10.0, physics_hz=1.0 / model.opt.timestep)
     sim = SimpleNamespace(
         root_model=model,
         sensor_config={"scan": lidar},

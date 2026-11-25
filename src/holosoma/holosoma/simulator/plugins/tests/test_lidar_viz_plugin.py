@@ -52,7 +52,7 @@ class _FakeSimulator:
         self.training_config = _TrainingConfig()
         self.video_config = _VideoConfig()
         self.headless = True
-        self.sensor_manager = SensorManager("cpu", control_hz=50.0)
+        self.sensor_manager = SensorManager("cpu", control_hz=50.0, physics_hz=50.0)
         self.sensor_manager.register_lidar("front/scan", lidar)
         self._time = 1.25
 

@@ -66,7 +66,7 @@ class _FakeSim:
 
     def __init__(self, config: CameraSensorConfig, base_height: float = 2.0) -> None:
         self.num_envs = NUM_ENVS
-        self.sensor_manager = SensorManager(device="cpu", control_hz=50.0, num_envs=NUM_ENVS)
+        self.sensor_manager = SensorManager(device="cpu", control_hz=50.0, physics_hz=50.0, num_envs=NUM_ENVS)
         self.sim_device = "cpu"
         self.sensor_config = {"depth": config}
         self.body_names = list(LINKS)
