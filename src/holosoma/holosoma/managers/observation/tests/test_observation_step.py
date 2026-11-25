@@ -285,3 +285,18 @@ def assert_advances_only_env_ids(make_term: Callable[[], ObservationTermBase], e
     for _ in range(steps):
         term.read(env, env_ids=torch.tensor([0]))
     assert torch.equal(term.read(env)[1], fresh.read(env)[1])
+
+
+@pytest.mark.parametrize("copy", [True, False])
+def test_a_term_copies_its_reading_unless_opted_out(copy: bool) -> None:
+    from holosoma.managers.observation.base import FunctionTerm
+
+    env = _env()
+    term = FunctionTerm(ObsTermCfg(func=f"{_HERE}:env_value", copy=copy, global_clip=False), env, env_value)
+    out = term.observe(env, with_noise=False, generator=None, clip_limit=float("inf"))
+    assert (out is env.value) is not copy and torch.equal(out, env.value)
+
+
+def test_an_uncopied_term_cannot_feed_a_history() -> None:
+    with pytest.raises(ValueError, match="copy=False"):
+        _manager(_env(), history_length=2, terms={"value": ObsTermCfg(func=f"{_HERE}:env_value", copy=False)})

@@ -150,6 +150,11 @@ class BaseTask:
             self.simulator.setup_viewer()
             self.viewer = self.simulator.viewer
 
+        # Plugins install once the simulator is ready and before anything reads its state, so a plugin
+        # can choose where state is stored; mount poses are state a plugin may share.
+        self.simulator.register_mount_poses()
+        self._install_plugins()
+
         # Give every sensor a frame before the first reset, so a re-render has rows to update.
         self.simulator.render_sensors(num_renders=1)
 
@@ -170,12 +175,11 @@ class BaseTask:
             self.simulator.simulator_config.reset_manager, self.simulator, self.device
         )
 
-        self._install_plugins()
         self._add_pacing_hooks()
         self.hooks.validate()
 
     def _install_plugins(self) -> None:
-        """Construct each configured plugin as ``cls(cfg, task)`` once the task is fully built."""
+        """Construct each configured plugin as ``cls(cfg, task)`` once the simulator is ready, before managers."""
         self.installed_plugins: dict[str, Any] = {}
         for key, plugin_config in self.config.plugin.items():
             # Scoped so the plugin's published keys belong to its slot, for HookRef to resolve.
@@ -437,10 +441,14 @@ class BaseTask:
         self.hooks.emit(Phase.FRAME_END)
         self.episode_length_buf += 1
         self._check_termination()
-        env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        env_ids = self._get_reset_env_ids()
         self._evaluate_frame(env_ids)
         self.reset_envs_idx(env_ids)
         self._step_managers()
+
+    def _get_reset_env_ids(self) -> torch.Tensor:
+        """Return ids of environments whose episodes ended this frame."""
+        return self.reset_buf.nonzero(as_tuple=False).flatten()
 
     def _evaluate_frame(self, env_ids: torch.Tensor) -> None:
         """Evaluate the frame on the state ``env_ids``' episodes ended in, before they reset."""

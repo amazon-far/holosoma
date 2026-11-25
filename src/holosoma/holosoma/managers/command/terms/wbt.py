@@ -1002,19 +1002,19 @@ class MotionCommand(CommandTermBase):
 
     @property
     def robot_body_pos_w(self) -> torch.Tensor:
-        return self._env.simulator._rigid_body_pos[:, self.tracked_body_indexes, :]
+        return self._env.simulator.rigid_body_pos_w[:, self.tracked_body_indexes, :]
 
     @property
     def robot_body_quat_w(self) -> torch.Tensor:
-        return self._env.simulator._rigid_body_rot[:, self.tracked_body_indexes, :]  # xyzw
+        return self._env.simulator.rigid_body_quat_w[:, self.tracked_body_indexes, :]  # xyzw
 
     @property
     def robot_body_lin_vel_w(self) -> torch.Tensor:
-        return self._env.simulator._rigid_body_vel[:, self.tracked_body_indexes, :]
+        return self._env.simulator.rigid_body_lin_vel_w[:, self.tracked_body_indexes, :]
 
     @property
     def robot_body_ang_vel_w(self) -> torch.Tensor:
-        return self._env.simulator._rigid_body_ang_vel[:, self.tracked_body_indexes, :]
+        return self._env.simulator.rigid_body_ang_vel_w[:, self.tracked_body_indexes, :]
 
     @property
     def robot_root_pos_w(self) -> torch.Tensor:
@@ -1034,19 +1034,19 @@ class MotionCommand(CommandTermBase):
 
     @property
     def robot_ref_pos_w(self) -> torch.Tensor:
-        return self._env.simulator._rigid_body_pos[:, self.ref_body_index, :]
+        return self._env.simulator.rigid_body_pos_w[:, self.ref_body_index, :]
 
     @property
     def robot_ref_quat_w(self) -> torch.Tensor:
-        return self._env.simulator._rigid_body_rot[:, self.ref_body_index, :]  # xyzw
+        return self._env.simulator.rigid_body_quat_w[:, self.ref_body_index, :]  # xyzw
 
     @property
     def robot_ref_lin_vel_w(self) -> torch.Tensor:
-        return self._env.simulator._rigid_body_vel[:, self.ref_body_index, :]
+        return self._env.simulator.rigid_body_lin_vel_w[:, self.ref_body_index, :]
 
     @property
     def robot_ref_ang_vel_w(self) -> torch.Tensor:
-        return self._env.simulator._rigid_body_ang_vel[:, self.ref_body_index, :]
+        return self._env.simulator.rigid_body_ang_vel_w[:, self.ref_body_index, :]
 
     #########################################################################################
     ## Object from motion data
@@ -1330,10 +1330,10 @@ class MotionCommand(CommandTermBase):
             simulator.dof_vel[env_id] = joint_vel
             simulator.forward_kinematics()
 
-            body_pos = (simulator._rigid_body_pos[env_id] - env_origin).clone()
-            body_quat = simulator._rigid_body_rot[env_id].clone()
-            body_lin_vel = simulator._rigid_body_vel[env_id].clone()
-            body_ang_vel = simulator._rigid_body_ang_vel[env_id].clone()
+            body_pos = (simulator.rigid_body_pos_w[env_id] - env_origin).clone()
+            body_quat = simulator.rigid_body_quat_w[env_id].clone()
+            body_lin_vel = simulator.rigid_body_lin_vel_w[env_id].clone()
+            body_ang_vel = simulator.rigid_body_ang_vel_w[env_id].clone()
         finally:
             simulator.robot_root_states[env_id] = root_backup
             simulator.dof_pos[env_id] = dof_pos_backup

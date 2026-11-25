@@ -126,13 +126,14 @@ class ObservationTermBase(ABC):
             clip_limit: The manager's ``clip_observations``
 
         Returns:
-            A copy, since the term may return a view of state that ``reset`` overwrites
+            A copy (unless the config sets ``copy=False``), since the term may return a view of state
+            that ``reset`` or the next frame overwrites
         """
         raw = self._checked_read(env, env_ids)
         obs = self.generate_noise(raw, generator) if with_noise else raw
         out = self.postprocess(obs, clip_limit)
         # Scale, clip and noise already produce a new tensor; copy only when none of them ran.
-        return out.clone() if out is raw else out
+        return out.clone() if out is raw and self.cfg.copy else out
 
     @final
     def shape(self, env: Any) -> tuple[int, ...]:

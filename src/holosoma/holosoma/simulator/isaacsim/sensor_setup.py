@@ -61,7 +61,7 @@ if TYPE_CHECKING:
 
 
 def build_cameras(sim: IsaacSim) -> None:
-    """Build an RTX camera or a native ray-cast geometry view before environment cloning.
+    """Build an RTX camera or a native ray-cast geometry view per local camera before environment cloning.
 
     The camera optical convention is OpenGL (-Z forward, +Y up), the same frame holosoma uses,
     so the mount offset passes through with ``convention="opengl"`` and no extra rotation.
@@ -70,6 +70,8 @@ def build_cameras(sim: IsaacSim) -> None:
     """
     sim.tiled_cameras = {}
     for cam_name, cam in sim.sensor_config.items():
+        if isinstance(cam, CameraSensorConfig) and cam.remote:
+            continue
         if is_isaacsim_raycast_camera(cam):
             from isaaclab.sensors import MultiMeshRayCasterCfg
 
@@ -132,6 +134,8 @@ def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
         if not isinstance(config, CameraSensorConfig):
             continue
         record = manager.register_camera(name, config)
+        if config.remote:
+            continue
         if is_isaacsim_raycast_camera(config):
             scene = cast(RaycastScene, sim.scene.sensors[name])
             sim.raycast_cameras[name] = RayCastDepthCamera(sim, config, scene)
@@ -174,32 +178,34 @@ def sync_camera_fabric_transforms(
     wrist camera); which cameras are hit is not explained. The USD offset stays correct, so it is
     copied back into Fabric for every camera.
     """
+    if not sim.tiled_cameras:
+        return
+    cameras = sim.tiled_cameras.values() if camera_name is None else [sim.tiled_cameras[camera_name]]
+    prims: list[Any] = []
+    for camera in cameras:
+        # Use the initialized view's cached ordering, matching set_local_poses' env indices.
+        view_prims = camera._view._prims
+        prims += view_prims if env_ids is None else [view_prims[i] for i in env_ids.tolist()]
+    copy_local_transforms_to_fabric(sim, prims)
+
+
+def copy_local_transforms_to_fabric(sim: IsaacSim, prims: list[Any]) -> None:
+    """Copy each prim's authored USD local transform into Fabric and recompute Fabric world transforms."""
     import carb
     import usdrt
     from pxr import Usd, UsdGeom
     from usdrt import Rt
 
-    # Isaac Lab's views keep camera poses in USD without Fabric or on a CPU device; the USD offset is
-    # then what renders, and there is no Fabric transform to correct.
-    if (
-        not sim.tiled_cameras
-        or sim.sim_device == "cpu"
-        or not carb.settings.get_settings().get("/physics/fabricEnabled")
-    ):
+    # Isaac Lab keeps poses in USD without Fabric or on a CPU device; there is then no Fabric transform.
+    if sim.sim_device == "cpu" or not carb.settings.get_settings().get("/physics/fabricEnabled"):
         return
     fabric_stage = usdrt.Usd.Stage.Attach(sim_utils.get_current_stage_id())
-    cameras = sim.tiled_cameras.values() if camera_name is None else [sim.tiled_cameras[camera_name]]
-    for camera in cameras:
-        # Use the initialized view's cached ordering, matching set_local_poses' env indices.
-        prims = camera._view._prims
-        if env_ids is not None:
-            prims = [prims[i] for i in env_ids.tolist()]
-        for prim in prims:
-            local = UsdGeom.Xformable(prim).GetLocalTransformation(Usd.TimeCode.Default())
-            fabric_prim = Rt.Xformable(fabric_stage.GetPrimAtPath(str(prim.GetPath())))
-            fabric_prim.GetFabricHierarchyLocalMatrixAttr().Set(
-                usdrt.Gf.Matrix4d(*(local[row][col] for row in range(4) for col in range(4)))
-            )
+    for prim in prims:
+        local = UsdGeom.Xformable(prim).GetLocalTransformation(Usd.TimeCode.Default())
+        fabric_prim = Rt.Xformable(fabric_stage.GetPrimAtPath(str(prim.GetPath())))
+        fabric_prim.GetFabricHierarchyLocalMatrixAttr().Set(
+            usdrt.Gf.Matrix4d(*(local[row][col] for row in range(4) for col in range(4)))
+        )
     usdrt.hierarchy.IFabricHierarchy().get_fabric_hierarchy(
         fabric_stage.GetFabricId(), fabric_stage.GetStageIdAsStageId()
     ).update_world_xforms()
@@ -216,22 +222,23 @@ def render_cameras(sim: IsaacSim, due: list[CameraRecord], env_ids: torch.Tensor
             continue
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
-            rgb = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
-            if rgb.dtype != torch.uint8:
-                rgb = rgb.clamp(0, 255).to(torch.uint8)
-            if env_ids is None:
-                camera_record.set_buffer("rgb", rgb)
-            else:
-                camera_record.set_buffer_rows("rgb", env_ids, rgb[env_ids])
+            with camera_record.writing("rgb", env_ids) as rgb:  # [N,H,W,3], drop alpha
+                native = out["rgb"][..., :3]
+                frame = native if native.dtype == torch.uint8 else native.clamp(0, 255)
+                if env_ids is None:
+                    rgb.copy_(frame)
+                else:
+                    rgb[env_ids] = frame[env_ids].to(torch.uint8)
         if "depth" in camera_record.config.data_types:
-            # distance_to_image_plane is float32 meters, image-plane. Ensure a trailing channel
-            # dim; CameraRecord applies the configured cross-backend no-return convention.
-            depth = out["distance_to_image_plane"].to(torch.float32)
-            depth = depth if depth.ndim == 4 else depth.unsqueeze(-1)
-            if env_ids is None:
-                camera_record.set_buffer("depth", depth)
-            else:
-                camera_record.set_buffer_rows("depth", env_ids, depth[env_ids])
+            # distance_to_image_plane is float32 meters, image-plane; CameraRecord applies the configured
+            # cross-backend no-return convention in place.
+            with camera_record.writing("depth", env_ids) as depth:  # [N,H,W,1]
+                native = out["distance_to_image_plane"]
+                frame = native if native.ndim == 4 else native.unsqueeze(-1)
+                if env_ids is None:
+                    depth.copy_(frame)
+                else:
+                    depth[env_ids] = frame[env_ids].to(depth.dtype)
 
 
 def _pattern(
@@ -752,32 +759,29 @@ def initialize_sensors(sim: IsaacSim) -> None:
 
 
 def render_sensors(sim: IsaacSim, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
-    """Render if a camera is due or video is recording, then capture the sensors due this control step.
+    """Render if a local camera is due or video is recording, then capture the sensors due this control step.
 
     With ``num_renders``, every sensor is captured instead, RTX cameras after that many renders and
     ray-cast cameras and LiDARs with one cast. Only the ``env_ids`` rows are written when given;
-    ``num_renders=0`` or an empty ``env_ids`` renders nothing."""
+    ``num_renders=0`` or an empty ``env_ids`` renders nothing. Remote cameras are filled by their renderer."""
     if num_renders == 0 or (env_ids is not None and env_ids.numel() == 0):
         return
     manager = sim.sensor_manager
     # A forced render takes every sensor; only the per-step render advances update cadence.
     cameras = manager.cameras if num_renders is not None else manager.collect_due()
     lidars = manager.lidars if num_renders is not None else manager.collect_lidars_due()
-    tiled = [record for record in cameras if record.name in sim.tiled_cameras]
+    local = [record for record in cameras if not record.config.remote]
+    tiled = [record for record in local if record.name in sim.tiled_cameras]
     if num_renders is None:
         recording = sim.video_recorder is not None and sim.video_recorder.is_recording
         if tiled or recording:
             sim.render_for_sensors()
     elif tiled:
-        # Isaac Lab rewrites a camera's output for every env in place, and held frames can alias it.
-        for record in tiled:
-            for output, buffer in record.buffers.items():
-                record.buffers[output] = buffer.clone()
         # render_for_sensors would skip when the physics step has not advanced since its last render.
         for _ in range(num_renders):
             sim._render_frame()
         for record in tiled:
             outdated = sim.tiled_cameras[record.name]._is_outdated
             outdated[slice(None) if env_ids is None else env_ids.to(outdated.device)] = True
-    render_cameras(sim, cameras, env_ids)
+    render_cameras(sim, local, env_ids)
     render_lidars(sim, lidars, env_ids)

@@ -76,7 +76,7 @@ def test_physics_step_is_bracketed_by_pre_and_post_step(kinematic_playback: bool
     sim.simulate_at_each_physics_step()
 
     assert sim.events == ["pre_step", "kinematics" if kinematic_playback else "dynamics", "post_step"]
-    assert sim._kinematic_time == pytest.approx(0.01 if kinematic_playback else 0.0)
+    assert sim.kinematic_time == pytest.approx(0.01 if kinematic_playback else 0.0)
 
 
 def test_base_simulator_renders_sensors_before_task_plugins_consume_them() -> None:

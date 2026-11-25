@@ -73,6 +73,9 @@ class _ConstructorSimulator(_Simulator):
     def render_sensors(self, env_ids: object = None, num_renders: object = None) -> None:
         pass
 
+    def register_mount_poses(self) -> None:
+        pass
+
     def install_plugins(self) -> None:
         pass
 

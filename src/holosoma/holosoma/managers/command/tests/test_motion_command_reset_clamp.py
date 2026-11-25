@@ -81,8 +81,8 @@ def _term(*, soft_factor: float, dof_pos_noise: float) -> tuple[Any, Any]:
         dof_pos=torch.full((NUM_ENVS, NUM_DOF), 7.0),
         dof_vel=torch.full((NUM_ENVS, NUM_DOF), 7.0),
         robot_root_states=torch.zeros(NUM_ENVS, 13),
-        _rigid_body_pos=torch.zeros(NUM_ENVS, NUM_BODIES, 3),
-        _rigid_body_rot=torch.tensor([0.0, 0.0, 0.0, 1.0]).repeat(NUM_ENVS, NUM_BODIES, 1),
+        rigid_body_pos_w=torch.zeros(NUM_ENVS, NUM_BODIES, 3),
+        rigid_body_quat_w=torch.tensor([0.0, 0.0, 0.0, 1.0]).repeat(NUM_ENVS, NUM_BODIES, 1),
         scene=SimpleNamespace(env_origins=torch.tensor([[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [10.0, 0.0, 0.0]])),
     )
     term._env = SimpleNamespace(

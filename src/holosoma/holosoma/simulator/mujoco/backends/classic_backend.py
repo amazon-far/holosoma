@@ -99,8 +99,7 @@ class ClassicBackend(IMujocoBackend):
 
     def refresh_rigid_body_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Refresh reusable CPU views for robot rigid-body state, running pending kinematics first."""
-        if self._kinematics_pending:
-            self.forward_kinematics()
+        self.ensure_kinematics()
         np.take(self.data.xpos, self._rigid_body_ids, axis=0, out=self._rigid_body_positions)
         np.take(self.data.xquat, self._rigid_body_ids, axis=0, out=self._rigid_body_quaternions_mj)
         self._rigid_body_quaternions[:, :3] = self._rigid_body_quaternions_mj[:, 1:]
@@ -245,12 +244,16 @@ class ClassicBackend(IMujocoBackend):
                 renderer = self._mj_renderers[name][dt]
                 data = self.get_render_data(world_id=0)
                 renderer.update_scene(data, camera=cam_id, scene_option=self._sensor_scene_option)
-                frame = renderer.render()  # rgb: [H,W,3] uint8; depth: [H,W] float32 meters
-                array = (frame[..., None] if dt == "depth" else frame).copy()
-                if dt == "depth":
-                    array[array >= far_clip * 0.99] = np.inf
-                tensor = torch.from_numpy(array).unsqueeze(0).to(self.device)
-                sensor_record.set_buffer(dt, tensor)  # [1,H,W,C]; one env, so every env_ids is the whole frame
+                with sensor_record.writing(dt) as buffer:  # [1,H,W,C]; one env, so every env_ids is the whole frame
+                    on_host = buffer.device.type == "cpu"
+                    # rgb: [H,W,3] uint8; depth: [H,W] float32 meters. Render straight into a host buffer.
+                    frame = renderer.render(
+                        out=(buffer[0] if dt == "rgb" else buffer[0, ..., 0]).numpy() if on_host else None
+                    )
+                    if dt == "depth":
+                        frame[frame >= far_clip * 0.99] = np.inf
+                    if not on_host:
+                        buffer.copy_(torch.from_numpy(frame).reshape(buffer.shape))
 
     def get_ctrl_tensor(self) -> None:
         """Classic backend doesn't support direct tensor writes.

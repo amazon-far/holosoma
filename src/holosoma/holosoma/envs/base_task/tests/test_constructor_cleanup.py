@@ -44,7 +44,7 @@ def test_task_preserves_interrupt_when_constructor_cleanup_fails(monkeypatch: py
     close.assert_called_once_with()
 
 
-def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_task_builds_plugins_before_state_reads_with_pacing_after_them(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
 
     class _Simulator:
@@ -77,6 +77,9 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
 
         def render_sensors(self, env_ids: object = None, num_renders: object = None) -> None:
             events.append("capture")
+
+        def register_mount_poses(self) -> None:
+            events.append("mount_poses")
 
     class _ProbePlugin:
         def __init__(self, _cfg: object, task: BaseTask) -> None:
@@ -121,7 +124,6 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
 
     task = BaseTask(config)  # type: ignore[arg-type]
 
-    assert events[-1] == "plugins"
-    assert {"reset_manager"} <= set(events[:-1])
-    assert events.index("viewer") < events.index("capture") < events.index("managers")
+    order = ["viewer", "mount_poses", "plugins", "capture", "managers", "reset_manager"]
+    assert [event for event in events if event in order] == order
     assert task.hooks.names(Phase.POST_STEP) == ("probe.post_step", "task.viewer")

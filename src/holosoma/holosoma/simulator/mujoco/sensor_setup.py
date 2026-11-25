@@ -94,32 +94,35 @@ def _write_mount_pose(
 
 
 def register_cameras(sim: MuJoCo, manager: SensorManager) -> None:
-    """Register cameras and create the backend's camera renderers.
+    """Register cameras and create the backend's renderers for local cameras.
 
-    Widens MuJoCo's global near/far clip range to cover every configured camera because MuJoCo
+    Widens MuJoCo's global near/far clip range to cover every local camera because MuJoCo
     clipping is global rather than per-camera.
     """
     cameras = {name: config for name, config in sim.sensor_config.items() if isinstance(config, CameraSensorConfig)}
     if cameras:
         assert sim.root_model is not None
         extent = float(sim.root_model.stat.extent)
-        if extent > 0:
-            sim.root_model.vis.map.znear = min(camera.near for camera in cameras.values()) / extent
-            sim.root_model.vis.map.zfar = max(camera.far for camera in cameras.values()) / extent
+        if extent > 0 and (local_configs := [camera for camera in cameras.values() if not camera.remote]):
+            sim.root_model.vis.map.znear = min(camera.near for camera in local_configs) / extent
+            sim.root_model.vis.map.zfar = max(camera.far for camera in local_configs) / extent
 
         for name, config in cameras.items():
             record = manager.register_camera(name, config)
             native_id = mujoco.mj_name2id(sim.root_model, mujoco.mjtObj.mjOBJ_CAMERA, name)
             if native_id < 0:
                 raise RuntimeError(f"Camera '{name}' is missing from the compiled MuJoCo model.")
-            _register_mount_writer(sim, record, native_id)
-        sim.backend.create_renderers(manager.cameras)
+            if not config.remote:
+                _register_mount_writer(sim, record, native_id)
+        if local := [record for record in manager.cameras if not record.config.remote]:
+            sim.backend.create_renderers(local)
 
 
 def initialize_camera_mounts(sim: MuJoCo) -> None:
     """Apply compiled mount frames and environment origins through the runtime writer."""
     for camera in sim.sensor_manager.cameras:
-        sim.sensor_manager.set_mount_pose(camera.name, sim.sensor_manager.get_mount_pose(camera.name))
+        if camera.write_mount_pose is not None:
+            sim.sensor_manager.set_mount_pose(camera.name, sim.sensor_manager.get_mount_pose(camera.name))
 
 
 def register_lidars(sim: MuJoCo, manager: SensorManager) -> None:
@@ -128,7 +131,7 @@ def register_lidars(sim: MuJoCo, manager: SensorManager) -> None:
     for name, lidar in sim.sensor_config.items():
         if not isinstance(lidar, LidarSensorConfig):
             continue
-        sensor_record = manager.register_lidar(name, lidar)
+        sensor_record = manager.register_lidar(name, lidar, outputs=("ranges", "points", "geom_ids"))
         site_name = f"{LIDAR_MOUNT_SITE_PREFIX}{name}"
         site_id = mujoco.mj_name2id(sim.root_model, mujoco.mjtObj.mjOBJ_SITE, site_name)
         if site_id < 0:
@@ -403,13 +406,15 @@ def create_sensors(sim: MuJoCo) -> None:
 
 
 def render_sensors(sim: MuJoCo, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
-    """Capture all camera and LiDAR sensors due this control step.
+    """Capture all camera and LiDAR sensors due this control step; remote cameras are filled by their renderer.
 
     With ``num_renders``, every sensor is captured instead, once: MuJoCo renders the same image each
     time. Only the ``env_ids`` rows are written when given; ``num_renders=0`` or an empty ``env_ids``
     renders nothing."""
     if not sim.sensor_config or num_renders == 0 or (env_ids is not None and env_ids.numel() == 0):
         return
+    # A step leaves body kinematics one step behind; sensors read them.
+    sim.backend.ensure_kinematics()
     if isinstance(sim.backend, WarpBackend):
         # Geometry may have moved since the last BVH refit (a physics step, or a state write).
         sim.backend.begin_sensor_render()
@@ -417,6 +422,6 @@ def render_sensors(sim: MuJoCo, env_ids: torch.Tensor | None = None, num_renders
     # A forced render takes every sensor; only the per-step render advances update cadence.
     cameras = manager.cameras if num_renders is not None else manager.collect_due()
     lidars = manager.lidars if num_renders is not None else manager.collect_lidars_due()
-    if cameras:
-        sim.backend.render_cameras(cameras, env_ids)
+    if local := [record for record in cameras if not record.config.remote]:
+        sim.backend.render_cameras(local, env_ids)
     render_lidars(sim, lidars, env_ids)

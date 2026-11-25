@@ -69,7 +69,7 @@ class _StubEnv(_EnvProxy):
             state=SimState("cpu"),
             robot_root_states=torch.zeros(NUM_ENVS, 13),
             base_quat=torch.tensor([[0.0, 0.0, 0.0, 1.0]]).repeat(NUM_ENVS, 1),
-            _rigid_body_pos=torch.zeros(NUM_ENVS, 12, 3),
+            rigid_body_pos_w=torch.zeros(NUM_ENVS, 12, 3),
         )
 
     def resolve_body_indices(self, spec: Sequence[str]) -> torch.Tensor:
@@ -202,7 +202,7 @@ def test_update_heights_skips_feet_raycast_when_off(monkeypatch: pytest.MonkeyPa
 
 
 def test_update_heights_raycasts_from_the_resolved_feet_bodies(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The feet cast starts at ``_rigid_body_pos[:, resolved indices]`` (tag order) + ATTACHMENT_POS; each column
+    """The feet cast starts at ``rigid_body_pos_w[:, resolved indices]`` (tag order) + ATTACHMENT_POS; each column
     of ``feet_heights`` is that body's height above its own hit."""
     env: Any = _StubEnv(body_tags={"#feet_height": ["left_foot_contact_point", "right_foot_contact_point"]})
     term = _setup(env, _cfg())
@@ -211,8 +211,8 @@ def test_update_heights_raycasts_from_the_resolved_feet_bodies(monkeypatch: pyte
     # shows in the result: body i at z = i / 10, env i at x = i.
     body_z = torch.arange(12, dtype=torch.float) / 10
     env_x = torch.arange(NUM_ENVS, dtype=torch.float).unsqueeze(1)
-    env.simulator._rigid_body_pos[..., 2] = body_z
-    env.simulator._rigid_body_pos[..., 0] = env_x
+    env.simulator.rigid_body_pos_w[..., 2] = body_z
+    env.simulator.rigid_body_pos_w[..., 0] = env_x
     casts: list[torch.Tensor] = []
 
     def _ray_cast(starts: torch.Tensor, directions: torch.Tensor, _mesh: object) -> torch.Tensor:

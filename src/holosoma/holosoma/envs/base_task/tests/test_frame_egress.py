@@ -151,8 +151,7 @@ class _LoopTask(SimulationTask):
         self.viewer = None if headless else object()
         self.sim_dt = 1 / FPS
         self.randomization_manager = cast("RandomizationManager", SimpleNamespace(step=lambda: None))
-        no_ends = torch.zeros(self.num_envs, dtype=torch.bool)
-        self.termination_manager = cast("TerminationManager", SimpleNamespace(check=lambda: (no_ends, no_ends)))
+        self.termination_manager = cast("TerminationManager", SimpleNamespace(has_terms=False))
         self.robot_config = cast("RobotConfig", SimpleNamespace(default_dof_positions=dict))
         self.dof_names: list[str] = []
         self._episode_open = torch.zeros(self.num_envs, dtype=torch.bool)

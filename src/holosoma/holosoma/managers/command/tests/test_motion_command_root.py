@@ -133,10 +133,10 @@ class _Simulator:
     def write_state_updates(self) -> None:
         roots = self.robot_root_states
         count = len(self._body_list)
-        self._rigid_body_pos = roots[:, None, :3] + self._offsets
-        self._rigid_body_rot = roots[:, None, 3:7].expand(-1, count, -1).clone()
-        self._rigid_body_vel = roots[:, None, 7:10].expand(-1, count, -1).clone()
-        self._rigid_body_ang_vel = roots[:, None, 10:13].expand(-1, count, -1).clone()
+        self.rigid_body_pos_w = roots[:, None, :3] + self._offsets
+        self.rigid_body_quat_w = roots[:, None, 3:7].expand(-1, count, -1).clone()
+        self.rigid_body_lin_vel_w = roots[:, None, 7:10].expand(-1, count, -1).clone()
+        self.rigid_body_ang_vel_w = roots[:, None, 10:13].expand(-1, count, -1).clone()
 
     def forward_kinematics(self) -> None:
         self.root_writes.append(self.robot_root_states.clone())

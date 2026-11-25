@@ -334,10 +334,11 @@ def run_checks(sim: Any, config: Any) -> list[str]:
         exp_pos, exp_quat = EXPECTED[pose]
         pos = sim.rigid_body_pos_w[0, ee]
         pos_err = (pos - torch.tensor(exp_pos, device=pos.device)).norm().item()
-        ang_err = _quat_angle(sim._rigid_body_rot[0, ee], exp_quat)
+        ang_err = _quat_angle(sim.rigid_body_quat_w[0, ee], exp_quat)
         if pos_err > EE_POS_ATOL or ang_err > EE_ANG_ATOL:
             fails.append(
-                f"{label}: {EE_BODY} pose {_fmt(pos)} / {_fmt(sim._rigid_body_rot[0, ee])} (xyzw) is {pos_err:.4f} m, "
+                f"{label}: {EE_BODY} pose {_fmt(pos)} / {_fmt(sim.rigid_body_quat_w[0, ee])} (xyzw) is "
+                f"{pos_err:.4f} m, "
                 f"{ang_err:.4f} rad from the expected {exp_pos} / {exp_quat} (wxyz)"
             )
         tip_distance = (sim.rigid_body_pos_w[0, tips[0]] - sim.rigid_body_pos_w[0, tips[1]]).norm().item()
