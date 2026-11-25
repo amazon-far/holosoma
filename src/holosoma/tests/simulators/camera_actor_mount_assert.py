@@ -68,7 +68,6 @@ def main() -> int:
     )
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
 
     names = sim.get_sensor_names()
     if names != ["panel_cam"]:

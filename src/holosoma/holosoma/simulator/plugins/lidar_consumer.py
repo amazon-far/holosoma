@@ -1,6 +1,6 @@
 """Backend-neutral host snapshot path for LiDAR consumer plugins.
 
-The base registers the per-step ``FRAME_END`` callback following ``simulator.sensor_render_hook``,
+The base registers the per-step ``FRAME_END`` callback following ``task.simulator.sensor_render_hook``,
 so it runs behind the sensor capture that fills the buffers it reads, and the ``CLOSE`` teardown,
 ordered by whatever the subclass passes as ``close_before``.
 """
@@ -17,11 +17,11 @@ import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.sensor import LidarSensorConfig
-from holosoma.simulator.base_simulator.hooks import HookDependency, Phase
+from holosoma.hooks import HookDependency, Phase
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import PluginConfig
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.envs.base_task.base_task import BaseTask
 
 LidarStreamKey = tuple[str, int]
 
@@ -46,24 +46,25 @@ class LidarConsumerPlugin:
     def __init__(
         self,
         config: PluginConfig,
-        simulator: BaseSimulator,
+        task: BaseTask,
         *,
         close_before: HookDependency | Sequence[HookDependency] = (),
     ) -> None:
         self.cfg = config
         self.config = config
-        self.simulator = simulator
+        self.simulator = task.simulator
+        self.num_envs = task.num_envs
         self._wanted = self.wanted_streams()
         self._validate_streams()
         self._started = False
         self._closed = False
-        simulator.hooks.add(
+        task.hooks.add(
             Phase.FRAME_END,
             self._on_frame_end,
             name=f"{type(self).__name__}.publish",
-            after=simulator.sensor_render_hook,
+            after=task.simulator.sensor_render_hook,
         )
-        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop", before=close_before)
+        task.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop", before=close_before)
 
     @abstractmethod
     def wanted_streams(self) -> set[LidarStreamKey]:
@@ -87,7 +88,7 @@ class LidarConsumerPlugin:
             for name, config in self.simulator.sensor_config.items()
             if isinstance(config, LidarSensorConfig)
         }
-        num_envs = self.simulator.training_config.num_envs
+        num_envs = self.num_envs
         for name, env_id in sorted(self._wanted):
             if name not in lidars:
                 raise ValueError(

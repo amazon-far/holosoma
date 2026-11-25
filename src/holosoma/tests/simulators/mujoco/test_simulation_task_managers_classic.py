@@ -14,7 +14,7 @@ pytestmark = pytest.mark.mujoco_classic
 from holosoma.config_types.randomization import RandomizationManagerCfg, RandomizationTermCfg  # noqa: E402
 from holosoma.config_types.run_sim import RunSimConfig  # noqa: E402
 from holosoma.config_values import termination  # noqa: E402
-from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
+from holosoma.hooks import Phase  # noqa: E402
 
 EPISODE_S = 0.1
 
