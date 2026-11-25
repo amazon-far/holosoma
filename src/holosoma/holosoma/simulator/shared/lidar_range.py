@@ -15,7 +15,6 @@ class LidarReturnRecord(Protocol):
     """Minimal sensor-record surface shared by LiDAR backend adapters."""
 
     config: LidarSensorConfig
-    scan_directions: torch.Tensor | None
 
     def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
         """Store one output tensor for the current scan."""
@@ -57,5 +56,3 @@ def finalize_lidar_returns(
             sensor_record.set_buffer(output, tensor)
         else:
             sensor_record.set_buffer_rows(output, env_ids, tensor)
-    if env_ids is None:
-        sensor_record.scan_directions = directions

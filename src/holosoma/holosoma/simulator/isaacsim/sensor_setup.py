@@ -695,16 +695,15 @@ def _app_updates_without_physics() -> Iterator[None]:
 
 
 def render_lidars(sim: IsaacSim, env_ids: torch.Tensor | None = None) -> None:
-    """Scan every due LiDAR, or re-cast every LiDAR's ``env_ids`` rows with the pattern of its held scan."""
+    """Scan every due LiDAR, or re-cast only the ``env_ids`` rows of every LiDAR."""
     records = sim.sensor_manager.collect_lidars_due() if env_ids is None else sim.sensor_manager.lidars
     for lidar_record in records:
-        directions, rows = lidar_record.scan_directions, env_ids
-        if rows is None or directions is None:
-            directions, rows = lidar_record.pattern_at(sim.time()).directions, None
+        pattern = lidar_record.pattern_at(sim.time())
+        rows = env_ids if "ranges" in lidar_record.buffers else None
         sensor = sim.scene.sensors.get(lidar_record.name)
         if not isinstance(sensor, MutableMultiMeshRayCaster):
             raise TypeError(f"LiDAR '{lidar_record.name}' has no mutable MultiMeshRayCaster.")
-        sensor.set_ray_directions(directions)
+        sensor.set_ray_directions(pattern.directions)
         with _app_updates_without_physics():
             if rows is None:
                 hits, starts = sensor.data.ray_hits_w, sensor.ray_starts_w
@@ -713,7 +712,7 @@ def render_lidars(sim: IsaacSim, env_ids: torch.Tensor | None = None) -> None:
                 sensor._update_buffers_impl(ids)
                 hits, starts = sensor._data.ray_hits_w[ids], sensor.ray_starts_w[ids]
         distances = torch.linalg.vector_norm(hits - starts, dim=-1)
-        finalize_lidar_returns(lidar_record, directions, distances, env_ids=rows)
+        finalize_lidar_returns(lidar_record, pattern.directions, distances, env_ids=rows)
 
 
 def rerender_sensors(sim: IsaacSim, env_ids: torch.Tensor) -> None:

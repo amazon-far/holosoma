@@ -112,8 +112,6 @@ class LidarRecord(SensorRecord):
     pattern_provider: LidarPatternProvider | None = None
     backend_cache: dict[str, Any] = field(default_factory=dict)
     """Backend-owned fixed-shape query buffers and compiled work for this LiDAR."""
-    scan_directions: torch.Tensor | None = None
-    """Optical-frame ``[R, 3]`` directions of the scan held in :attr:`buffers`; re-renders reuse them."""
 
     @property
     def pattern_shape(self) -> tuple[int, int]:
