@@ -260,6 +260,9 @@ class BaseSimulator:
             num_envs=self.training_config.num_envs,
             physics_hz=sim_cfg.fps,
         )
+        self.sensor_contact_hook: HookHandle = self.hooks.add(
+            Phase.POST_STEP, self._publish_contact_sensors, name="sensors.contact"
+        )
         self.hooks.add(
             Phase.EPISODE_START,
             self.sensor_manager.reset_contacts,
@@ -673,7 +676,10 @@ class BaseSimulator:
         self._advance_substep()
         if self.kinematic_playback:
             self._kinematic_time += 1.0 / self.simulator_config.sim.fps
-        else:
+
+    def _publish_contact_sensors(self) -> None:
+        """Publish solved contacts on POST_STEP; playback only updates poses."""
+        if not self.kinematic_playback:
             self.sensor_manager.contact_step_completed()
         self.hooks.emit(Phase.POST_STEP)
 

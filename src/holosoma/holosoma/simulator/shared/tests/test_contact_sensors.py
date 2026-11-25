@@ -268,7 +268,7 @@ def test_episode_reset_clears_contacts_before_render_without_advancing_physics(n
 
     record = sim.sensor_manager.register_contact("slow", ContactSensorConfig(update_decimation=4), capture)
     for _ in range(5):
-        sim.sensor_manager.contact_step_completed()
+        sim.hooks.emit(Phase.POST_STEP)
     old_frame = sim.get_contact_data("slow")
     old_copy = record.buffer_on("forces", "meta")
     ids = torch.tensor([0])
@@ -290,12 +290,96 @@ def test_episode_reset_clears_contacts_before_render_without_advancing_physics(n
     for _ in range(2):
         sim.render_sensors(ids, 3)
         sim.hooks.emit(Phase.FRAME_END)
-        sim.sensor_manager.contact_step_completed()
+        sim.hooks.emit(Phase.POST_STEP)
         assert sim.get_contact_data("slow")[:, 0, 0].tolist() == [0, 1]
         assert sim.sensor_manager.frames_produced("slow") == 1
         assert len(captures) == 1
 
-    sim.sensor_manager.contact_step_completed()
+    sim.hooks.emit(Phase.POST_STEP)
     assert sim.get_contact_data("slow")[:, 0, 0].tolist() == [2, 2]
     assert sim.sensor_manager.frames_produced("slow") == 2
     assert len(captures) == 2
+
+
+@pytest.mark.parametrize("start_in_playback", [False, True])
+def test_post_step_publishes_contacts_before_consumers_and_skips_playback(start_in_playback: bool) -> None:
+    from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
+
+    defaults = RunSimConfig()
+    config = FullSimConfig(
+        simulator=dataclasses.replace(
+            defaults.simulator.config,
+            sim=dataclasses.replace(defaults.simulator.config.sim, kinematic_playback=start_in_playback),
+        ),
+        robot=defaults.robot,
+        training=dataclasses.replace(defaults.training, num_envs=1),
+        logger=defaults.logger,
+    )
+    native = torch.zeros(1, 1, 1, 3)
+
+    class StepSimulator(BaseSimulator):
+        def _advance_substep(self) -> None:
+            if not self.kinematic_playback:
+                native.add_(1)
+
+        def render_sensors(self, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
+            pass
+
+    sim = StepSimulator(config, None, "cpu")  # type: ignore[arg-type]
+    captures: list[str] = []
+
+    def capture(name: str) -> torch.Tensor:
+        captures.append(name)
+        return native
+
+    fast = sim.sensor_manager.register_contact("fast", ContactSensorConfig(), lambda: capture("fast"))
+    slow = sim.sensor_manager.register_contact(
+        "slow", ContactSensorConfig(update_decimation=2), lambda: capture("slow")
+    )
+    observed: list[float] = []
+    sim.hooks.add(
+        Phase.POST_STEP,
+        lambda: observed.append(float(sim.get_contact_data("fast")[0, 0, 0])),
+        name="contacts.consumer",
+        after=sim.sensor_contact_hook,
+    )
+    recorder = ContactSubstepRecorder(sim.hooks, lambda: sim.get_contact_data("fast"), 1, 4, 1, "cpu")
+    sim.hooks.emit(Phase.FRAME_BEGIN)
+    if start_in_playback:
+        sim.simulate_at_each_physics_step()
+        sim.hooks.emit(Phase.POST_STEP)
+        assert fast.step_counter == slow.step_counter == 0
+        assert captures == []
+        assert observed == [0]
+        observed.clear()
+        sim.kinematic_playback = False
+        sim.hooks.emit(Phase.FRAME_BEGIN)
+
+    for value in (1, 2):
+        old_frame = sim.get_contact_data("fast")
+        sim.simulate_at_each_physics_step()
+        assert sim.get_contact_data("fast") is old_frame
+        assert fast.step_counter == value - 1
+        sim.hooks.emit(Phase.POST_STEP)
+        assert sim.get_contact_data("fast")[0, 0, 0] == value
+        assert fast.step_counter == value
+    assert observed == [1, 2]
+    assert captures == ["fast", "fast", "slow"]
+    assert recorder.recorded_forces[0, :, 0, 0].tolist() == [1, 2]
+    assert sim.get_contact_data("slow")[0, 0, 0] == 2
+
+    held = sim.get_contact_data("fast")
+    sim.kinematic_playback = True
+    sim.simulate_at_each_physics_step()
+    sim.hooks.emit(Phase.POST_STEP)
+    sim.hooks.emit(Phase.FRAME_END)
+    assert sim.get_contact_data("fast") is held
+    assert fast.step_counter == slow.step_counter == 2
+    assert captures == ["fast", "fast", "slow"]
+
+    sim.kinematic_playback = False
+    for value in (3, 4):
+        sim.simulate_at_each_physics_step()
+        sim.hooks.emit(Phase.POST_STEP)
+        assert sim.get_contact_data("slow")[0, 0, 0] == (2 if value == 3 else 4)
+    assert observed == [1, 2, 2, 3, 4]

@@ -230,7 +230,7 @@ def _assert_contract(sim):
     sim.hooks.emit(Phase.FRAME_BEGIN)
     assert sim.contact_recorder.recorded_forces.shape[1] == 0
     sim.simulate_at_each_physics_step()
-    # Measurements are available before POST_STEP; the existing recorder follows its hook.
+    # The solve alone does not publish; POST_STEP samples contacts and records history.
     assert sim.get_contact_data("pairs_control") is frame_output
     assert sim.contact_recorder.recorded_forces.shape[1] == 0
     sim.hooks.emit(Phase.POST_STEP)
@@ -274,12 +274,14 @@ def _assert_contract(sim):
     assert torch.count_nonzero(sim.get_contact_data("pairs", "force_matrix")[0, 0]) == 0
     assert sim.get_contact_data("pairs", "force_matrix")[0, 1, 1, 2] > 1
 
-    # The public physics-step API must recover contact rows without an external hook loop.
+    # Publication follows POST_STEP, independently of rendering.
     sim.hooks.emit(Phase.FRAME_BEGIN)
     sim.sensor_manager.reset_contacts(one)
     sim.simulate_at_each_physics_step()
     assert sim.contact_recorder.recorded_forces.shape[1] == 0
     sim.render_sensors()
+    assert sim.get_contact_data("pairs", "force_matrix")[0].count_nonzero() == 0
+    sim.hooks.emit(Phase.POST_STEP)
     assert sim.get_contact_data("pairs", "force_matrix")[0, 1, 1, 2] > 1
 
     # A box touching the foot exercises positive robot and robot-link counterparts.
@@ -292,6 +294,7 @@ def _assert_contract(sim):
     states[:, 7:] = 0
     sim.set_actor_states(["top"], ids, states)
     sim.simulate_at_each_physics_step()
+    sim.hooks.emit(Phase.POST_STEP)
     sim.render_sensors()
     box_foot = sim.get_contact_data("box_foot")
     assert torch.all(torch.linalg.vector_norm(box_foot[:, 0], dim=-1) > 1), box_foot
@@ -331,6 +334,8 @@ def _assert_contract(sim):
             torch.testing.assert_close(sim.get_contact_data("pairs", "force_matrix")[1:], held[1:])
             assert (record.step_counter, sim.sensor_manager.frames_produced("pairs")) == (step_counter, frames)
             sim.simulate_at_each_physics_step()
+            assert sim.get_contact_data("pairs", "force_matrix")[0].count_nonzero() == 0
+            sim.hooks.emit(Phase.POST_STEP)
             assert sim.get_contact_data("pairs", "force_matrix")[0, 1, 1, 2] > 1
     finally:
         sim.simulator_config = config

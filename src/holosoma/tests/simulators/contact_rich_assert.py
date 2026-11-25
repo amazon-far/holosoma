@@ -196,7 +196,7 @@ def _run(sim: Any, record: bool) -> dict[str, Any]:
         )
 
     sim.hooks.add(Phase.PRE_STEP, support_robot, name="contact_rich.support")
-    sim.hooks.add(Phase.POST_STEP, collect, name="contact_rich.collect")
+    sim.hooks.add(Phase.POST_STEP, collect, name="contact_rich.collect", after=sim.sensor_contact_hook)
     recorder = sim.video_recorder
     if record:
         assert recorder is not None

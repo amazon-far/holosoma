@@ -63,7 +63,8 @@ matrix = sim.get_contact_data("feet", "force_matrix")  # [N, 2, 2, 3]
 in_contact = (matrix.norm(dim=-1) > 1.0).any(dim=-1)   # Your threshold, per foot.
 ```
 
-By default, sensors update after every solved physics step, before `POST_STEP` hooks.
+By default, sensors update on `POST_STEP` after every solved physics step.
+Contact consumers declare `after=sim.sensor_contact_hook` to read the new measurement.
 Set `update_decimation=4` for steps 4, 8, and 12.
 You can also use a frequency such as `"50Hz"` against the physics rate.
 Skipped updates keep the prior measurement.
@@ -85,8 +86,11 @@ sim.hooks.add(
     Phase.POST_STEP,
     lambda: samples.append(sim.get_contact_data("feet").clone()),
     name="feet.sample",
+    after=sim.sensor_contact_hook,
 )
 ```
+
+Custom loops emit `POST_STEP` once after each physics step to publish contacts.
 
 The default `contact_sensor` provides one row per entry in `sim.body_names`.
 Existing `sim.contact_forces`, `sim.contact_recorder`, and rewards keep their current behavior.
