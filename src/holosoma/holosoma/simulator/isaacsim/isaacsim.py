@@ -4,6 +4,7 @@ import builtins
 import copy
 import dataclasses
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from typing import Any
 
 import pathlib
@@ -26,7 +27,9 @@ from isaaclab.sensors import ContactSensor, RayCaster, TiledCamera
 from isaaclab.sim import PhysxCfg, SimulationCfg, SimulationContext
 from isaaclab.sim.utils import bind_physics_material
 from isaaclab.terrains import TerrainGeneratorCfg
+from isaaclab.utils.buffers import TimestampedBuffer
 from isaaclab.utils.timer import Timer
+from isaacsim.core.simulation_manager import SimulationManager
 from loguru import logger
 from omegaconf import DictConfig
 
@@ -51,13 +54,14 @@ from holosoma.simulator.isaacsim.object_spawner import (
     physics_material_cfg,
 )
 from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures, register_terrain_mesh_cache
-from holosoma.simulator.base_simulator.state import Columns
-from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw
+from holosoma.simulator.base_simulator.state import DERIVED, STATE, Columns
+from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
 from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
+from holosoma.simulator.isaacsim.render_capture import RenderCapture
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.isaacsim.prim_utils import log_robot_properties, print_prim_tree
 from holosoma.simulator.isaacsim.video_recorder import IsaacSimVideoRecorder
@@ -74,6 +78,7 @@ from holosoma.simulator.types import ActorNames, ActorIndices, EnvIds, ActorStat
 class IsaacSim(BaseSimulator):
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str, hooks: HookRegistry):
         super().__init__(tyro_config, terrain_manager, device, hooks)
+        self._render_capture: RenderCapture | None = None
 
         # Public interface attribute read across backends (video_recorder, virtual_gantry,
         # simulator_bridge). For IsaacSim it always equals self.sim_device; internal tensor
@@ -320,6 +325,41 @@ class IsaacSim(BaseSimulator):
     def render_sensors(self, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
         """Capture all due mounted sensors into their cached buffers; see :meth:`BaseSimulator.render_sensors`."""
         sensor_setup.render_sensors(self, env_ids, num_renders)
+
+    def native_env_origins(self) -> torch.Tensor:
+        """The clone grid ``InteractiveScene`` builds the environments at."""
+        return self.scene.env_origins
+
+    def _render_only(self) -> RenderCapture:
+        """The render-only capture, created on first use: physics playback stops and cameras initialize."""
+        if self._render_capture is None:
+            self._render_capture = RenderCapture(self)
+            self._render_capture.initialize_cameras()
+        return self._render_capture
+
+    def match_env_origins(self, origins: torch.Tensor) -> None:
+        """Move the cloned environment prims to ``origins``, so world-frame state renders in place.
+
+        Switches the simulator to render-only first: physics playback stops for good.
+        """
+        if origins.shape != self.scene.env_origins.shape or torch.equal(origins, self.scene.env_origins):
+            return
+        self._render_only()
+        from pxr import Gf
+
+        stage = stage_utils.get_current_stage()
+        prims = [stage.GetPrimAtPath(f"/World/envs/env_{env}") for env in range(len(origins))]
+        for prim, origin in zip(prims, origins.tolist(), strict=True):
+            prim.GetAttribute("xformOp:translate").Set(Gf.Vec3d(*origin))
+        # The renderer reads Fabric, which would pick up these USD edits only frames later.
+        sensor_setup.copy_local_transforms_to_fabric(self, prims)
+        # InteractiveScene has no setter for its clone-grid origins.
+        self.scene._default_env_origins = origins.to(self.scene.env_origins).clone()
+        self.env_origins = self.scene.env_origins
+
+    def render_applied_state(self) -> None:
+        """Flush applied state and render through Isaac Lab (which runs FK) with physics held stopped."""
+        self._render_only().render()
 
     def get_supported_scene_formats(self) -> list[str]:
         """See base class.
@@ -570,8 +610,8 @@ class IsaacSim(BaseSimulator):
             self.prev_dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
             self._base_linear_acc = torch.zeros(self.num_envs, 3, device=self.sim_device)
             self.prev_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.sim_device)
-            self.state.register("dof_acc", lambda: self._dof_acc)
-            self.state.register("base_linear_acc", lambda: self._base_linear_acc)
+            self.state.register("dof_acc", lambda: self._dof_acc, stale_with=(DERIVED,), stales=())
+            self.state.register("base_linear_acc", lambda: self._base_linear_acc, stale_with=(DERIVED,), stales=())
             self.hooks.add(Phase.POST_STEP, self._update_bridge_accelerations, name="isaacsim.bridge_accelerations")
         else:
             logger.debug("Bridge disabled: skipping acceleration computation tensors")
@@ -587,43 +627,111 @@ class IsaacSim(BaseSimulator):
             self.set_actor_states(free_names, env_ids, torch.cat([poses, vels], dim=1))
 
     def _register_state(self) -> None:
-        """Register the robot state tensors as lazy reads of the articulation and contact sensor buffers.
+        """Register the robot and object state tensors as lazy reads of the Isaac Lab buffers.
 
         Isaac Lab replaces these buffers on update. Body quantities are separate reads because reading
         body link velocity makes PhysX copy body COMs to the host.
         """
         data = self._robot.data
         self.state.device = self.sim_device
+        # The robot and joint writers call the Isaac Lab handles, which write to PhysX immediately.
+        joint_ids = torch.tensor(self.dof_ids, dtype=torch.long, device=self.sim_device)
+
+        def env_ids_for(rows: torch.Tensor) -> torch.Tensor | None:
+            """``None``, Isaac Lab's all-environments path, when every row is written."""
+            return None if rows.numel() == self.num_envs else rows
+
+        def write_robot_root_states(rows: torch.Tensor, root: torch.Tensor) -> None:
+            env_ids = env_ids_for(rows)
+            source = root if env_ids is None else root[rows]
+            self._robot.write_root_state_to_sim(fullstate_xyzw_to_wxyz(source), env_ids=env_ids)
+
+        def joint_writer(write: Callable[..., None]) -> Callable[[torch.Tensor, torch.Tensor], None]:
+            def flush(rows: torch.Tensor, values: torch.Tensor) -> None:
+                env_ids = env_ids_for(rows)
+                write(values if env_ids is None else values[rows], joint_ids=joint_ids, env_ids=env_ids)
+
+            return flush
+
         self.state.register(
             "robot_root_states",
             lambda: fullstate_wxyz_to_xyzw(data.root_state_w),
-            write=lambda rows, root: self._state_adapter.write_object_states("robot", root[rows], rows),
+            write=write_robot_root_states,
+            stale_with=(STATE,),
+            stales=(DERIVED,),
         )
         self.state.register(
             "dof_pos",
             Columns(lambda: data.joint_pos, self.dof_ids),
-            write=lambda rows, out: self._robot.write_joint_position_to_sim(
-                out[rows], joint_ids=self.dof_ids, env_ids=rows
-            ),
+            write=joint_writer(self._robot.write_joint_position_to_sim),
+            stale_with=(STATE,),
+            stales=(DERIVED,),
         )
         self.state.register(
             "dof_vel",
             Columns(lambda: data.joint_vel, self.dof_ids),
-            write=lambda rows, out: self._robot.write_joint_velocity_to_sim(
-                out[rows], joint_ids=self.dof_ids, env_ids=rows
-            ),
+            write=joint_writer(self._robot.write_joint_velocity_to_sim),
+            stale_with=(STATE,),
+            stales=(DERIVED,),
         )
-        self.state.register("contact_forces", self._robot_contact_forces)
+        object_names = self.object_state_names
+        object_handles = [self.scene.rigid_objects[name] for name in object_names]
+
+        def read_object_root_states() -> torch.Tensor:
+            if not object_handles:
+                return torch.empty(self.num_envs, 0, 13, device=self.sim_device)
+            return torch.stack([fullstate_wxyz_to_xyzw(handle.data.root_state_w) for handle in object_handles], 1)
+
+        batched: list[Any] = []  # [view, cached buffers], built on the first write
+
+        def batched_object_view() -> list[Any]:
+            """One PhysX view over every object, object-major, and every cached buffer of their Isaac Lab data."""
+            if batched:
+                return batched
+            paths = [path for handle in object_handles for path in handle.root_physx_view.prim_paths]
+            view = SimulationManager.get_physics_sim_view().create_rigid_body_view(paths)
+            one_body_each = all(handle.root_physx_view.count == self.num_envs for handle in object_handles)
+            if not one_body_each or list(view.prim_paths) != paths:
+                raise RuntimeError("Batched object writes need one body per object per environment, in view order")
+            buffers = []
+            for handle in object_handles:
+                cached = [value for value in vars(handle.data).values() if isinstance(value, TimestampedBuffer)]
+                if not cached:
+                    raise RuntimeError(f"Isaac Lab data of {type(handle).__name__} has no cached buffers to refresh")
+                buffers.extend(cached)
+            batched.extend((view, buffers))
+            return batched
+
+        def write_object_root_states(rows: torch.Tensor, states: torch.Tensor) -> None:
+            if not object_handles:
+                return
+            view, buffers = batched_object_view()
+            flat = states.transpose(0, 1).reshape(-1, 13)  # PhysX applies only the rows in indices
+            indices = (torch.arange(len(object_handles), device=rows.device)[:, None] * self.num_envs + rows).flatten()
+            view.set_transforms(flat[:, :7].contiguous(), indices=indices)
+            view.set_velocities(flat[:, 7:].contiguous(), indices=indices)
+            # Written behind Isaac Lab's back, so its cached reads must come from PhysX again.
+            for buffer in buffers:
+                buffer.timestamp = -1.0
+
+        self.state.register(
+            "object_root_states",
+            read_object_root_states,
+            write=write_object_root_states,
+            stale_with=(STATE,),
+            stales=(DERIVED,),
+        )
+        self.state.register("contact_forces", self._robot_contact_forces, stale_with=(DERIVED,), stales=())
         body_sources = {
-            "_rigid_body_pos": lambda: data.body_pos_w,
+            "rigid_body_pos_w": lambda: data.body_pos_w,
             # Isaac Lab stores wxyz; holosoma uses xyzw.
-            "_rigid_body_rot": lambda: data.body_quat_w.roll(-1, dims=-1),
-            # Link-frame linear velocity, to match _rigid_body_pos: body_lin_vel_w is the COM velocity.
-            "_rigid_body_vel": lambda: data.body_link_lin_vel_w,
-            "_rigid_body_ang_vel": lambda: data.body_ang_vel_w,
+            "rigid_body_quat_w": lambda: data.body_quat_w.roll(-1, dims=-1),
+            # Link-frame linear velocity, to match rigid_body_pos_w: body_lin_vel_w is the COM velocity.
+            "rigid_body_lin_vel_w": lambda: data.body_link_lin_vel_w,
+            "rigid_body_ang_vel_w": lambda: data.body_ang_vel_w,
         }
         for name, source in body_sources.items():
-            self.state.register(name, Columns(source, self.body_ids))
+            self.state.register(name, Columns(source, self.body_ids), stale_with=(DERIVED,), stales=())
 
     def _robot_contact_forces(self) -> torch.Tensor:
         """Sensor forces in robot body order, (num_envs, num_bodies, 3). The contact sensor's body
@@ -645,7 +753,7 @@ class IsaacSim(BaseSimulator):
 
     def _advance_substep(self) -> None:
         self._sim_step_counter += 1
-        with self.state.mutation():
+        with self.state.mutation(STATE):
             if self.kinematic_playback:
                 # sim.current_time does not advance.
                 self._forward_kinematics()
@@ -784,7 +892,7 @@ class IsaacSim(BaseSimulator):
         flag). ``write_updates=True`` (default) flushes via :meth:`write_state_updates`
         (``scene.write_data_to_sim``); ``False`` defers for batching.
         """
-        with self.state.mutation():
+        with self.state.mutation(STATE):
             self._state_adapter.write_states_by_index(indices, states)
         if write_updates:
             self.write_state_updates()

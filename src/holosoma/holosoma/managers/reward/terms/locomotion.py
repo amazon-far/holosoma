@@ -110,7 +110,7 @@ def penalty_feet_ori(
             f"penalty_feet_ori: sole_axes must be two distinct integer axes in 0..2, got {list(sole_axes)}"
         )
     idx = env.robot_names.resolve_body_indices(feet)
-    quats = env.simulator._rigid_body_rot[:, idx]  # [N, F, 4]
+    quats = env.simulator.rigid_body_quat_w[:, idx]  # [N, F, 4]
     num_envs, num_feet = quats.shape[:2]
     gravity = gravity_vector(env).unsqueeze(1).expand(-1, num_feet, -1).reshape(-1, 3)
     foot_gravity = quat_rotate_inverse(quats.reshape(-1, 4), gravity, w_last=True).reshape(num_envs, num_feet, 3)
@@ -190,7 +190,7 @@ def penalty_close_feet_xy(
             f"penalty_close_feet_xy is a lateral left/right pair term: feet={list(feet)!r} resolved to "
             f"{idx.numel()} bodies ({env.robot_names.resolve_body_names(feet)}), expected exactly 2."
         )
-    feet_xy = env.simulator._rigid_body_pos[:, idx, :2]  # [N, 2, 2]
+    feet_xy = env.simulator.rigid_body_pos_w[:, idx, :2]  # [N, 2, 2]
     left_foot_xy, right_foot_xy = feet_xy[:, 0], feet_xy[:, 1]
 
     # Get base orientation

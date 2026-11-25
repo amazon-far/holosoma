@@ -83,7 +83,7 @@ def build_terrain_fixtures(
     terrain_state = terrain_manager.get_state("locomotion_terrain")
 
     height_scanner_cfg: RayCasterCfg | None = None
-    if terrain_state.mesh_type not in ["fake", None]:
+    if terrain_manager.cfg.terrain_term.height_scanner and terrain_state.mesh_type not in ["fake", None]:
         # Add a height scanner to the robot articulation root to detect the terrain height.
         # TODO: Scene USD files need ground mapping
         height_scanner_cfg = RayCasterCfg(

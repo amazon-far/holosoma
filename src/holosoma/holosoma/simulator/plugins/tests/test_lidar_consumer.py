@@ -33,7 +33,7 @@ class _FakeSimulator:
         self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name="sensors.render")
         self.sensor_config = {"lidar": lidar}
         self.training_config = _TrainingConfig(num_envs)
-        self.sensor_manager = SensorManager("cpu", control_hz=50.0)
+        self.sensor_manager = SensorManager("cpu", control_hz=50.0, num_envs=num_envs)
         self.sensor_manager.register_lidar("lidar", lidar)
         self._time = 1.25
 

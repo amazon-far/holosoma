@@ -24,7 +24,7 @@ _BATCH_TIMEOUT = 900
 
 _requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="MuJoCo-Warp requires a CUDA device")
 
-# test function name -> (harness module, args after --simulator). ``{num_envs}`` is the test's param.
+# test function name -> (harness module, args after --simulator). ``{name}`` is the test's ``name`` param.
 _CELLS = {
     "test_camera_geometry_classic": ("camera_geometry_assert", []),
     "test_camera_geometry_warp": ("camera_geometry_assert", ["--num-envs", "{num_envs}"]),
@@ -36,7 +36,7 @@ _CELLS = {
     "test_camera_multi_warp": ("camera_multi_assert", []),
     "test_camera_actor_mount_classic": ("camera_actor_mount_assert", []),
     "test_camera_actor_mount_warp": ("camera_actor_mount_assert", []),
-    "test_camera_world_mount_classic": ("world_camera_assert", []),
+    "test_camera_world_mount_classic": ("world_camera_assert", ["--origin-offset", "{origin_offset}"]),
     "test_camera_world_mount_warp": ("world_camera_assert", ["--num-envs", "{num_envs}"]),
     "test_camera_orientation_classic": ("camera_orientation_assert", []),
     "test_camera_orientation_warp": ("camera_orientation_assert", []),
@@ -53,8 +53,7 @@ def _cell(item):
     stem, args = _CELLS[item.originalname]
     simulator = "mjwarp" if item.originalname.endswith("_warp") else "mujoco"
     params = getattr(item, "callspec", None)
-    num_envs = params.params.get("num_envs", "") if params else ""
-    args = [a.format(num_envs=num_envs) for a in args]
+    args = [a.format(**(params.params if params else {})) for a in args]
     return f"camera/{simulator}", item.name, stem, ["--simulator", simulator, *args]
 
 
@@ -119,9 +118,10 @@ def test_camera_actor_mount_warp(request):
 
 
 @pytest.mark.mujoco_classic
-def test_camera_world_mount_classic(request):
+@pytest.mark.parametrize("origin_offset", ["0", "7"])
+def test_camera_world_mount_classic(request, origin_offset):
     # target_kind="world": a free-floating camera fixed in the env frame does NOT follow the robot.
-    _run(request, "mujoco/camera-world-mount")
+    _run(request, f"mujoco/camera-world-mount (origin_offset={origin_offset})")
 
 
 @pytest.mark.mujoco_warp

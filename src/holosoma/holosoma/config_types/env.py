@@ -43,7 +43,7 @@ class EnvConfig:
     logger: LoggerConfig
     plugin: dict[str, PluginConfig]
     """Plugins the task builds as ``cls(cfg, task)`` (key -> resolved PluginConfig), including the
-    ROS2/viz/video egress sinks. Built at the end of task setup."""
+    ROS2/viz/video egress sinks. Built once the simulator is ready, before the managers."""
 
     device: str | None = None
     """Requested device. ``None`` resolves from the simulator backend and process rank."""

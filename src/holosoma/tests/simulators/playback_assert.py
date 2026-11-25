@@ -141,7 +141,7 @@ def _check_playback(task, tmp: Path, cfg, result_file: str | None) -> int:
     check("joints-track-clip", dof_err < max(pos_tol, 1e-4), f"max_err={dof_err:.2e} expected={expected:.4f}")
 
     # 3. FK propagated to rigid-body transforms (pelvis z ~= clip root z).
-    body_z = sim._rigid_body_pos[:, 0, 2]
+    body_z = sim.rigid_body_pos_w[:, 0, 2]
     check(
         "body-transforms-follow-fk",
         bool(torch.all((body_z - ROOT_Z).abs() < max(pos_tol, 1e-3))),
