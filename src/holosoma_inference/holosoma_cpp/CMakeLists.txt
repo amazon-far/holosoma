@@ -50,6 +50,7 @@ add_library(holosoma_cpp_core SHARED
   src/policy.cpp
   src/terminal.cpp
   src/timing.cpp
+  src/trt_cache_key.cpp
   src/urdf_kinematics.cpp
   src/wbt_policy.cpp)
 add_library(holosoma::inference ALIAS holosoma_cpp_core)

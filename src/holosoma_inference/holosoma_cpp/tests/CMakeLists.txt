@@ -34,6 +34,13 @@ target_link_libraries(holosoma_backend_tests PRIVATE holosoma_cpp_core GTest::gt
 target_compile_definitions(holosoma_backend_tests PRIVATE HOLOSOMA_LIVE_FIXTURE_DIR="${LIVE_FIXTURES}")
 set_target_properties(holosoma_backend_tests PROPERTIES BUILD_RPATH "${ONNXRuntime_LIBRARY_DIR}")
 gtest_discover_tests(holosoma_backend_tests DISCOVERY_TIMEOUT 60)
+if(HOLOSOMA_TENSORRT_ENABLED)
+  # NVIDIA_TF32_OVERRIDE is read at process start, so the shared-cache check needs separate processes.
+  add_test(NAME TrtCache.EachTf32SettingBuildsItsOwnEngine
+    COMMAND "${Python_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/trt_cache_precision_check.py"
+            "$<TARGET_FILE:holosoma_backend_tests>" "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(TrtCache.EachTf32SettingBuildsItsOwnEngine PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 900)
+endif()
 
 add_executable(holosoma_api_tests test_api.cpp)
 add_dependencies(holosoma_api_tests holosoma_live_fixtures)

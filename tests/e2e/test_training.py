@@ -6,7 +6,9 @@ The goal is to test the training and evaluation commands as closely as possible 
 from __future__ import annotations
 
 import io
+import os
 import re
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +18,15 @@ import pytest
 import torch
 
 REPO_ROOT = Path(__file__).parent.parent.parent.absolute()
+
+# A green train or eval call takes well under a minute; these bound a hang to minutes, not hours.
+TRAIN_TIMEOUT_S = 900
+EVAL_TIMEOUT_S = 600
+_STOP_TIMEOUT = 30
+# Under torch.distributed.run, a rank that never reaches the process group otherwise leaves its
+# peers waiting out train_agent.py's 2-hour default. Below TRAIN_TIMEOUT_S, so the ranks' own
+# error reaches the log before the harness kills them.
+DIST_INIT_TIMEOUT_S = 300
 
 # TODO: Restore whole_body_tracking test after transition to manager-based env
 
@@ -57,11 +68,24 @@ def tee(infile, *files):
     return t
 
 
-def teed_call(cmd_args, stdout=None, stderr=None, **kwargs):
+def _signal_process_group(process: subprocess.Popen, sig: int) -> None:
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def teed_call(cmd_args, stdout=None, stderr=None, timeout: float | None = None, **kwargs):
+    """Run ``cmd_args`` teeing its output, and fail with ``TimeoutExpired`` if it outlives ``timeout``.
+
+    The command runs in its own process group so a timeout also stops the ranks that
+    ``torch.distributed.run`` spawns; killing the launcher alone leaves them holding the pipes.
+    """
     p = subprocess.Popen(
         cmd_args,
         stdout=subprocess.PIPE if stdout is not None else None,
         stderr=subprocess.PIPE if stderr is not None else None,
+        start_new_session=True,
         **kwargs,
     )
     threads = []
@@ -69,9 +93,22 @@ def teed_call(cmd_args, stdout=None, stderr=None, **kwargs):
         threads.append(tee(p.stdout, stdout, sys.stdout.buffer))
     if stderr is not None:
         threads.append(tee(p.stderr, stderr, sys.stderr.buffer))
-    for t in threads:
-        t.join()  # wait for IO completion
-    return p.wait()
+    try:
+        returncode = p.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _signal_process_group(p, signal.SIGTERM)
+        try:
+            p.wait(timeout=_STOP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            _signal_process_group(p, signal.SIGKILL)
+            p.wait()
+        raise
+    finally:
+        # Descendants that outlived the leader would otherwise keep the tee threads blocked.
+        _signal_process_group(p, signal.SIGKILL)
+        for t in threads:
+            t.join(timeout=_STOP_TIMEOUT)  # wait for IO completion
+    return returncode
 
 
 def assert_training_and_eval_workflow(
@@ -102,7 +139,8 @@ def assert_training_and_eval_workflow(
 
     print("Train command: ", subprocess.list2cmdline(train_cmd))
 
-    train_result = teed_call(train_cmd, stdout=train_stdout, stderr=train_stderr)
+    env = {**os.environ, "TORCH_DIST_INIT_TIMEOUT_S": str(DIST_INIT_TIMEOUT_S)} if multi_gpu else None
+    train_result = teed_call(train_cmd, stdout=train_stdout, stderr=train_stderr, timeout=TRAIN_TIMEOUT_S, env=env)
 
     assert train_result == 0
 
@@ -124,7 +162,7 @@ def assert_training_and_eval_workflow(
         "--training.max-eval-steps=4",
     ]
     print("Eval command: ", subprocess.list2cmdline(eval_cmd))
-    subprocess.check_call(eval_cmd)
+    subprocess.check_call(eval_cmd, timeout=EVAL_TIMEOUT_S)
 
 
 WORKFLOWS = [
