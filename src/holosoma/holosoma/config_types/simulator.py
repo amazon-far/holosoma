@@ -4,9 +4,9 @@ import datetime
 import warnings
 from dataclasses import field
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic.dataclasses import dataclass
 from pydantic_core import ArgsKwargs
 
@@ -148,6 +148,11 @@ class SimEngineConfig:
     objects) is not supported; that would be a per-actor flag (e.g. IsaacLab's per-prim
     ``kinematic_enabled``), not this global one."""
 
+    num_rerenders_on_reset: Annotated[int, Field(ge=0)] = 0
+    """Renders on ``EPISODE_START`` so starting envs observe their new state. Isaac Sim RTX
+    cameras render this many times; any value above 0 re-renders every other camera and every
+    LiDAR once. At 0 every sensor keeps its pre-reset frame for one control step."""
+
     mujoco: MujocoConfig = field(default_factory=MujocoConfig)
     """Native MuJoCo settings. None preserves existing behavior; other simulators ignore this block."""
 
@@ -181,10 +186,8 @@ class VirtualGantryCfg:
     enabled: bool = False
     """Whether to enable the virtual gantry system."""
 
-    attachment_body_names: list[str] = field(
-        default_factory=lambda: ["Trunk", "torso_link", "torso", "base_link", "pelvis", "base"]
-    )
-    """List of body names to try for attachment (in preference order)."""
+    attachment_body_names: list[str] = field(default_factory=lambda: ["#base"])
+    """Exact body names or single-body tags to try for attachment, in preference order."""
 
     stiffness: float = 200.0
     """Spring stiffness coefficient for elastic band force calculation."""

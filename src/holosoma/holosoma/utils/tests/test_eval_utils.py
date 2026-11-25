@@ -14,17 +14,15 @@ from omegaconf import OmegaConf
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
-from holosoma.utils.config_registry import parse_config
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.eval_utils import (
     CheckpointConfig,
-    _drop_retired_isaacgym_fields,
     get_all_checkpoint_metadata,
     load_checkpoint,
     load_saved_experiment_config,
-    replace_retired_simulator,
 )
-from holosoma.utils.simulator_config import set_simulator_type
+
+pytestmark = pytest.mark.no_sim
 
 
 @pytest.fixture
@@ -310,6 +308,30 @@ def test_load_saved_experiment_config_uses_generic_remote_loader(
     assert run_path is None
 
 
+@pytest.mark.parametrize("extra_default", [False, True], ids=["exact-defaults", "superset-defaults"])
+def test_load_saved_experiment_config_migrates_legacy_checkpoint(tmp_path: Path, extra_default: bool) -> None:
+    """A checkpoint dumped before the RobotConfig refactor loads through the legacy migration."""
+    import yaml
+
+    legacy_dump = Path(__file__).parent / "data" / "legacy_experiments" / "g1_29dof_isaacsim.yaml"
+    raw = yaml.safe_load(legacy_dump.read_text())
+    raw["robot"]["init_state"]["rot"] = [0.0, 0.6, 0.0, 0.8]  # xyzw; a non-identity rotation pins the reorder
+    expected_defaults = dict(raw["robot"]["init_state"]["default_joint_angles"])
+    if extra_default:
+        raw["robot"]["init_state"]["default_joint_angles"]["imu_in_torso_joint"] = 0.0
+    checkpoint_path = tmp_path / "model.pt"
+    torch.save({"experiment_config": raw}, checkpoint_path)
+
+    loaded_cfg, _ = load_saved_experiment_config(CheckpointConfig(checkpoint=str(checkpoint_path)))
+    assert loaded_cfg.robot.body_tags["#feet"] == frozenset({"left_ankle_roll_link", "right_ankle_roll_link"})
+    assert loaded_cfg.robot.init_state.orientation == [0.8, 0.0, 0.6, 0.0]
+    assert loaded_cfg.robot.init_state.orientation_xyzw == [0.0, 0.6, 0.0, 0.8]
+    assert loaded_cfg.robot.init_state.default_joint_positions == expected_defaults
+    assert loaded_cfg.robot.default_dof_positions() == expected_defaults
+    assert list(loaded_cfg.robot.default_dof_positions()) == raw["robot"]["dof_names"]
+    assert "default_joint_angles" not in loaded_cfg.to_serializable_dict()["robot"]["init_state"]
+
+
 def test_load_saved_experiment_config_no_inputs() -> None:
     """Test that load_saved_experiment_config raises ValueError when no inputs are provided."""
     checkpoint_cfg = CheckpointConfig(
@@ -460,9 +482,8 @@ def test_load_checkpoint_updates_stale_copy(tmp_path: Path) -> None:
         assert result_path.stat().st_mtime > old_mtime
 
 
-# Configs saved by `to_serializable_dict()` at 8b83d915, before the Isaac Gym retirement (see holosoma-v0.0.3).
-# They carry the `isaacgym` blocks every backend serialized before the retirement.
-_PREVIOUS_SCHEMA_DIR = Path(__file__).parent / "data" / "pre_isaacgym_retirement"
+# Saved configurations with the legacy robot and simulator schemas.
+_PREVIOUS_SCHEMA_DIR = Path(__file__).parent / "data" / "legacy_experiments"
 _SURVIVING_BACKEND_FIXTURES = {
     "g1_29dof_mujoco": "mujoco",
     "t1_29dof_isaacsim": "isaacsim",
@@ -475,10 +496,6 @@ def _previous_schema(name: str) -> dict[str, Any]:
     with open(_PREVIOUS_SCHEMA_DIR / f"{name}.yaml") as f:
         data: dict[str, Any] = yaml.safe_load(f)
     return data
-
-
-def _without(block: dict[str, Any], key: str = "isaacgym") -> dict[str, Any]:
-    return {k: v for k, v in block.items() if k != key}
 
 
 def _load_through(boundary: str, data: dict[str, Any], tmp_path: Path) -> ExperimentConfig:
@@ -495,11 +512,31 @@ def _load_through(boundary: str, data: dict[str, Any], tmp_path: Path) -> Experi
 
 
 @pytest.mark.parametrize("boundary", ["checkpoint", "wandb"])
+def test_saved_all_membership_is_discarded_and_resolved_from_current_names(boundary: str, tmp_path: Path) -> None:
+    saved = ExperimentConfig().to_serializable_dict()
+    saved["robot"]["body_tags"]["#all"] = ["obsolete_body"]
+    saved["robot"]["joint_tags"]["#all"] = ["obsolete_joint"]
+    saved["robot"]["joint_tags"]["#whole"] = ["#all"]
+    saved["robot"]["init_state"]["default_joint_positions"] = {"#whole": 0.0}
+    original = copy.deepcopy(saved)
+
+    loaded = _load_through(boundary, saved, tmp_path)
+
+    assert loaded.robot.default_dof_positions() == dict.fromkeys(loaded.robot.dof_names, 0.0)
+    assert loaded.to_serializable_dict()["robot"]["joint_tags"]["#whole"] == ["#all"]
+    assert "#all" not in loaded.robot.body_tags and "#all" not in loaded.robot.joint_tags
+    assert saved == original
+
+
+@pytest.mark.parametrize("boundary", ["checkpoint", "wandb"])
 @pytest.mark.parametrize("fixture_name", sorted(_SURVIVING_BACKEND_FIXTURES))
 def test_previous_schema_configs_load_with_backend_settings_intact(
     fixture_name: str, boundary: str, tmp_path: Path
 ) -> None:
     saved = _previous_schema(fixture_name)
+    if _SURVIVING_BACKEND_FIXTURES[fixture_name] == "mjwarp":
+        # Old MuJoCo body order cannot be inferred from the saved schema.
+        saved["command"]["setup_terms"]["motion_command"]["params"]["motion_config"]["root_body"] = "pelvis"
 
     loaded_cfg = _load_through(boundary, saved, tmp_path)
     loaded = loaded_cfg.to_serializable_dict()
@@ -511,63 +548,21 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     saved_warp = saved_simulator["config"].pop("mujoco_warp")
     loaded_simulator = copy.deepcopy(loaded["simulator"])
     loaded_simulator["config"]["sim"].pop("mujoco")
+    assert loaded_simulator["config"]["sim"].pop("num_rerenders_on_reset") == 0
     assert loaded_simulator == saved_simulator
     assert loaded_cfg.simulator.config.sim.mujoco.warp.nconmax_per_env == saved_warp["nconmax_per_env"]
     assert loaded_cfg.simulator.config.sim.mujoco.warp.njmax_per_env == saved_warp["njmax_per_env"]
-    assert loaded["robot"]["asset"]["link_physics"] == _without(saved["robot"]["asset"]["link_physics"])
-    assert "apply_dof_armature_in_isaacgym" not in loaded["robot"]
+    assert loaded["robot"]["asset"]["link_physics"] == saved["robot"]["asset"]["link_physics"]
     for name, sensor in saved["sensor"].items():
         loaded_sensor = copy.deepcopy(loaded["sensor"][name])
         loaded_isaacsim = loaded_sensor["isaacsim"]
         assert loaded_isaacsim.pop("renderer") == "rtx"
         assert loaded_isaacsim.pop("mesh_prim_paths") is None
-        assert loaded_sensor == _without(sensor)
+        assert loaded_sensor == sensor
     saved_material_term = saved["randomization"]["setup_terms"].get(_MATERIAL_TERM)
     if saved_material_term is not None:
         loaded_material = loaded["randomization"]["setup_terms"][_MATERIAL_TERM]["params"]["material"]
-        assert loaded_material == _without(saved_material_term["params"]["material"])
-
-
-def test_scene_object_physics_drops_only_the_isaacgym_block() -> None:
-    mujoco_physics = {"friction": [0.7, 0.005, 0.0001]}
-    physics = {"isaacgym": {"friction": 0.5}, "mujoco": mujoco_physics}
-    saved: dict[str, Any] = {
-        "scene": {
-            "rigid_objects": {"box": {"physics": copy.deepcopy(physics)}},
-            "scene_files": {"room": {"object_configs": {"*chair*": {"physics": copy.deepcopy(physics)}}}},
-        }
-    }
-
-    migrated = _drop_retired_isaacgym_fields(saved)
-
-    assert migrated["scene"]["rigid_objects"]["box"]["physics"] == {"mujoco": mujoco_physics}
-    assert migrated["scene"]["scene_files"]["room"]["object_configs"]["*chair*"]["physics"] == {
-        "mujoco": mujoco_physics
-    }
-    assert saved["scene"]["rigid_objects"]["box"]["physics"] == physics  # the caller's dict is not mutated
-
-
-def test_saved_isaacgym_simulator_reports_unsupported_without_override(tmp_path: Path) -> None:
-    saved_cfg = _load_through("checkpoint", _previous_schema("g1_29dof_isaacgym"), tmp_path)
-
-    eval_cfg = replace_retired_simulator(saved_cfg.get_eval_config(), [])
-
-    with pytest.raises(ValueError, match="Isaac Gym simulator is no longer supported"):
-        set_simulator_type(eval_cfg.simulator)
-
-
-@pytest.mark.parametrize("backend", ["isaacsim", "mujoco", "mjwarp"])
-def test_saved_isaacgym_simulator_can_be_overridden_on_the_cli(backend: str, tmp_path: Path) -> None:
-    # Without replace_retired_simulator, tyro attaches the unmatched Isaac Gym default to the
-    # isaacsim slot, so `simulator:isaacsim` would come back as Isaac Gym.
-    saved_cfg = _load_through("checkpoint", _previous_schema("g1_29dof_isaacgym"), tmp_path)
-    args = [f"simulator:{backend}"]
-
-    eval_cfg = parse_config(
-        ExperimentConfig, default=replace_retired_simulator(saved_cfg.get_eval_config(), args), args=args
-    )
-
-    assert eval_cfg.simulator == SIMULATOR_REGISTRY[backend]
+        assert loaded_material == saved_material_term["params"]["material"]
 
 
 @pytest.mark.parametrize(
@@ -577,7 +572,11 @@ def test_saved_isaacgym_simulator_can_be_overridden_on_the_cli(backend: str, tmp
 def test_saved_task_subclass_configs_load_onto_policy_task_with_the_terms_that_replace_them(
     fixture_name: str, locomotion: bool, tmp_path: Path
 ) -> None:
-    loaded = _load_through("checkpoint", _previous_schema(fixture_name), tmp_path)
+    saved = _previous_schema(fixture_name)
+    if not locomotion:
+        # This historical Warp fixture needs an explicit former motion-column-zero body.
+        saved["command"]["setup_terms"]["motion_command"]["params"]["motion_config"]["root_body"] = "pelvis"
+    loaded = _load_through("checkpoint", saved, tmp_path)
 
     assert loaded.env_class == "holosoma.envs.policy_task.PolicyTask"
     assert loaded.randomization is not None

@@ -23,6 +23,10 @@ from holosoma.utils.safe_torch_import import torch
 class BoosterSdk2Bridge(BasicSdk2Bridge):
     """Booster SDK2Py bridge implementation."""
 
+    def requires_explicit_dof_order(self) -> bool:
+        """Whether the transport requires an explicit DOF list in hardware motor order."""
+        return True
+
     SUPPORTED_ROBOT_TYPES = {"t1_23dof", "t1_29dof"}
 
     def _init_sdk_components(self) -> None:

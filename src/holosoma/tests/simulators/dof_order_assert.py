@@ -76,7 +76,7 @@ def _build(simulator: str, num_envs: int):
     origins = torch.zeros(num_envs, 3, device=device)
     origins[:, 0] = torch.arange(num_envs, device=device, dtype=torch.float32) * 4.0
     init = config.robot.init_state
-    base_init = torch.tensor(list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device)
+    base_init = torch.tensor(init.root_state_list(), device=device)
     s.create_envs(num_envs, origins, base_init)
     s.prepare_sim()
     return s, config.robot
@@ -105,7 +105,7 @@ def main() -> int:
         return 1
 
     # 2. STATE
-    defaults = {name: robot.init_state.default_joint_angles[name] for name in robot.dof_names}
+    defaults = {name: robot.default_dof_positions()[name] for name in robot.dof_names}
     zero_vel = dict.fromkeys(robot.dof_names, 0.0)
     sim.set_dof_state_by_names(None, defaults, zero_vel)
     baseline = _body_positions(sim)

@@ -93,7 +93,7 @@ def _check_rerender(sim):
     states[moved, 2] += 0.3
     sim.set_actor_states(["robot"], moved, states[moved])
     sim.refresh_sim_tensors()
-    sim.rerender_sensors(moved)
+    sim.render_sensors(moved, num_renders=1)
     after = sim.get_camera_data("raycast", "depth")[..., 0]
 
     if not torch.equal(after[0], before[0]):
@@ -136,7 +136,7 @@ def _check_scene(sim):
     states[:, 0] += 0.2
     sim.set_actor_states(["target"], moved, states)
     sim.refresh_sim_tensors()
-    sim.rerender_sensors(moved)
+    sim.render_sensors(moved, num_renders=1)
     after = sim.get_camera_data("raycast", "depth")[..., 0]
     if abs(float(after[1, 32, 32]) - 0.55) > 0.01:
         fails.append(f"env1: moved object's center depth {float(after[1, 32, 32]):.4f} != .55 m")
@@ -214,7 +214,7 @@ def _check_dynamic_scene(sim):
             # Hold the camera mount fixed; only the target's motion should change its depth.
             sim.set_actor_states(["robot"], env_ids, robot_states)
             sim.refresh_sim_tensors()
-            sim.rerender_sensors(moved)
+            sim.render_sensors(moved, num_renders=1)
         state = sim.get_actor_states(["target"], moved)[0].cpu().numpy()
         expected = _box_center_depth(sim, state)
         after = sim.get_camera_data("raycast", "depth")[..., 0]
@@ -337,17 +337,15 @@ def main() -> int:
     import torch
 
     init = config.robot.init_state
-    base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
-    )
+    base_init = torch.tensor(init.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(_NUM_ENVS, torch.zeros(_NUM_ENVS, 3, device=device), base_init)
     sim.prepare_sim()
 
     # Pin each robot upright at its env origin, then capture one frame from that state.
     env_ids = torch.arange(_NUM_ENVS, device=device)
     robot_states = sim.get_actor_states(["robot"], env_ids).clone()
-    robot_states[:, :3] = sim.env_origins + torch.tensor(list(init.pos), device=device)
-    robot_states[:, 3:7] = torch.tensor(list(init.rot), device=device)
+    robot_states[:, :3] = sim.env_origins + torch.tensor(list(init.position), device=device)
+    robot_states[:, 3:7] = torch.tensor(list(init.orientation_xyzw), device=device)
     robot_states[:, 7:] = 0.0
     sim.set_actor_states(["robot"], env_ids, robot_states)
     step(sim, max(2, steps_for_seconds(sim, 0.05)))

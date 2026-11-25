@@ -31,7 +31,7 @@ class SphericalCameraConfig:
     """Camera smoothing factor for reducing shake (0.0 = no smoothing, 0.99 = very smooth)."""
 
     tracking_body_name: str = "auto"
-    """Name of the robot body to track. If 'auto', will try default body names in order."""
+    """Exact body name or single-body tag to track. If ``"auto"``, resolves ``#base``."""
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,7 @@ class CartesianCameraConfig:
     """Camera smoothing factor for reducing shake (0.0 = no smoothing, 0.99 = very smooth)."""
 
     tracking_body_name: str = "auto"
-    """Name of the robot body to track. If 'auto', will try default body names in order."""
+    """Exact body name or single-body tag to track. If ``"auto"``, resolves ``#base``."""
 
 
 @dataclass(frozen=True)

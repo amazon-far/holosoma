@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import re
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import field
 from typing import Any
 
-from pydantic import model_validator
+from pydantic import ConfigDict, model_validator
 from pydantic.dataclasses import dataclass
+
+from holosoma.utils.name_tags import expand_name_spec, validate_tag_table
 
 
 @dataclass(frozen=True)
@@ -114,6 +118,99 @@ class PPOModuleDictConfig:
     """Critic module configuration."""
 
 
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class JointSymmetryConfig:
+    """Sagittal-plane joint mirror used by the symmetry augmentation.
+
+    Declare exact joint pairs, or discover two-joint tags using ``mirror_tag_pattern``.
+    The pattern matches the full tag name without its leading ``#``.
+    ExperimentConfig validates the relationships before a simulator starts.
+    """
+
+    pairs: list[tuple[str, str]] | None = None
+    """Explicit pairs of distinct exact joint names. None enables discovery from robot tags."""
+
+    mirror_tag_pattern: str = r"mirror_.*"
+    """Regex for pair tags. Every matched tag must resolve to exactly two distinct joints."""
+
+    flip_sign: list[str] | None = None
+    """Exact joints or tags whose values negate. None uses #symmetry_flip_sign when that tag exists."""
+
+    @model_validator(mode="after")
+    def _validate_definitions(self) -> JointSymmetryConfig:
+        if not self.mirror_tag_pattern:
+            raise ValueError("symmetry.mirror_tag_pattern must not be empty.")
+        try:
+            re.compile(self.mirror_tag_pattern)
+        except re.error as error:
+            raise ValueError(f"Invalid symmetry.mirror_tag_pattern {self.mirror_tag_pattern!r}: {error}") from error
+        if self.pairs is not None:
+            self._validate_pairs([(str(index), pair) for index, pair in enumerate(self.pairs)], "symmetry")
+        return self
+
+    @staticmethod
+    def _validate_pairs(pairs: list[tuple[str, tuple[str, str]]], what: str) -> None:
+        if not pairs:
+            raise ValueError(f"{what} requires at least one explicit pair or matching two-joint tag.")
+        source_for: dict[str, str] = {}
+        for source, (first, second) in pairs:
+            if first == second:
+                raise ValueError(f"{what} pair {source!r} must contain two distinct joints, got {first!r}.")
+            for name in (first, second):
+                if not name or name.startswith("#"):
+                    raise ValueError(f"{what} pair {source!r} requires exact joint names, got {name!r}.")
+                if name in source_for:
+                    raise ValueError(
+                        f"{what} joint {name!r} occurs in multiple mirror pairs: {source_for[name]!r} and {source!r}."
+                    )
+                source_for[name] = source
+
+    def resolve(
+        self,
+        joint_tags: Mapping[str, Collection[str]],
+        dof_names: Sequence[str],
+        *,
+        what: str = "symmetry",
+    ) -> tuple[list[str], list[str], list[str]]:
+        """Resolve validated mirror relationships independently of tag and pair declaration order."""
+        validate_tag_table(joint_tags, dof_names, kind="joint")
+        if self.pairs is None:
+            pairs = []
+            for tag in sorted(joint_tags):
+                if re.fullmatch(self.mirror_tag_pattern, tag[1:]) is None:
+                    continue
+                names = expand_name_spec([tag], joint_tags, dof_names, kind="joint")
+                if len(names) != 2:
+                    raise ValueError(f"{what} mirror tag {tag!r} must resolve to two distinct joints, got {names}.")
+                pairs.append((tag, (names[0], names[1])))
+        else:
+            pairs = [(str(index), pair) for index, pair in enumerate(self.pairs)]
+        self._validate_pairs(pairs, what)
+        indices = {name: index for index, name in enumerate(dof_names)}
+        unknown = sorted({name for _, pair in pairs for name in pair} - indices.keys())
+        if unknown:
+            raise ValueError(f"{what} has unknown joint names {unknown}; known joints: {list(dof_names)}.")
+        canonical_pairs = sorted(
+            (tuple(sorted(pair, key=indices.__getitem__)) for _, pair in pairs),
+            key=lambda pair: (indices[pair[0]], indices[pair[1]]),
+        )
+        left = [pair[0] for pair in canonical_pairs]
+        right = [pair[1] for pair in canonical_pairs]
+        flip_spec = self.flip_sign
+        if flip_spec is None:
+            flip_spec = ["#symmetry_flip_sign"] if "#symmetry_flip_sign" in joint_tags else []
+        flip = expand_name_spec(flip_spec, joint_tags, dof_names, kind="joint")
+        flipped = set(flip)
+        for left_name, right_name in zip(left, right, strict=False):
+            if (left_name in flipped) != (right_name in flipped):
+                raise ValueError(
+                    f"{what}.flip_sign must include both or neither joint in mirror pair "
+                    f"{left_name!r} and {right_name!r}, so mirroring twice restores the input "
+                    f"(flip_sign={self.flip_sign!r})."
+                )
+        return left, right, flip
+
+
 @dataclass(frozen=True)
 class PPOConfig:
     """Configuration for PPO algorithm."""
@@ -171,6 +268,9 @@ class PPOConfig:
 
     symmetry_critic_coef: float = 0.0
     """Symmetry coefficient for critic."""
+
+    symmetry: JointSymmetryConfig = field(default_factory=JointSymmetryConfig)
+    """Joint mirror spec read when ``use_symmetry`` is True."""
 
     num_steps_per_env: int = 24
     """Number of steps per environment."""
@@ -260,6 +360,9 @@ class FastSACConfig:
 
     use_symmetry: bool = False
     """whether to use symmetry"""
+
+    symmetry: JointSymmetryConfig = field(default_factory=JointSymmetryConfig)
+    """joint mirror spec read when ``use_symmetry`` is True"""
 
     alpha_init: float = 0.001
     """the initial value of the alpha"""

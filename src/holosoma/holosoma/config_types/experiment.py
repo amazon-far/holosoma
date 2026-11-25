@@ -4,9 +4,10 @@ import dataclasses
 import datetime
 import json
 from contextlib import AbstractContextManager
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast, runtime_checkable
 
 import yaml
+from pydantic import model_validator
 from pydantic.dataclasses import dataclass
 
 import holosoma.config_values.action
@@ -25,7 +26,7 @@ import holosoma.config_values.simulator
 import holosoma.config_values.termination
 import holosoma.config_values.terrain
 from holosoma.config_types.action import ActionManagerCfg
-from holosoma.config_types.algo import AlgoConfig
+from holosoma.config_types.algo import AlgoConfig, JointSymmetryConfig
 from holosoma.config_types.command import CommandManagerCfg
 from holosoma.config_types.curriculum import CurriculumManagerCfg
 from holosoma.config_types.logger import LoggerConfig
@@ -47,6 +48,14 @@ if TYPE_CHECKING:
 
 def now_timestamp() -> str:
     return datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+
+@runtime_checkable
+class SupportsJointSymmetry(Protocol):
+    """Algorithm configuration that declares joint symmetry."""
+
+    use_symmetry: bool
+    symmetry: JointSymmetryConfig
 
 
 @dataclass(frozen=True)
@@ -179,6 +188,41 @@ class ExperimentConfig:
 
     eval_overrides: EvalOverridesConfig = EvalOverridesConfig()
 
+    @model_validator(mode="after")
+    def _validate_robot_references(self) -> ExperimentConfig:
+        """Resolve action-controller gains and symmetry selections against the selected robot.
+
+        These checks run at config time so invalid joint names or tags fail before a simulator starts.
+        """
+        if self.action is not None:
+            for term_name, term in self.action.terms.items():
+                if term.controller is None:
+                    continue
+                try:
+                    term.controller.resolve_gains(self.robot)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"action term {term_name!r} controller does not resolve against the robot: {exc}"
+                    ) from exc
+
+        algo_config = self.algo.config
+        if not getattr(algo_config, "use_symmetry", False):
+            return self
+        if not isinstance(algo_config, SupportsJointSymmetry):
+            raise ValueError("algo.config.use_symmetry=True requires algo.config.symmetry.")
+        symmetry = algo_config.symmetry
+
+        robot_type = self.robot.asset.robot_type
+        hint = "Declare the joint tags on the robot, override algo.config.symmetry, or set use_symmetry=False."
+        try:
+            symmetry.resolve(self.robot.joint_tags, self.robot.dof_names, what="algo.config.symmetry")
+        except ValueError as exc:
+            raise ValueError(
+                f"algo.config.use_symmetry=True but algo.config.symmetry does not resolve against robot "
+                f"'{robot_type}': {exc}. {hint}"
+            ) from exc
+        return self
+
     def get_nightly_config(self) -> ExperimentConfig:
         if self.nightly is None:
             raise ValueError("nightly config is missing.")
@@ -246,4 +290,11 @@ class ExperimentConfig:
         """Return a JSON-friendly representation of the config."""
         # Directly using yaml.safe_dump does not handle string enums properly,
         # so round-trip through JSON to coerce typing objects into primitives.
-        return cast("dict[str, Any]", json.loads(json.dumps(dataclasses.asdict(self))))
+        return cast("dict[str, Any]", json.loads(json.dumps(dataclasses.asdict(self), default=_serialize_set)))
+
+
+def _serialize_set(value: Any) -> list[Any]:
+    """Encode tag sets as sorted arrays while retaining strict errors for unsupported values."""
+    if isinstance(value, (set, frozenset)):
+        return sorted(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")

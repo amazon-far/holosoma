@@ -43,8 +43,9 @@ from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
     export_policy_as_onnx,
+    get_action_scales_from_env,
     get_command_ranges_from_env,
-    get_control_gains_from_config,
+    get_control_gains_from_env,
     get_urdf_text_from_robot_config,
 )
 
@@ -162,7 +163,7 @@ class DistillationBase(BaseAlgo):
                     f"got {obs_dims[group]!r} from observation_manager.get_obs_dims()."
                 )
 
-        self.num_act = self.env.robot_config.actions_dim
+        self.num_act = len(self.env.robot_config.dof_names)
         self.actor_obs_dim = cast("int", obs_dims[ACTOR_GROUP])
         self.teacher_obs_dim = cast("int", obs_dims[TEACHER_GROUP])
         if self.uses_critic:
@@ -547,12 +548,8 @@ class DistillationBase(BaseAlgo):
 
         # Same metadata as PPO.export, plus the joint order under the
         # ``joint_names`` key the depth policy reads.
-        kp_list, kd_list = get_control_gains_from_config(self.env.robot_config)
-        action_scales = getattr(self.env, "action_scales", None)
-        if action_scales is None:
-            action_scale_metadata: float | list[float] = float(self.env.robot_config.control.action_scale)
-        else:
-            action_scale_metadata = action_scales.detach().cpu().tolist()
+        kp_list, kd_list = get_control_gains_from_env(self.env)
+        action_scale_metadata = get_action_scales_from_env(self.env).detach().cpu().tolist()
         urdf_file_path, urdf_str = get_urdf_text_from_robot_config(self.env.robot_config)
         metadata = {
             "dof_names": self.env.robot_config.dof_names,

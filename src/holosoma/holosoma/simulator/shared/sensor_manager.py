@@ -31,9 +31,6 @@ class SensorRecord:
     buffers: dict[str, torch.Tensor] = field(default_factory=dict)
     step_counter: int = -1
     effective_decimation: int = 1
-    rerender: Callable[[torch.Tensor], None] | None = None
-    """Re-render only the given env ids into the existing buffers, or ``None`` if the backend
-    can only render every env. Called after resets/teleports (``SensorManager.rerender``)."""
     mount_poses: torch.Tensor | None = None
     """Runtime offsets ``[N, 7]`` in XYZ + XYZW order, independent of the immutable config."""
     write_mount_pose: Callable[[torch.Tensor, torch.Tensor], None] | None = None
@@ -290,16 +287,6 @@ class SensorManager:
         due = self._collect_due(self.lidars)
         self._last_lidar_due = {record.name for record in due}
         return due
-
-    def rerender(self, env_ids: torch.Tensor) -> None:
-        """Re-render ``env_ids`` for every sensor that supports partial rendering.
-
-        Sensors without a ``rerender`` callback keep their last frame, so for one control step
-        these envs observe the state from before their reset or teleport."""
-        records: list[SensorRecord] = [*self.cameras, *self.lidars]
-        for record in records:
-            if record.rerender is not None:
-                record.rerender(env_ids)
 
     @property
     def last_due(self) -> set[str]:

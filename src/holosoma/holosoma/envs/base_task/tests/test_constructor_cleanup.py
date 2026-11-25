@@ -75,6 +75,9 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
             self.viewer = object()
             events.append("viewer")
 
+        def render_sensors(self, env_ids: object = None, num_renders: object = None) -> None:
+            events.append("capture")
+
     class _ProbePlugin:
         def __init__(self, _cfg: object, task: BaseTask) -> None:
             assert task.hooks is task.simulator.hooks
@@ -109,7 +112,6 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
     monkeypatch.setattr(base_task_module, "ResetEventManager", create_reset_manager)
     monkeypatch.setattr(BaseTask, "_load_assets", lambda _task: None)
     monkeypatch.setattr(BaseTask, "_create_envs", lambda _task: None)
-    monkeypatch.setattr(BaseTask, "_setup_robot_body_indices", lambda _task: None)
     monkeypatch.setattr(BaseTask, "_initialize_task_managers", lambda _task: events.append("managers"))
     monkeypatch.setattr(BaseTask, "_init_buffers", lambda _task: None)
     monkeypatch.setattr(BaseTask, "_prepare_manager_fields", lambda _task: None)
@@ -120,5 +122,6 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
     task = BaseTask(config)  # type: ignore[arg-type]
 
     assert events[-1] == "plugins"
-    assert {"viewer", "managers", "reset_manager"} <= set(events[:-1])
+    assert {"reset_manager"} <= set(events[:-1])
+    assert events.index("viewer") < events.index("capture") < events.index("managers")
     assert task.hooks.names(Phase.POST_STEP) == ("probe.post_step", "task.viewer")

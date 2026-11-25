@@ -59,6 +59,9 @@ class _FakeSim:
         self.robot_root_states = _CountingRootStates(root)
         self.base_linear_acc = torch.zeros(1, 3)
 
+    def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return torch.zeros(_NUM_DOF, 2), torch.zeros(_NUM_DOF), torch.full((_NUM_DOF,), 100.0)
+
     def time(self) -> float:
         return 1.5
 
@@ -97,7 +100,6 @@ class _StubBridge(BasicSdk2Bridge):
 
 def _bridge(sim: _FakeSim) -> _StubBridge:
     robot_config = SimpleNamespace(
-        dof_effort_limit_list=[100.0] * _NUM_DOF,
         asset=SimpleNamespace(robot_type="g1_29dof"),
         bridge=RobotBridgeConfig(),
     )
@@ -180,7 +182,6 @@ def test_an_exchange_publishes_in_order_and_reads_the_command_last() -> None:
 def test_an_exchange_skips_odometry_and_the_joystick_when_not_configured() -> None:
     sim = _FakeSim()
     robot_config = SimpleNamespace(
-        dof_effort_limit_list=[100.0] * _NUM_DOF,
         asset=SimpleNamespace(robot_type="g1_29dof"),
         bridge=RobotBridgeConfig(),
     )

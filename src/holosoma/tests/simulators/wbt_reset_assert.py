@@ -48,7 +48,7 @@ def main() -> int:
         if not bool(motion.body_pos_relative_w.abs().amax() > 0.0):
             failures.append("the reset left the tracked-body targets at zero")
 
-        actions = torch.zeros(NUM_ENVS, tyro_config.robot.actions_dim, device=env.device)
+        actions = torch.zeros(NUM_ENVS, len(tyro_config.robot.dof_names), device=env.device)
         _, _, dones, _ = env.step({"actions": actions})
         ended = int(dones.sum())
         if ended:

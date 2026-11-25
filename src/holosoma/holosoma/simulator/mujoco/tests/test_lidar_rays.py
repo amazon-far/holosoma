@@ -87,7 +87,8 @@ def _robot_filter_model() -> tuple[mujoco.MjModel, mujoco.MjData]:
         </mujoco>
         """
     )
-    scene_manager.robot_spec_meta = ActorSpecMeta(prefix="unit_", root_body="torso_link")
+    scene_manager.robot_spec_meta = ActorSpecMeta(prefix="unit_", root_body="torso_link", body_names=["torso_link"])
+    scene_manager.robot_config = SimpleNamespace(asset=SimpleNamespace(enable_self_collisions=True, link_physics=None))
     model = scene_manager.compile()
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
@@ -166,7 +167,8 @@ def test_scene_manager_compile_tags_robot_groups_after_inertia_compilation() -> 
     baseline_model = build_spec().compile()
     scene_manager = MujocoSceneManager(mujoco_config.config)
     scene_manager.world_spec = build_spec()
-    scene_manager.robot_spec_meta = ActorSpecMeta(prefix="unit_", root_body="torso_link")
+    scene_manager.robot_spec_meta = ActorSpecMeta(prefix="unit_", root_body="torso_link", body_names=["torso_link"])
+    scene_manager.robot_config = SimpleNamespace(asset=SimpleNamespace(enable_self_collisions=True, link_physics=None))
 
     tagged_model = scene_manager.compile()
 
@@ -238,13 +240,13 @@ def test_mjwarp_shares_one_refitted_context_across_all_due_lidars(monkeypatch: p
     )
     rendered = []
 
-    def capture_render(simulator, record, render_backend, ray_context, sim_time) -> None:
+    def capture_render(simulator, record, render_backend, ray_context, sim_time, env_ids=None) -> None:
         rendered.append((record.name, render_backend, ray_context, sim_time))
 
     monkeypatch.setattr(sensor_setup, "WarpBackend", _FakeWarpBackend)
     monkeypatch.setattr(sensor_setup, "_render_warp", capture_render)
 
-    sensor_setup.render_lidars(sim)
+    sensor_setup.render_lidars(sim, sim.sensor_manager.collect_lidars_due())
 
     assert backend.prepare_calls == [[0, 1, 2, 3, 4, 5]]
     assert rendered == [
@@ -442,7 +444,7 @@ def test_mjwarp_lidar_reuses_camera_bvh_without_duplicate_same_frame_refit(
     monkeypatch.setattr(
         sensor_setup,
         "_render_warp",
-        lambda simulator, record, render_backend, context, sim_time: rendered.append(
+        lambda simulator, record, render_backend, context, sim_time, **_kwargs: rendered.append(
             (simulator, record, render_backend, context, sim_time)
         ),
     )
@@ -801,7 +803,7 @@ def test_registered_robot_filter_excludes_reserved_groups_and_none_preserves_aut
     original_rgba = model.geom_rgba.copy()
 
     sensor_setup.register_lidars(sim, manager)
-    sensor_setup.render_lidars(sim)
+    sensor_setup.render_lidars(sim, sim.sensor_manager.collect_lidars_due())
 
     record = manager.get_lidar("scan")
     torch.testing.assert_close(record.buffers["ranges"], torch.tensor([[1.9, 1.9]], dtype=torch.float32))
@@ -856,7 +858,7 @@ def test_registered_explicit_body_filter_renders_target_behind_shell() -> None:
     scene_manager.robot_spec_meta = ActorSpecMeta(
         prefix="unit_",
         root_body="torso_link",
-        body_names=["head_link"],
+        body_names=["torso_link", "head_link"],
     )
     manager = SensorManager("cpu", control_hz=10.0)
     sim = SimpleNamespace(
@@ -871,7 +873,7 @@ def test_registered_explicit_body_filter_renders_target_behind_shell() -> None:
     )
 
     sensor_setup.register_lidars(sim, manager)
-    sensor_setup.render_lidars(sim)
+    sensor_setup.render_lidars(sim, sim.sensor_manager.collect_lidars_due())
 
     record = manager.get_lidar("scan")
     assert record.backend_cache["mujoco_body_exclude_id"] == model.body("unit_head_link").id
@@ -1009,14 +1011,13 @@ def test_explicit_body_filter_resolves_non_default_robot_prefix() -> None:
         mount=SensorMountConfig(target_kind="robot_link", target="torso_link"),
         body_filter=LidarBodyFilterConfig(target_kind="robot_link", target="head_link"),
     )
-    scene_manager = object.__new__(MujocoSceneManager)
-    scene_manager.world_spec = mujoco.MjSpec()
+    scene_manager = MujocoSceneManager(mujoco_config.config)
     torso = scene_manager.world_spec.worldbody.add_body(name="unit_torso_link")
     torso.add_body(name="unit_head_link")
     scene_manager.robot_spec_meta = ActorSpecMeta(
         prefix="unit_",
         root_body="torso_link",
-        body_names=["head_link"],
+        body_names=["torso_link", "head_link"],
     )
     scene_manager.rigid_object_root_bodies = {}
     scene_manager.scene_file_bodies = {}
@@ -1035,8 +1036,7 @@ def test_filter_marker_follows_fixed_child_fused_into_dynamic_owner() -> None:
         mount=SensorMountConfig(target_kind="robot_link", target="torso_link"),
         body_filter=LidarBodyFilterConfig(target_kind="robot_link", target="head_link"),
     )
-    scene_manager = object.__new__(MujocoSceneManager)
-    scene_manager.world_spec = mujoco.MjSpec()
+    scene_manager = MujocoSceneManager(mujoco_config.config)
     scene_manager.world_spec.compiler.fusestatic = True
     torso = scene_manager.world_spec.worldbody.add_body(name="unit_torso_link")
     torso.add_freejoint()
@@ -1048,7 +1048,7 @@ def test_filter_marker_follows_fixed_child_fused_into_dynamic_owner() -> None:
     scene_manager.robot_spec_meta = ActorSpecMeta(
         prefix="unit_",
         root_body="torso_link",
-        body_names=["head_link"],
+        body_names=["torso_link", "head_link"],
     )
     scene_manager.rigid_object_root_bodies = {"target": "target_body"}
     scene_manager.scene_file_bodies = {}
@@ -1078,10 +1078,9 @@ def test_filter_marker_follows_fixed_child_fused_into_dynamic_owner() -> None:
 
 
 def test_sensor_mounts_use_captured_robot_prefix_for_cameras_and_lidars() -> None:
-    scene_manager = object.__new__(MujocoSceneManager)
-    scene_manager.world_spec = mujoco.MjSpec()
+    scene_manager = MujocoSceneManager(mujoco_config.config)
     scene_manager.world_spec.worldbody.add_body(name="unit_torso_link")
-    scene_manager.robot_spec_meta = ActorSpecMeta(prefix="unit_", root_body="torso_link")
+    scene_manager.robot_spec_meta = ActorSpecMeta(prefix="unit_", root_body="torso_link", body_names=["torso_link"])
     scene_manager.rigid_object_root_bodies = {}
     scene_manager.scene_file_bodies = {}
     mount = SensorMountConfig(target_kind="robot_link", target="torso_link")
@@ -1098,8 +1097,7 @@ def test_sensor_mounts_use_captured_robot_prefix_for_cameras_and_lidars() -> Non
 
 
 def test_lidar_marker_names_do_not_collide_with_filter_prefixed_sensor_names() -> None:
-    scene_manager = object.__new__(MujocoSceneManager)
-    scene_manager.world_spec = mujoco.MjSpec()
+    scene_manager = MujocoSceneManager(mujoco_config.config)
     scene_manager.world_spec.worldbody.add_body(name="target_body")
     scene_manager.robot_spec_meta = None
     scene_manager.rigid_object_root_bodies = {"target": "target_body"}
@@ -1126,8 +1124,7 @@ def test_lidar_marker_names_do_not_collide_with_filter_prefixed_sensor_names() -
 
 
 def test_explicit_filter_rejects_target_fused_into_world_body() -> None:
-    scene_manager = object.__new__(MujocoSceneManager)
-    scene_manager.world_spec = mujoco.MjSpec()
+    scene_manager = MujocoSceneManager(mujoco_config.config)
     scene_manager.world_spec.compiler.fusestatic = True
     scene_manager.world_spec.worldbody.add_body(name="static_target")
     scene_manager.robot_spec_meta = None

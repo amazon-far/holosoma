@@ -210,6 +210,8 @@ class WarpBackend(IMujocoBackend):
         RuntimeError
             If GPU initialization fails
         """
+        # Contiguous canonical addresses alias native tensors; reordered addresses need gathered views.
+        self._dof_views_need_gather = False
         super().__init__(model, data, config, device)
         warp_config = config.simulator.sim.mujoco
         overrides = effective_options(config.simulator)
@@ -267,6 +269,7 @@ class WarpBackend(IMujocoBackend):
             # Create zero-copy PyTorch tensors tethered to Warp arrays
             # These tensors share memory with the Warp arrays - no copying!
             self.qpos_t = wp.to_torch(self.mjw_data.qpos)  # [num_envs, nq]
+            self.actuator_force_t: torch.Tensor = wp.to_torch(self.mjw_data.actuator_force)  # [num_envs, nu]
             self.qvel_t = wp.to_torch(self.mjw_data.qvel)  # [num_envs, nv]
             self.qacc_t = wp.to_torch(self.mjw_data.qacc)  # [num_envs, nv]
             self.ctrl_t = wp.to_torch(self.mjw_data.ctrl)  # [num_envs, nu]
@@ -640,7 +643,7 @@ class WarpBackend(IMujocoBackend):
         self._torch_render_stream = None
         self._cam_ids.clear()
 
-    def render_cameras(self, cameras: list[CameraRecord]) -> None:
+    def render_cameras(self, cameras: list[CameraRecord], env_ids: torch.Tensor | None = None) -> None:
         assert self._torch_render_stream is not None
         consumer_stream = torch.cuda.current_stream(self.device)
         with wp.ScopedDevice(self.mjw_device):
@@ -687,7 +690,11 @@ class WarpBackend(IMujocoBackend):
                     if "rgb" in cam.config.data_types:
                         mjw.get_rgb(self._render_context, cam_id, self._render_rgb_out[cam_id])
                         rgb_f = wp.to_torch(self._render_rgb_out[cam_id])  # [N,H,W,3] float32 in [0,1]
-                        cam.set_buffer("rgb", (rgb_f.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8))
+                        rgb = (rgb_f.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8)
+                        if env_ids is None:
+                            cam.set_buffer("rgb", rgb)
+                        else:
+                            cam.set_buffer_rows("rgb", env_ids, rgb[env_ids])
                     if "depth" in cam.config.data_types:
                         # mjw.get_depth writes clamp(val/depth_scale, 0, 1): a normalized [0,1] image,
                         # NOT meters. Pass depth_scale=depth_far so [0,far]->[0,1], then multiply back by
@@ -696,7 +703,11 @@ class WarpBackend(IMujocoBackend):
                         mjw.get_depth(self._render_context, cam_id, self._depth_far, self._render_depth_out[cam_id])
                         dep = wp.to_torch(self._render_depth_out[cam_id]) * self._depth_far  # [N,H,W] meters
                         dep = torch.where(dep <= 0, float("inf"), dep)
-                        cam.set_buffer("depth", dep.unsqueeze(-1))  # [N,H,W,1]
+                        dep = dep.unsqueeze(-1)  # [N,H,W,1]
+                        if env_ids is None:
+                            cam.set_buffer("depth", dep)
+                        else:
+                            cam.set_buffer_rows("depth", env_ids, dep[env_ids])
         consumer_stream.wait_stream(self._torch_render_stream)
 
     def get_ctrl_tensor(self) -> torch.Tensor:
@@ -878,7 +889,7 @@ class WarpBackend(IMujocoBackend):
         consumer.wait_stream(stream)
 
     def _sync_static_geom_xpos(self, body_ids: list[int], env_ids: torch.Tensor | None) -> None:
-        """Refresh ``geom_xpos``/``geom_xmat`` for the geoms of welded ``body_ids``, per world.
+        """Refresh geom poses for ``body_ids`` and their world-welded descendants, per world.
 
         Forward kinematics skips world-static geoms, so it never recomposes their collision pose
         from a moved body. This launches the same composition over just these geoms, reading the
@@ -904,7 +915,7 @@ class WarpBackend(IMujocoBackend):
             )
 
     def _geom_ids_for_bodies(self, body_ids: list[int]) -> object:
-        """Warp ``int32`` array of every geom id owned by ``body_ids`` (cached; model is static)."""
+        """Cached geom ids for ``body_ids`` and their world-welded descendants."""
         import warp as wp
 
         cache: dict[tuple[int, ...], object] | None = getattr(self, "_static_geom_id_cache", None)
@@ -913,8 +924,18 @@ class WarpBackend(IMujocoBackend):
             self._static_geom_id_cache = cache
         key = tuple(body_ids)
         if key not in cache:
+            selected_body_ids = set(body_ids)
             ids: list[int] = []
-            for body_id in body_ids:
+            # Native body order visits parents first. Expand only through world-welded
+            # descendants: articulated geoms already receive normal forward kinematics.
+            for body_id in range(self.model.nbody):
+                if body_id not in selected_body_ids:
+                    if (
+                        self.model.body_weldid[body_id] != 0
+                        or int(self.model.body_parentid[body_id]) not in selected_body_ids
+                    ):
+                        continue
+                    selected_body_ids.add(body_id)
                 adr = int(self.model.body_geomadr[body_id])
                 ids.extend(range(adr, adr + int(self.model.body_geomnum[body_id])))
             with wp.ScopedDevice(self.mjw_device):

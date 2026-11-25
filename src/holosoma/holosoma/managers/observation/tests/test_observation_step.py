@@ -49,7 +49,6 @@ def _env() -> SimpleNamespace:
         num_envs=NUM_ENVS,
         device="cpu",
         value=torch.zeros(NUM_ENVS, 1),
-        simulator=SimpleNamespace(rerender_sensors=lambda _env_ids: None),
     )
 
 

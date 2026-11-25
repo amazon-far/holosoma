@@ -96,11 +96,8 @@ def get_nightly_run_ids(gh_run_id: str | None = None) -> dict[str, list[str]]:
         for tag in run.tags:
             if tag.startswith("nightly-"):
                 continue
-            # Every simulator tag nightly.py can emit has to be listed, or it is taken for the
-            # experiment name: the first tag that survives these filters wins. "isaacgym" is kept
-            # for archived runs (retired backend); see run_summary.KNOWN_SIMULATORS.
+            # Exclude supported simulator and execution tags from the experiment name.
             if tag in [
-                "isaacgym",
                 "isaacsim",
                 "mujoco",
                 "mjwarp",

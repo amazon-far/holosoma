@@ -17,6 +17,7 @@ import torch
 from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
 from holosoma.config_types.robot import RobotConfig
+from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.envs.simulation_task import SimulationTask
 from holosoma.hooks import HookRegistry, Phase
 from holosoma.managers.randomization import RandomizationManager
@@ -152,7 +153,7 @@ class _LoopTask(SimulationTask):
         self.randomization_manager = cast("RandomizationManager", SimpleNamespace(step=lambda: None))
         no_ends = torch.zeros(self.num_envs, dtype=torch.bool)
         self.termination_manager = cast("TerminationManager", SimpleNamespace(check=lambda: (no_ends, no_ends)))
-        self.robot_config = cast("RobotConfig", SimpleNamespace(init_state=SimpleNamespace(default_joint_angles={})))
+        self.robot_config = cast("RobotConfig", SimpleNamespace(default_dof_positions=dict))
         self.dof_names: list[str] = []
         self._episode_open = torch.zeros(self.num_envs, dtype=torch.bool)
         self._init_buffers()
@@ -310,6 +311,7 @@ class _PlaybackSim(_FakeSim):
         self.dof_vel = torch.zeros(1, self.num_dof)
         self.robot_root_states = torch.zeros(1, 13)
         self.scene = EnvOriginsScene(torch.zeros(1, 3), self.sim_device)
+        self.robot_config = SimpleNamespace(asset=SimpleNamespace(fix_base_link=False))
         self.simulator_config = SimpleNamespace(sim=SimpleNamespace(fps=FPS, control_decimation_steps=self.decimation))
 
     @property
@@ -341,3 +343,32 @@ def test_playback_egresses_every_clip_frame_exactly_once(
     task.run()
 
     assert sim.captured == CLIP_JOINT0 * clips
+
+
+def test_episode_start_hooks_run_after_reset_randomization() -> None:
+    sim = _FakeSim(frames=1)
+    task = _LoopTask(sim)
+    task.episode_count = torch.zeros(task.num_envs, dtype=torch.long)
+    order: list[str] = []
+
+    def record(step: str) -> Any:
+        def _record(*_args: Any) -> None:
+            order.append(step)
+
+        return _record
+
+    task._reset_envs_idx_impl = record("write state")  # type: ignore[method-assign]
+    task._reset_task_managers = record("reset managers")  # type: ignore[method-assign]
+    task.reset_manager = SimpleNamespace(reset_scene=record("reset events"))  # type: ignore[assignment]
+    task._refresh_envs_after_reset = record("forward kinematics")  # type: ignore[method-assign]
+    task.hooks.add(Phase.EPISODE_START, record("episode start"), name="t.start")
+
+    BaseTask.reset_envs_idx(task, torch.tensor([0]))
+
+    assert order == [
+        "write state",
+        "reset managers",
+        "reset events",
+        "forward kinematics",
+        "episode start",
+    ]

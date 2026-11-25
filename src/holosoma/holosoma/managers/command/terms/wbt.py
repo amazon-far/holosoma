@@ -11,8 +11,10 @@ from loguru import logger
 from holosoma.config_types.command import MotionConfig, NoiseToInitialPoseConfig
 from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.command.base import CommandTermBase
+from holosoma.simulator.shared.dof_limits import soft_limits
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.file_cache import cached_open
+from holosoma.utils.name_tags import expand_name_spec
 from holosoma.utils.path import resolve_data_file_path, resolve_paths
 from holosoma.utils.rotations import (
     get_euler_xyz,
@@ -59,7 +61,10 @@ class MotionLoader:
     def _get_index_of_a_in_b(self, a_names: list[str], b_names: list[str], device: str = "cpu") -> torch.Tensor:
         indexes = []
         for name in a_names:
-            assert name in b_names, f"The specified name ({name}) doesn't exist: {b_names}"
+            if b_names.count(name) != 1:
+                raise ValueError(
+                    f"Motion data must contain exactly one entry for {name!r}; found {b_names.count(name)} in {b_names}"
+                )
             indexes.append(b_names.index(name))
         return torch.tensor(indexes, dtype=torch.long, device=device)
 
@@ -283,17 +288,17 @@ class MultiMotionLoader:
         self._motion_end_idx = cumulative
         self._num_motions = len(loaders)
 
-        # Concatenate all motion data
-        self._joint_pos = torch.cat([ld._joint_pos for ld in loaders], dim=0)
-        self._joint_vel = torch.cat([ld._joint_vel for ld in loaders], dim=0)
-        self._body_pos_w = torch.cat([ld._body_pos_w for ld in loaders], dim=0)
-        self._body_quat_w = torch.cat([ld._body_quat_w for ld in loaders], dim=0)
-        self._body_lin_vel_w = torch.cat([ld._body_lin_vel_w for ld in loaders], dim=0)
-        self._body_ang_vel_w = torch.cat([ld._body_ang_vel_w for ld in loaders], dim=0)
+        # Normalize each clip to the requested robot order before concatenating: raw NPZ column
+        # orders (and extra untracked bodies/joints) may differ between files.
+        self._joint_pos = torch.cat([ld.joint_pos for ld in loaders], dim=0)
+        self._joint_vel = torch.cat([ld.joint_vel for ld in loaders], dim=0)
+        self._body_pos_w = torch.cat([ld.body_pos_w for ld in loaders], dim=0)
+        self._body_quat_w = torch.cat([ld.body_quat_w for ld in loaders], dim=0)
+        self._body_lin_vel_w = torch.cat([ld.body_lin_vel_w for ld in loaders], dim=0)
+        self._body_ang_vel_w = torch.cat([ld.body_ang_vel_w for ld in loaders], dim=0)
 
-        # Use indexes from first loader (all loaders share the same robot)
-        self._joint_indexes = loaders[0]._joint_indexes
-        self._body_indexes = loaders[0]._body_indexes
+        self._joint_indexes = torch.arange(len(robot_joint_names), dtype=torch.long, device=device)
+        self._body_indexes = torch.arange(len(robot_body_names), dtype=torch.long, device=device)
         self.fps = loaders[0].fps
         self.time_step_total = self._joint_pos.shape[0]
 
@@ -554,12 +559,36 @@ class MotionCommand(CommandTermBase):
         else:
             self.motion_cfg = MotionConfig(**cfg.params["motion_config"])
         self.init_pose_cfg: NoiseToInitialPoseConfig = self.motion_cfg.noise_to_initial_pose
+        self._soft_dof_pos_limits: torch.Tensor | None = None  # derived from get_dof_limits_properties on first reset
 
     def setup(self) -> None:
+        if self._env.robot_config.asset.fix_base_link:
+            raise ValueError(
+                "MotionCommand writes the robot root pose from the motion clip and requires a floating base "
+                "(robot.asset.fix_base_link=False)"
+            )
         self.num_envs = self._env.num_envs
         self.device = self._env.device
 
-        robot_body_names = self._env.simulator._body_list  # type: ignore[attr-defined]
+        robot_body_names = self._env.simulator.body_names
+        physical_root = self._env.simulator.root_body_name
+        if physical_root is None:
+            raise ValueError("MotionCommand needs the physical articulation root in robot.body_names.")
+        if self.motion_cfg.root_body is None:
+            root_names = [physical_root]
+        else:
+            try:
+                root_names = expand_name_spec(
+                    [self.motion_cfg.root_body], self._env.robot_config.body_tags, robot_body_names, kind="body"
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"MotionConfig.root_body={self.motion_cfg.root_body!r}: {exc}") from exc
+        if root_names != [physical_root]:
+            raise ValueError(
+                f"MotionConfig.root_body={self.motion_cfg.root_body!r} must resolve to the physical root "
+                f"{physical_root!r}; got {root_names}."
+            )
+        self.root_body_index = robot_body_names.index(physical_root)
         robot_body_names_alias = [FAKE_BODY_NAME_ALIASES.get(bn, bn) for bn in robot_body_names]
 
         robot_joint_names = self._env.simulator.dof_names
@@ -594,7 +623,7 @@ class MotionCommand(CommandTermBase):
         # Maybe append interpolated transition back to default pose
         self._maybe_add_default_pose_transition(prepend=False)
 
-        # 2. get the indexes of the root link and the tracked links
+        # 2. get the indexes of the reference frame and the tracked links
         self.ref_body_index = robot_body_names.index(self.motion_cfg.body_name_ref[0])  # int
         self.tracked_body_indexes = self._get_index_of_a_in_b(
             self.motion_cfg.body_names_to_track, robot_body_names, self.device
@@ -602,7 +631,7 @@ class MotionCommand(CommandTermBase):
         # Same bodies, indexed into the loader's raw (motion-file) body axis.
         self._motion_tracked_body_indexes = self._body_indexes_in_motion[self.tracked_body_indexes]
         self._motion_ref_body_index = int(self._body_indexes_in_motion[self.ref_body_index])
-        self._motion_root_body_index = int(self._body_indexes_in_motion[0])
+        self._motion_root_body_index = int(self._body_indexes_in_motion[self.root_body_index])
 
         # 3. get the name of the object, or indices of the object
         if self.motion.has_object:
@@ -730,8 +759,11 @@ class MotionCommand(CommandTermBase):
         target_dof_pos = (
             dof_pos + (torch.rand(dof_pos.shape, device=self.device) - 0.5) * 2 * dof_pos_noise
         )  # (num_envs, num_dofs)
-        soft_joint_pos_limits = self._env.simulator.dof_pos_limits  # type: ignore[attr-defined]  # (num_dofs, 2)
-        target_dof_pos = torch.clip(target_dof_pos, soft_joint_pos_limits[:, 0], soft_joint_pos_limits[:, 1])
+        if self._soft_dof_pos_limits is None:
+            self._soft_dof_pos_limits = soft_limits(
+                self._env.simulator.get_dof_limits_properties()[0], self.init_pose_cfg.soft_dof_pos_limit
+            )  # (num_dofs, 2)
+        target_dof_pos = torch.clip(target_dof_pos, self._soft_dof_pos_limits[:, 0], self._soft_dof_pos_limits[:, 1])
 
         # 1.2.2 dof_vel no noise
         target_dof_vel = dof_vel
@@ -820,7 +852,10 @@ class MotionCommand(CommandTermBase):
             # rigid-body positions are up-to-date for downstream consumers
             # (termination checks, observations, rewards).
             self._env.simulator.forward_kinematics()
-            # The teleport is an observation reset: drop history and re-render these envs.
+            # The teleport is an observation reset: re-render these envs' sensors, then drop their
+            # history. It is not an episode start, so the EPISODE_START re-render does not run.
+            simulator = self._env.simulator
+            simulator.render_sensors(ended_env_ids, simulator.simulator_config.sim.num_rerenders_on_reset)
             self._env.observation_manager.reset(ended_env_ids)
 
         self.update_relative_body_targets()
@@ -848,7 +883,7 @@ class MotionCommand(CommandTermBase):
         # update robot_root_pos_w and robot_root_quat_w, but on a backend whose body poses lag
         # until the next forward-kinematics pass, robot_body_pos_w and robot_body_quat_w still
         # hold the pre-reset poses, so robot_ref_pos_w and robot_ref_quat_w would be stale.
-        # First observed on Isaac Gym; kept as a guard for any backend with that lag.
+        # Derived body states can remain stale until the next physics update.
 
         # Solution:
         # ------------------------------------------------------------
@@ -1160,19 +1195,18 @@ class MotionCommand(CommandTermBase):
         joint_pos = self._env.default_dof_pos_base.squeeze(0).to(self.device)
         joint_vel = torch.zeros_like(joint_pos)
 
-        init_root_quat = torch.tensor(init_state.rot, dtype=torch.float32, device=self.device).unsqueeze(0)
+        init_root_quat = torch.tensor(init_state.orientation_xyzw, dtype=torch.float32, device=self.device).unsqueeze(0)
         init_roll, init_pitch, _ = get_euler_xyz(init_root_quat, w_last=True)
 
         motion_idx = -1 if use_motion_end else 0
 
-        # Assume the pelvis is the first in robot_body_names
-        motion_root_pos = self.motion.body_pos_w[motion_idx, 0].to(self.device)
-        motion_root_quat = self.motion.body_quat_w[motion_idx, 0].to(self.device).unsqueeze(0)
+        motion_root_pos = self.motion.body_pos_w[motion_idx, self.root_body_index].to(self.device)
+        motion_root_quat = self.motion.body_quat_w[motion_idx, self.root_body_index].to(self.device).unsqueeze(0)
         _, _, motion_yaw = get_euler_xyz(motion_root_quat, w_last=True)
 
         # Keep z from init config but adopt the clip's x,y at the chosen anchor frame.
         default_root_pos = torch.tensor(
-            [motion_root_pos[0], motion_root_pos[1], init_state.pos[2]],
+            [motion_root_pos[0], motion_root_pos[1], init_state.position[2]],
             dtype=torch.float32,
             device=self.device,
         ).unsqueeze(0)

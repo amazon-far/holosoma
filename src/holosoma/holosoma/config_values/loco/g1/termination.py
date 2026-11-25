@@ -8,7 +8,7 @@ g1_29dof_termination = TerminationManagerCfg(
             func="holosoma.managers.termination.terms.locomotion:contact_forces_exceeded",
             params={
                 "force_threshold": 1.0,
-                "contact_indices_attr": "termination_contact_indices",
+                "bodies": ["#root", "#shoulder_links", "#hip_links"],
             },
         ),
         "timeout": TerminationTermCfg(

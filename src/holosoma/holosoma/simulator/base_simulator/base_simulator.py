@@ -162,11 +162,11 @@ class BaseSimulator:
     contact_forces = StateTensor("Net contact force per robot body, ``[num_envs, num_bodies, 3]``.")
     contact_recorder: ContactSubstepRecorder
 
-    # Robot properties, populated by each backend during setup (see _setup_robot_props_*).
-    num_dof: int
-    num_bodies: int
-    dof_names: list[str]
-    body_names: list[str]
+    # Backend mappings populated during setup. Canonical names/counts are properties of robot_config.
+    body_ids: list[int]
+    dof_ids: list[int]
+    body_name_map: dict[str, str]
+    root_body_name: str | None  # None if the physical root is omitted from canonical body observations.
     scene: SceneInterface
     # Unified all-actors (robot + objects) root-state view: a duck-typed UnifiedRootStatesView,
     # not a torch.Tensor. Index with get_actor_indices results for any actor; supports [indices]
@@ -226,6 +226,13 @@ class BaseSimulator:
         self.sensor_render_hook: HookHandle = self.hooks.add(
             Phase.FRAME_END, self.render_sensors, name="sensors.render"
         )
+        # Re-renders the starting envs. Episode-start hooks that change what sensors see (poses,
+        # lighting, materials) declare ``before=`` this handle, so those frames show their changes.
+        self.sensor_rerender_hook: HookHandle = self.hooks.add(
+            Phase.EPISODE_START,
+            lambda env_ids: self.render_sensors(env_ids, self.simulator_config.sim.num_rerenders_on_reset),
+            name="sensors.rerender",
+        )
         # Cooperative shutdown flag: set via request_shutdown(), polled by the SimulationTask run loop.
         self.shutdown_requested = False
         self._shutdown_reason = ""
@@ -261,6 +268,31 @@ class BaseSimulator:
         # force video recording when headless_recording=true for backwards compatibility
         video_recording_enabled = self.logger_cfg.headless_recording or self.video_config.enabled
         self.video_config = dataclasses.replace(self.video_config, enabled=video_recording_enabled)
+
+    @property
+    def num_dof(self) -> int:
+        """Number of canonical robot DOFs."""
+        return len(self.robot_config.dof_names)
+
+    @property
+    def num_bodies(self) -> int:
+        """Number of canonical robot bodies."""
+        return len(self.robot_config.body_names)
+
+    @property
+    def dof_names(self) -> list[str]:
+        """Canonical robot DOFs in configured order."""
+        return self.robot_config.dof_names
+
+    @property
+    def body_names(self) -> list[str]:
+        """Canonical robot bodies in configured observation order."""
+        return self.robot_config.body_names
+
+    @property
+    def _body_list(self) -> list[str]:
+        """Legacy backend alias of canonical ``body_names``."""
+        return self.robot_config.body_names
 
     # ----- Configuration Setup Methods -----
 
@@ -304,10 +336,7 @@ class BaseSimulator:
     # ----- Robot Asset Setup Methods -----
 
     def load_assets(self) -> None:
-        """
-        Loads the robot assets into the simulation environment.
-        save self.num_dofs, self.num_bodies, self.dof_names, self.body_names
-        """
+        """Load robot assets and establish backend name/ID mappings."""
         raise NotImplementedError("The 'load_assets' method must be implemented in subclasses.")
 
     def get_supported_scene_formats(self) -> list[str]:
@@ -368,16 +397,17 @@ class BaseSimulator:
         items = sorted(items, key=lambda item: item[0])
 
         # The robot's name/type/position are fixed and it carries no scene-configured velocity,
-        # so it's the same constant entry for every backend (only its pose differs). The rest
-        # split into the SCENE (static) / INDIVIDUAL (free) bands; pose/velocity pass through.
-        entries = [("robot", ObjectType.ROBOT, 0, robot_pose, None)]
+        # so it's the same constant entry for every backend (only its pose differs). A fixed-base
+        # robot stays in the ROBOT band at slot 0 but is flagged static like a welded SCENE body.
+        # The rest split into the SCENE (static) / INDIVIDUAL (free) bands; pose/velocity pass through.
+        entries = [("robot", ObjectType.ROBOT, 0, robot_pose, None, self.robot_config.asset.fix_base_link)]
         free_pos = scene_pos = 0
         for name, is_static, pose, velocity in items:
             if is_static:
-                entries.append((name, ObjectType.SCENE, scene_pos, pose, velocity))
+                entries.append((name, ObjectType.SCENE, scene_pos, pose, velocity, True))
                 scene_pos += 1
             else:
-                entries.append((name, ObjectType.INDIVIDUAL, free_pos, pose, velocity))
+                entries.append((name, ObjectType.INDIVIDUAL, free_pos, pose, velocity, False))
                 free_pos += 1
 
         self.object_registry.setup_ranges(
@@ -387,8 +417,8 @@ class BaseSimulator:
             individual_count=free_pos,
         )
 
-        for name, object_type, position, pose, velocity in entries:
-            self.object_registry.register_object(name, object_type, position, pose, velocity)
+        for name, object_type, position, pose, velocity, is_static in entries:
+            self.object_registry.register_object(name, object_type, position, pose, velocity, is_static=is_static)
         self.object_registry.finalize_registration()
 
     def _collect_spawned_actors(
@@ -440,6 +470,8 @@ class BaseSimulator:
             int: Index of the rigid body.
         """
         raise NotImplementedError("The 'find_rigid_body_indice' method must be implemented in subclasses.")
+
+    # ----- Robot base (public, cross-backend) -----
 
     # ----- Robot rigid-body kinematics (public, cross-backend) -----
     #
@@ -958,20 +990,23 @@ class BaseSimulator:
 
     # ----- Mounted sensor interface -----
 
-    def render_sensors(self) -> None:
+    def render_sensors(self, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
         """Capture all due mounted sensors at control frequency into their cached buffers.
 
         Called once per control step from the task loop (after the physics substeps, before
         observations compute), honoring each sensor's ``update_decimation``. Consumers then do
-        cheap cached reads through the camera/LiDAR accessors."""
-        raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
+        cheap cached reads through the camera/LiDAR accessors.
 
-    def rerender_sensors(self, env_ids: torch.Tensor) -> None:
-        """Re-render ``env_ids`` for sensors that support partial rendering; other sensors keep their frame.
-
-        Body poses must already reflect the state written for those envs.
+        Args:
+            env_ids: Envs whose rows are written; ``None`` writes every env, and an empty tensor
+                renders nothing.
+            num_renders: Render every sensor now, drawing the scene this many times, without
+                advancing update cadence; 0 renders nothing. ``None`` renders the sensors due
+                this control step. Re-rendering envs whose state was written outside physics
+                (resets, teleports) passes ``sim.num_rerenders_on_reset``; body poses must
+                already reflect that state.
         """
-        self.sensor_manager.rerender(env_ids)
+        raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
 
     def get_camera_data(
         self,
