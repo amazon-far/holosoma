@@ -646,8 +646,7 @@ class IsaacSim(BaseSimulator):
 
         def write_robot_root_states(rows: torch.Tensor, root: torch.Tensor) -> None:
             env_ids = env_ids_for(rows)
-            source = root if env_ids is None else root[rows]
-            self._robot.write_root_state_to_sim(fullstate_xyzw_to_wxyz(source), env_ids=env_ids)
+            self._state_adapter.write_robot_root_states(root if env_ids is None else root[rows], env_ids)
 
         def joint_writer(write: Callable[..., None]) -> Callable[[torch.Tensor, torch.Tensor], None]:
             def flush(rows: torch.Tensor, values: torch.Tensor) -> None:

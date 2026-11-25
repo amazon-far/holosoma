@@ -366,13 +366,14 @@ def main() -> int:
             sim.video_recorder.stop_recording()
             print(f"VIDEO saved under {args.record}")
 
-    if args.result_file:
-        with open(args.result_file, "w") as fh:
-            fh.write("OK" if not fails else "FAIL\n" + "\n".join(fails))
-    for msg in fails:
-        print(f"FAIL: {msg}")
-    print("PASS" if not fails else f"{len(fails)} FAILURE(S)")
-    return 0 if not fails else 1
+        # Report inside the task: closing it shuts IsaacSim down and ends the process.
+        if args.result_file:
+            with open(args.result_file, "w") as fh:
+                fh.write("OK" if not fails else "FAIL\n" + "\n".join(fails))
+        for msg in fails:
+            print(f"FAIL: {msg}")
+        print("PASS" if not fails else f"{len(fails)} FAILURE(S)")
+        return 0 if not fails else 1
 
 
 if __name__ == "__main__":

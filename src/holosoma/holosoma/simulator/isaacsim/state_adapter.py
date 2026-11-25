@@ -180,8 +180,8 @@ class IsaacSimStateAdapter:
         # Mark states as dirty for batch synchronization
         self.mark_dirty()
 
-    def write_robot_root_states(self, states: torch.Tensor, env_ids: torch.Tensor) -> None:
-        """Write ``[len(env_ids), 13]`` xyzw robot root states; the single robot root writer.
+    def write_robot_root_states(self, states: torch.Tensor, env_ids: torch.Tensor | None) -> None:
+        """Write ``[len(env_ids), 13]`` xyzw robot root states, or every env's with ``env_ids=None``.
 
         Floating base: pose and velocity go to the sim. Fixed base: nonzero velocity raises ValueError,
         and the pose is written (a kinematic teleport) only when it differs from the robot's current
@@ -193,7 +193,8 @@ class IsaacSimStateAdapter:
             )
         states_wxyz = fullstate_xyzw_to_wxyz(states)
         if self._robot_fixed_base:
-            current = self._robot.data.root_state_w[env_ids, :7]  # wxyz, reflects the last write
+            root = self._robot.data.root_state_w
+            current = (root if env_ids is None else root[env_ids])[:, :7]  # wxyz, reflects the last write
             if root_pose_changed(states_wxyz[:, :7], current):
                 self._robot.write_root_pose_to_sim(states_wxyz[:, :7], env_ids)
             return
