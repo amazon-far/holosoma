@@ -15,6 +15,7 @@ source scripts/source_mujoco_setup.sh
 pip install -e 'src/holosoma[unitree,booster]'
 pip install -e src/holosoma_inference
 
-# requires_inference is the only marker that selects the train -> export -> run_policy tests; the
-# training backend comes from the pinned `simulator:` token in the test, not from this env.
-pytest -s --strict-markers --ignore=thirdparty --ignore=src/holosoma_inference -m "requires_inference"
+# requires_inference selects the train -> export -> run_policy tests; the training backend comes from
+# the pinned `simulator:` token in the test, not from this env. multi_env selects tests that start a
+# second simulator env themselves, such as an Isaac Sim co-simulation renderer.
+pytest -s --strict-markers --ignore=thirdparty --ignore=src/holosoma_inference -m "requires_inference or multi_env"

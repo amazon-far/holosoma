@@ -98,6 +98,27 @@ class ClockPublishPluginConfig(PluginConfig):
 
 
 @dataclass(frozen=True)
+class CosimPluginConfig(PluginConfig):
+    """Base config for a plugin that shares this simulator's state with a co-simulation peer."""
+
+    endpoint: str = ""
+    """ZeroMQ endpoint the peer listens on, e.g. ``ipc:///tmp/$USER/cosim.sock``."""
+
+
+@dataclass(frozen=True)
+class CosimRenderPluginConfig(CosimPluginConfig):
+    """Publish this simulator's state to a co-simulation renderer, and take remote cameras' images from it.
+
+    Start the renderer first: ``python -m holosoma.cosim.render --endpoint <endpoint> <run_sim args>``.
+    """
+
+    def get_cls(self) -> Callable[..., Any]:
+        from holosoma.cosim.render.plugin import CosimRenderPlugin
+
+        return CosimRenderPlugin
+
+
+@dataclass(frozen=True)
 class GantryControlPluginConfig(PluginConfig):
     """Control and monitor the virtual gantry over independent ROS2 topics.
 
