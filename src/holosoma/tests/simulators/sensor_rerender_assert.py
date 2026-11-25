@@ -26,7 +26,7 @@ from holosoma.config_types.sensor import (
     LidarSensorConfig,
     SensorMountConfig,
 )
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
 
 _RAISE = 0.3
