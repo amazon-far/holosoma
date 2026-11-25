@@ -13,7 +13,7 @@ contracts (the virtual gantry, the clock, etc.). Each plugin pairs:
   registers its hooks on ``task.hooks`` works (duck-typed).
 
 The config is resolved on the CLI as a dynamic-dict field (see ``RunSimConfig.plugin``);
-``BaseTask`` instantiates each ``get_cls()`` at the end of task setup.
+``BaseTask`` instantiates each ``get_cls()`` once the simulator is ready, before the managers are built.
 """
 
 from __future__ import annotations
@@ -97,6 +97,27 @@ class ClockPublishPluginConfig(PluginConfig):
         from holosoma.simulator.shared.ros2_plugins import ClockPublishPlugin
 
         return ClockPublishPlugin
+
+
+@dataclass(frozen=True)
+class CosimPluginConfig(PluginConfig):
+    """Base config for a plugin that shares this simulator's state with a co-simulation peer."""
+
+    endpoint: str = ""
+    """ZeroMQ endpoint the peer listens on, e.g. ``ipc:///tmp/$USER/cosim.sock``."""
+
+
+@dataclass(frozen=True)
+class CosimRenderPluginConfig(CosimPluginConfig):
+    """Publish this simulator's state to a co-simulation renderer, and take remote cameras' images from it.
+
+    Start the renderer first: ``python -m holosoma.cosim.render --endpoint <endpoint> <run_sim args>``.
+    """
+
+    def get_cls(self) -> Callable[..., Any]:
+        from holosoma.cosim.render.plugin import CosimRenderPlugin
+
+        return CosimRenderPlugin
 
 
 @dataclass(frozen=True)
