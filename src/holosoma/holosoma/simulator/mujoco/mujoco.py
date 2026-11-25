@@ -1231,7 +1231,8 @@ class MuJoCo(BaseSimulator):
         """Capture all due mounted sensors into their cached buffers."""
         render_sensors(self)
 
-    def _rerender_backend_sensors(self, env_ids: torch.Tensor) -> None:
+    def rerender_sensors(self, env_ids: torch.Tensor) -> None:
+        """Re-render ``env_ids`` into the mounted sensors' cached buffers."""
         rerender_sensors(self, env_ids)
 
     def setup_viewer(self) -> None:

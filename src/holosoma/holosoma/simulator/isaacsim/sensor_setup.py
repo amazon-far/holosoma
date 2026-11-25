@@ -717,8 +717,10 @@ def render_lidars(sim: IsaacSim, env_ids: torch.Tensor | None = None) -> None:
 def rerender_sensors(sim: IsaacSim, env_ids: torch.Tensor) -> None:
     """Re-render ``env_ids`` for every camera and LiDAR, leaving other envs' rows unchanged.
 
-    RTX cameras render ``sim.num_rerenders_on_reset`` times; ray-cast cameras and LiDARs cast once.
-    A sensor with no frame yet is captured for every env."""
+    RTX cameras render ``sim.num_rerenders_on_reset`` times; ray-cast cameras and LiDARs cast once,
+    and nothing re-renders at 0. A sensor with no frame yet is captured for every env."""
+    if sim.simulator_config.sim.num_rerenders_on_reset == 0:
+        return
     for record in sim.sensor_manager.cameras:
         if record.name in sim.raycast_cameras:
             sim.raycast_cameras[record.name].render(record, env_ids)

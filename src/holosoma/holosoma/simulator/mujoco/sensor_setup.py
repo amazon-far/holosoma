@@ -407,7 +407,10 @@ def render_lidars(sim: MuJoCo, env_ids: torch.Tensor | None = None) -> None:
 def rerender_sensors(sim: MuJoCo, env_ids: torch.Tensor) -> None:
     """Re-render ``env_ids`` for every camera and LiDAR once, leaving other envs' rows unchanged.
 
-    A LiDAR with no scan yet is captured for every env."""
+    No-op unless ``sim.num_rerenders_on_reset`` is above 0. A LiDAR with no scan yet is captured
+    for every env."""
+    if sim.simulator_config.sim.num_rerenders_on_reset == 0:
+        return
     if isinstance(sim.backend, WarpBackend):
         # The reset moved geometry since this frame's BVH refit.
         sim.backend.begin_sensor_render()

@@ -1024,12 +1024,7 @@ class BaseSimulator:
         ``sim.num_rerenders_on_reset`` is above 0, and otherwise keep their frame. Body poses must
         already reflect the state written for those envs.
         """
-        if self.simulator_config.sim.num_rerenders_on_reset > 0:
-            self._rerender_backend_sensors(env_ids)
-
-    def _rerender_backend_sensors(self, env_ids: torch.Tensor) -> None:
-        """Re-render ``env_ids`` for every camera and LiDAR."""
-        raise NotImplementedError("The '_rerender_backend_sensors' method must be implemented in subclasses.")
+        raise NotImplementedError("The 'rerender_sensors' method must be implemented in subclasses.")
 
     def get_camera_data(
         self,

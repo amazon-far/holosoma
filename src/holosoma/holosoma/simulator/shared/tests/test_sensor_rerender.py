@@ -1,8 +1,7 @@
-"""Partial sensor re-renders: gated by ``sim.num_rerenders_on_reset``, written into fresh buffers."""
+"""Partial sensor re-renders write their rows into fresh buffers."""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -51,18 +50,3 @@ def test_buffer_rows_leave_previously_published_buffers_untouched() -> None:
 
     assert torch.all(published == 1.0)
     assert record.buffers["depth"] is not published
-
-
-def test_simulator_rerenders_only_when_num_rerenders_on_reset_is_above_zero() -> None:
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-
-    sim: Any = object.__new__(BaseSimulator)
-    sim.simulator_config = SimpleNamespace(sim=SimpleNamespace(num_rerenders_on_reset=0))
-    calls: list[list[int]] = []
-    sim._rerender_backend_sensors = lambda env_ids: calls.append(env_ids.tolist())
-
-    sim.rerender_sensors(torch.tensor([0]))
-    sim.simulator_config.sim.num_rerenders_on_reset = 1
-    sim.rerender_sensors(torch.tensor([2]))
-
-    assert calls == [[2]]

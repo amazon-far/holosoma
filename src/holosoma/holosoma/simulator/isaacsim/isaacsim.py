@@ -319,7 +319,8 @@ class IsaacSim(BaseSimulator):
         """Capture all due mounted sensors into their cached buffers."""
         sensor_setup.render_sensors(self)
 
-    def _rerender_backend_sensors(self, env_ids: torch.Tensor) -> None:
+    def rerender_sensors(self, env_ids: torch.Tensor) -> None:
+        """Re-render ``env_ids`` into the mounted sensors' cached buffers."""
         sensor_setup.rerender_sensors(self, env_ids)
 
     def _get_base_body_name(self, preference_order: list[str]) -> str:
