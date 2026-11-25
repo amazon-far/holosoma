@@ -1,9 +1,8 @@
-"""Partial sensor re-renders: only sensors with a ``rerender`` callback redraw, into fresh buffers."""
+"""Partial sensor re-renders write their rows into fresh buffers."""
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -29,18 +28,6 @@ def _depth_camera(manager: SensorManager, name: str) -> Any:
     return record
 
 
-def test_sensor_manager_rerenders_only_sensors_that_support_it() -> None:
-    manager = SensorManager(device="cpu", control_hz=50.0)
-    partial = _depth_camera(manager, "partial")
-    _depth_camera(manager, "full_only")
-    calls: list[list[int]] = []
-    partial.rerender = lambda env_ids: calls.append(env_ids.tolist())
-
-    manager.rerender(torch.tensor([1, 2]))
-
-    assert calls == [[1, 2]]
-
-
 def test_camera_buffer_rows_apply_depth_clipping_and_drop_device_copies() -> None:
     manager = SensorManager(device="cpu", control_hz=50.0)
     record = _depth_camera(manager, "cam")
@@ -63,15 +50,3 @@ def test_buffer_rows_leave_previously_published_buffers_untouched() -> None:
 
     assert torch.all(published == 1.0)
     assert record.buffers["depth"] is not published
-
-
-def test_simulator_rerender_with_empty_sensor_manager_is_a_no_op() -> None:
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-
-    sim: Any = object.__new__(BaseSimulator)
-    sim.sensor_manager = SensorManager("cpu", 50.0)
-    sim.rerender_sensors(torch.tensor([0]))
-
-    sim.sensor_manager = MagicMock()
-    sim.rerender_sensors(torch.tensor([0]))
-    sim.sensor_manager.rerender.assert_called_once()

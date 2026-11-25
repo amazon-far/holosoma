@@ -122,13 +122,6 @@ def initialize_camera_mounts(sim: MuJoCo) -> None:
         sim.sensor_manager.set_mount_pose(camera.name, sim.sensor_manager.get_mount_pose(camera.name))
 
 
-def render_cameras(sim: MuJoCo) -> None:
-    """Render due cameras into their cached output buffers."""
-    due = sim.sensor_manager.collect_due()
-    if due:
-        sim.backend.render_cameras(due)
-
-
 def register_lidars(sim: MuJoCo, manager: SensorManager) -> None:
     """Register configured LiDARs and resolve their compiled query ids."""
     assert sim.root_model is not None
@@ -280,7 +273,7 @@ def _warp_workspace(
     return workspace
 
 
-def _render_cpu(sim: MuJoCo, sensor_record: LidarRecord) -> None:
+def _render_cpu(sim: MuJoCo, sensor_record: LidarRecord, *, env_ids: torch.Tensor | None = None) -> None:
     assert sim.root_model is not None
     pattern = sensor_record.pattern_at(sim.time())
     directions_local = pattern.directions.to("cpu")
@@ -295,7 +288,7 @@ def _render_cpu(sim: MuJoCo, sensor_record: LidarRecord) -> None:
     distances_by_env = []
     geom_ids_by_env = []
     local_np = directions_local.numpy().astype(np.float64, copy=False)
-    for env_id in range(sim.num_envs):
+    for env_id in range(sim.num_envs) if env_ids is None else env_ids.tolist():
         data = sim.backend.get_render_data(world_id=env_id)
         origin = data.site_xpos[site_id].copy()
         if sensor_record.config.mount.target_kind == "world":
@@ -319,6 +312,7 @@ def _render_cpu(sim: MuJoCo, sensor_record: LidarRecord) -> None:
         pattern.directions,
         torch.stack(distances_by_env).to(sim.sim_device),
         geom_ids=torch.stack(geom_ids_by_env).to(sim.sim_device),
+        env_ids=env_ids,
     )
 
 
@@ -328,6 +322,8 @@ def _render_warp(
     backend: WarpBackend,
     ray_context: Any,
     sim_time: float,
+    *,
+    env_ids: torch.Tensor | None = None,
 ) -> None:
     import mujoco_warp as mjw
     import warp as wp
@@ -367,11 +363,15 @@ def _render_warp(
             workspace.graph = capture.graph
         wp.capture_launch(workspace.graph)
     consumer_stream.wait_stream(workspace.torch_stream)
-    finalize_lidar_returns(sensor_record, directions_local, workspace.distances, geom_ids=workspace.geom_ids)
+    distances, geom_ids = workspace.distances, workspace.geom_ids
+    if env_ids is not None:
+        rows = env_ids.to(distances.device)
+        distances, geom_ids = distances[rows], geom_ids[rows]
+    finalize_lidar_returns(sensor_record, directions_local, distances, geom_ids=geom_ids, env_ids=env_ids)
 
 
-def render_lidars(sim: MuJoCo) -> None:
-    due = sim.sensor_manager.collect_lidars_due()
+def render_lidars(sim: MuJoCo, due: list[LidarRecord], env_ids: torch.Tensor | None = None) -> None:
+    """Scan the ``due`` LiDARs, writing only the ``env_ids`` rows when given."""
     if isinstance(sim.backend, WarpBackend):
         if not due:
             return
@@ -386,10 +386,10 @@ def render_lidars(sim: MuJoCo) -> None:
         ray_context = sim.backend.prepare_lidar_ray_context(enabled_geom_groups or [0, 1, 2])
         sim_time = sim.time()
         for sensor_record in due:
-            _render_warp(sim, sensor_record, sim.backend, ray_context, sim_time)
+            _render_warp(sim, sensor_record, sim.backend, ray_context, sim_time, env_ids=env_ids)
         return
     for sensor_record in due:
-        _render_cpu(sim, sensor_record)
+        _render_cpu(sim, sensor_record, env_ids=env_ids)
 
 
 def create_sensors(sim: MuJoCo) -> None:
@@ -402,11 +402,21 @@ def create_sensors(sim: MuJoCo) -> None:
     register_lidars(sim, manager)
 
 
-def render_sensors(sim: MuJoCo) -> None:
-    """Capture all camera and LiDAR sensors due this control step."""
-    if not sim.sensor_config:
+def render_sensors(sim: MuJoCo, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
+    """Capture all camera and LiDAR sensors due this control step.
+
+    With ``num_renders``, every sensor is captured instead, once: MuJoCo renders the same image each
+    time. Only the ``env_ids`` rows are written when given; ``num_renders=0`` or an empty ``env_ids``
+    renders nothing."""
+    if not sim.sensor_config or num_renders == 0 or (env_ids is not None and env_ids.numel() == 0):
         return
     if isinstance(sim.backend, WarpBackend):
+        # Geometry may have moved since the last BVH refit (a physics step, or a state write).
         sim.backend.begin_sensor_render()
-    render_cameras(sim)
-    render_lidars(sim)
+    manager = sim.sensor_manager
+    # A forced render takes every sensor; only the per-step render advances update cadence.
+    cameras = manager.cameras if num_renders is not None else manager.collect_due()
+    lidars = manager.lidars if num_renders is not None else manager.collect_lidars_due()
+    if cameras:
+        sim.backend.render_cameras(cameras, env_ids)
+    render_lidars(sim, lidars, env_ids)

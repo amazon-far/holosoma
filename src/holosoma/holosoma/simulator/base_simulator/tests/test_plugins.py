@@ -103,7 +103,7 @@ class _InitializedFakeSim(BaseSimulator):
         )
         super().__init__(cast("Any", config), cast("Any", None), "cpu")
 
-    def render_sensors(self) -> None:
+    def render_sensors(self, env_ids: Any = None, num_renders: Any = None) -> None:
         self.latest_sensor_value = "fresh"
         self.events.append("render")
 

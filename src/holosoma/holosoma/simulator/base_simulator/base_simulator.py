@@ -225,6 +225,13 @@ class BaseSimulator:
         self.sensor_render_hook: HookHandle = self.hooks.add(
             Phase.FRAME_END, self.render_sensors, name="sensors.render"
         )
+        # Re-renders the starting envs. Episode-start hooks that change what sensors see (poses,
+        # lighting, materials) declare ``before=`` this handle, so those frames show their changes.
+        self.sensor_rerender_hook: HookHandle = self.hooks.add(
+            Phase.EPISODE_START,
+            lambda env_ids: self.render_sensors(env_ids, self.simulator_config.sim.num_rerenders_on_reset),
+            name="sensors.rerender",
+        )
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
         self._closed = False
@@ -1028,20 +1035,23 @@ class BaseSimulator:
 
     # ----- Mounted sensor interface -----
 
-    def render_sensors(self) -> None:
+    def render_sensors(self, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
         """Capture all due mounted sensors at control frequency into their cached buffers.
 
         Called once per control step from the task loop (after the physics substeps, before
         observations compute), honoring each sensor's ``update_decimation``. Consumers then do
-        cheap cached reads through the camera/LiDAR accessors."""
-        raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
+        cheap cached reads through the camera/LiDAR accessors.
 
-    def rerender_sensors(self, env_ids: torch.Tensor) -> None:
-        """Re-render ``env_ids`` for sensors that support partial rendering; other sensors keep their frame.
-
-        Body poses must already reflect the state written for those envs.
+        Args:
+            env_ids: Envs whose rows are written; ``None`` writes every env, and an empty tensor
+                renders nothing.
+            num_renders: Render every sensor now, drawing the scene this many times, without
+                advancing update cadence; 0 renders nothing. ``None`` renders the sensors due
+                this control step. Re-rendering envs whose state was written outside physics
+                (resets, teleports) passes ``sim.num_rerenders_on_reset``; body poses must
+                already reflect that state.
         """
-        self.sensor_manager.rerender(env_ids)
+        raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
 
     def get_camera_data(
         self,

@@ -17,6 +17,7 @@ import torch
 from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
 from holosoma.config_types.robot import RobotConfig
+from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.envs.simulation_task import SimulationTask
 from holosoma.managers.randomization import RandomizationManager
 from holosoma.managers.termination import TerminationManager
@@ -338,3 +339,32 @@ def test_playback_egresses_every_clip_frame_exactly_once(
     _run(sim)
 
     assert sim.captured == CLIP_JOINT0 * clips
+
+
+def test_episode_start_hooks_run_after_reset_randomization() -> None:
+    sim = _FakeSim(frames=1)
+    task = _LoopTask(sim)
+    task.episode_count = torch.zeros(task.num_envs, dtype=torch.long)
+    order: list[str] = []
+
+    def record(step: str) -> Any:
+        def _record(*_args: Any) -> None:
+            order.append(step)
+
+        return _record
+
+    task._reset_envs_idx_impl = record("write state")  # type: ignore[method-assign]
+    task._reset_task_managers = record("reset managers")  # type: ignore[method-assign]
+    task.reset_manager = SimpleNamespace(reset_scene=record("reset events"))  # type: ignore[assignment]
+    task._refresh_envs_after_reset = record("forward kinematics")  # type: ignore[method-assign]
+    task.hooks.add(Phase.EPISODE_START, record("episode start"), name="t.start")
+
+    BaseTask.reset_envs_idx(task, torch.tensor([0]))
+
+    assert order == [
+        "write state",
+        "reset managers",
+        "reset events",
+        "forward kinematics",
+        "episode start",
+    ]

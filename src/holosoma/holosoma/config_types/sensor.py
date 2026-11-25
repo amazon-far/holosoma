@@ -222,8 +222,8 @@ class IsaacSimCameraConfig:
     """``"rtx"`` renders with an RTX ``TiledCamera``. ``"raycast"`` ray casts depth with Warp against
     loaded scene geometry selected by :attr:`mesh_prim_paths` at its current poses: depth only,
     pinhole only, mounted on a link in the robot config's ``body_names``, no RTX render pass, and
-    envs reset or teleported in a control step are re-rendered at their new state. Other backends
-    ignore it and render the camera natively. Defaults to ``"rtx"``."""
+    with ``sim.num_rerenders_on_reset`` above 0 only the reset or teleported envs are re-cast.
+    Other backends ignore it and render the camera natively. Defaults to ``"rtx"``."""
 
     mesh_prim_paths: list[str] | None = None
     """For ``renderer="raycast"``: USD prim paths or expressions to ray cast against, with the same

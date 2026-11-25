@@ -232,7 +232,7 @@ class ClassicBackend(IMujocoBackend):
         if failures:
             raise RuntimeError(f"Failed to close MuJoCo renderer(s): {'; '.join(failures)}")
 
-    def render_cameras(self, cameras: list[CameraRecord]) -> None:
+    def render_cameras(self, cameras: list[CameraRecord], env_ids: torch.Tensor | None = None) -> None:
         # per-world render via the size-shared mujoco.Renderer (num_envs==1).
         # No-hit reads the global far-clip plane (vis.map.zfar * extent, set across all cameras in
         # the simulator's _create_sensors); remap it to +inf. The far value comes back ~0.1% under
@@ -250,7 +250,7 @@ class ClassicBackend(IMujocoBackend):
                 if dt == "depth":
                     array[array >= far_clip * 0.99] = np.inf
                 tensor = torch.from_numpy(array).unsqueeze(0).to(self.device)
-                sensor_record.set_buffer(dt, tensor)  # [1,H,W,C]
+                sensor_record.set_buffer(dt, tensor)  # [1,H,W,C]; one env, so every env_ids is the whole frame
 
     def get_ctrl_tensor(self) -> None:
         """Classic backend doesn't support direct tensor writes.

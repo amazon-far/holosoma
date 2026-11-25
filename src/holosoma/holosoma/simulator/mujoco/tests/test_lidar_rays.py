@@ -240,13 +240,13 @@ def test_mjwarp_shares_one_refitted_context_across_all_due_lidars(monkeypatch: p
     )
     rendered = []
 
-    def capture_render(simulator, record, render_backend, ray_context, sim_time) -> None:
+    def capture_render(simulator, record, render_backend, ray_context, sim_time, env_ids=None) -> None:
         rendered.append((record.name, render_backend, ray_context, sim_time))
 
     monkeypatch.setattr(sensor_setup, "WarpBackend", _FakeWarpBackend)
     monkeypatch.setattr(sensor_setup, "_render_warp", capture_render)
 
-    sensor_setup.render_lidars(sim)
+    sensor_setup.render_lidars(sim, sim.sensor_manager.collect_lidars_due())
 
     assert backend.prepare_calls == [[0, 1, 2, 3, 4, 5]]
     assert rendered == [
@@ -444,7 +444,7 @@ def test_mjwarp_lidar_reuses_camera_bvh_without_duplicate_same_frame_refit(
     monkeypatch.setattr(
         sensor_setup,
         "_render_warp",
-        lambda simulator, record, render_backend, context, sim_time: rendered.append(
+        lambda simulator, record, render_backend, context, sim_time, **_kwargs: rendered.append(
             (simulator, record, render_backend, context, sim_time)
         ),
     )
@@ -803,7 +803,7 @@ def test_registered_robot_filter_excludes_reserved_groups_and_none_preserves_aut
     original_rgba = model.geom_rgba.copy()
 
     sensor_setup.register_lidars(sim, manager)
-    sensor_setup.render_lidars(sim)
+    sensor_setup.render_lidars(sim, sim.sensor_manager.collect_lidars_due())
 
     record = manager.get_lidar("scan")
     torch.testing.assert_close(record.buffers["ranges"], torch.tensor([[1.9, 1.9]], dtype=torch.float32))
@@ -873,7 +873,7 @@ def test_registered_explicit_body_filter_renders_target_behind_shell() -> None:
     )
 
     sensor_setup.register_lidars(sim, manager)
-    sensor_setup.render_lidars(sim)
+    sensor_setup.render_lidars(sim, sim.sensor_manager.collect_lidars_due())
 
     record = manager.get_lidar("scan")
     assert record.backend_cache["mujoco_body_exclude_id"] == model.body("unit_head_link").id

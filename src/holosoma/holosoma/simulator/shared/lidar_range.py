@@ -19,6 +19,9 @@ class LidarReturnRecord(Protocol):
     def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
         """Store one output tensor for the current scan."""
 
+    def set_buffer_rows(self, output: str, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
+        """Overwrite the ``env_ids`` rows of one existing output."""
+
 
 def points_from_ranges(directions: torch.Tensor, ranges: torch.Tensor) -> torch.Tensor:
     """Convert reported radial ranges into sensor-frame XYZ, preserving configured sentinels."""
@@ -33,15 +36,23 @@ def finalize_lidar_returns(
     distances: torch.Tensor,
     *,
     geom_ids: torch.Tensor | None = None,
+    env_ids: torch.Tensor | None = None,
 ) -> None:
-    """Apply range clipping and store backend-neutral output buffers for one LiDAR scan."""
+    """Apply range clipping and store backend-neutral output buffers for one LiDAR scan.
+
+    With ``env_ids``, ``distances`` and ``geom_ids`` hold only those envs' rows, which overwrite the
+    matching rows of the existing buffers."""
     result = clip_sensor_ranges(
         distances,
         near=sensor_record.config.near,
         far=sensor_record.config.far,
         behavior=sensor_record.config.range_clipping_behavior,
     )
-    sensor_record.set_buffer("ranges", result.ranges)
-    sensor_record.set_buffer("points", points_from_ranges(directions, result.ranges))
+    outputs = {"ranges": result.ranges, "points": points_from_ranges(directions, result.ranges)}
     if geom_ids is not None:
-        sensor_record.set_buffer("geom_ids", torch.where(result.hit_mask, geom_ids, -1).to(torch.int32))
+        outputs["geom_ids"] = torch.where(result.hit_mask, geom_ids, -1).to(torch.int32)
+    for output, tensor in outputs.items():
+        if env_ids is None:
+            sensor_record.set_buffer(output, tensor)
+        else:
+            sensor_record.set_buffer_rows(output, env_ids, tensor)

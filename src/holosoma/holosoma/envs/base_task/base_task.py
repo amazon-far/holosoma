@@ -154,6 +154,8 @@ class BaseTask:
         # Plugins may depend on backend/provider resources created above. Their CLOSE hooks are
         # registered last and therefore run first during reverse-order teardown.
         self.simulator.install_plugins()
+        # Give every sensor a frame before the first reset, so a re-render has rows to update.
+        self.simulator.render_sensors(num_renders=1)
 
         self._initialize_task_managers()
 
