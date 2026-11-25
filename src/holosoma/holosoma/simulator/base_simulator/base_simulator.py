@@ -225,6 +225,11 @@ class BaseSimulator:
         self.sensor_render_hook: HookHandle = self.hooks.add(
             Phase.FRAME_END, self.render_sensors, name="sensors.render"
         )
+        # Episode-start hooks that change what sensors see (poses, lighting, materials) declare
+        # ``before=`` this handle, so the starting envs' frames show their changes.
+        self.sensor_rerender_hook: HookHandle = self.hooks.add(
+            Phase.EPISODE_START, self.rerender_sensors, name="sensors.rerender"
+        )
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
         self._closed = False
@@ -1012,11 +1017,21 @@ class BaseSimulator:
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
 
     def rerender_sensors(self, env_ids: torch.Tensor) -> None:
-        """Re-render ``env_ids`` for sensors that support partial rendering; other sensors keep their frame.
+        """Re-render ``env_ids`` into the sensor buffers, leaving other envs' rows unchanged.
 
-        Body poses must already reflect the state written for those envs.
+        Runs as the :attr:`sensor_rerender_hook` on ``EPISODE_START``; a mid-episode teleport that
+        needs fresh frames calls it directly. Ray-cast cameras always re-render. Other sensors
+        re-render only when ``sim.num_rerenders_on_reset`` is above 0, and otherwise keep their
+        frame. Body poses must already reflect the state written for those envs.
         """
+        if self.simulator_config.sim.num_rerenders_on_reset > 0:
+            self._rerender_backend_sensors(env_ids)
         self.sensor_manager.rerender(env_ids)
+
+    def _rerender_backend_sensors(self, env_ids: torch.Tensor) -> None:
+        """Re-render ``env_ids`` for the sensors the backend renders itself: cameras without a
+        ``rerender`` callback, and LiDARs."""
+        raise NotImplementedError("The '_rerender_backend_sensors' method must be implemented in subclasses.")
 
     def get_camera_data(
         self,

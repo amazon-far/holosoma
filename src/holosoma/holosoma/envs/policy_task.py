@@ -127,10 +127,13 @@ class PolicyTask(BaseTask):
     # Reset hooks
 
     def _prepare_reset(self, env_ids: torch.Tensor) -> None:
-        # Reset observation history BEFORE state changes (must happen first to clear history buffers)
-        self.observation_manager.reset(env_ids)
         self._pending_episode_lengths[env_ids] = self.episode_length_buf[env_ids]
         self._pending_episode_update_mask[env_ids] = True
+
+    def _start_episodes(self, env_ids: torch.Tensor) -> None:
+        # After the EPISODE_START hooks, so terms reset against re-rendered sensors.
+        super()._start_episodes(env_ids)
+        self.observation_manager.reset(env_ids)
 
     def _reset_task_managers(self, env_ids: torch.Tensor) -> None:
         reward_extras = self.reward_manager.reset(env_ids)

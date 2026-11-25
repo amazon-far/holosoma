@@ -820,7 +820,9 @@ class MotionCommand(CommandTermBase):
             # rigid-body positions are up-to-date for downstream consumers
             # (termination checks, observations, rewards).
             self._env.simulator.forward_kinematics()
-            # The teleport is an observation reset: drop history and re-render these envs.
+            # The teleport is an observation reset: re-render these envs' sensors, then drop their
+            # history. It is not an episode start, so the EPISODE_START re-render does not run.
+            self._env.simulator.rerender_sensors(ended_env_ids)
             self._env.observation_manager.reset(ended_env_ids)
 
         self.update_relative_body_targets()

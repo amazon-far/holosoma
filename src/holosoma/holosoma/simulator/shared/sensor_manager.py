@@ -33,7 +33,8 @@ class SensorRecord:
     effective_decimation: int = 1
     rerender: Callable[[torch.Tensor], None] | None = None
     """Re-render only the given env ids into the existing buffers, or ``None`` if the backend
-    can only render every env. Called after resets/teleports (``SensorManager.rerender``)."""
+    can only render every env. Called from ``BaseSimulator.rerender_sensors`` on episode starts
+    and teleports."""
     mount_poses: torch.Tensor | None = None
     """Runtime offsets ``[N, 7]`` in XYZ + XYZW order, independent of the immutable config."""
     write_mount_pose: Callable[[torch.Tensor, torch.Tensor], None] | None = None
@@ -50,6 +51,14 @@ class SensorRecord:
         buffer[env_ids] = rows
         self.buffers[output] = buffer
         self._drop_device_cache(output)
+
+    def set_frame(self, output: str, frame: torch.Tensor, env_ids: torch.Tensor | None = None) -> None:
+        """Store an every-env ``frame``, or only its ``env_ids`` rows once ``output`` has a buffer."""
+        if env_ids is None or output not in self.buffers:
+            self.set_buffer(output, frame)
+        else:
+            rows = env_ids.to(frame.device)
+            self.set_buffer_rows(output, rows, frame[rows])
 
     def _drop_device_cache(self, output: str) -> None:
         for key in [key for key in self._device_cache if key[0] == output]:
@@ -103,6 +112,8 @@ class LidarRecord(SensorRecord):
     pattern_provider: LidarPatternProvider | None = None
     backend_cache: dict[str, Any] = field(default_factory=dict)
     """Backend-owned fixed-shape query buffers and compiled work for this LiDAR."""
+    scan_directions: torch.Tensor | None = None
+    """Optical-frame ``[R, 3]`` directions of the scan held in :attr:`buffers`; re-renders reuse them."""
 
     @property
     def pattern_shape(self) -> tuple[int, int]:
@@ -294,8 +305,8 @@ class SensorManager:
     def rerender(self, env_ids: torch.Tensor) -> None:
         """Re-render ``env_ids`` for every sensor that supports partial rendering.
 
-        Sensors without a ``rerender`` callback keep their last frame, so for one control step
-        these envs observe the state from before their reset or teleport."""
+        Sensors without a ``rerender`` callback are left to the simulator's backend re-render
+        (``sim.num_rerenders_on_reset``) and otherwise keep their last frame."""
         records: list[SensorRecord] = [*self.cameras, *self.lidars]
         for record in records:
             if record.rerender is not None:
