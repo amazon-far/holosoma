@@ -26,6 +26,8 @@ _ROOT_HEIGHT = 0.76
 _ANGLE = math.radians(15)
 _RAMP_POSITION = [0.80, 0.0, 0.22]
 _DURATION = 2.25
+_SOURCES = ("ball", "robot", "torso", "wrist", "incline", "stationary")
+_COUNTERPARTS = (*_SOURCES, "terrain")
 
 
 def _build(backend: str, num_envs: int, device: str | None, record_dir: str | None) -> Any:
@@ -49,17 +51,16 @@ def _build(backend: str, num_envs: int, device: str | None, record_dir: str | No
     terrain = ContactTargetConfig(target_kind="terrain")
     hit = ContactTargetConfig(target_kind="robot_link", target="torso_link")
     untouched = ContactTargetConfig(target_kind="robot_link", target="right_wrist_yaw_link")
-    pairs = ContactSensorConfig(sources=[actor("ball")], counterparts=[robot, actor("incline"), terrain])
-    sensors = {
-        "ball_pairs": pairs,
-        "ball_total": dataclasses.replace(pairs, force_mode="total"),
-        "ball_links": ContactSensorConfig(sources=[actor("ball")], counterparts=[hit, untouched]),
-        "robot_ball": ContactSensorConfig(sources=[robot], counterparts=[actor("ball")]),
-        "link_ball": ContactSensorConfig(sources=[hit], counterparts=[actor("ball")]),
-        "incline_ball": ContactSensorConfig(sources=[actor("incline")], counterparts=[actor("ball")]),
-        "stationary_ground": ContactSensorConfig(sources=[actor("stationary")], counterparts=[terrain]),
-        "robot_ground": ContactSensorConfig(sources=[robot], counterparts=[terrain]),
-    }
+    sources = [actor("ball"), robot, hit, untouched, actor("incline"), actor("stationary")]
+    # Robot and link counterparts overlap, so they use separate matrices.
+    sensors = {}
+    for mode in ("normal", "total"):
+        sensors[f"scene_{mode}"] = ContactSensorConfig(
+            sources=sources,
+            counterparts=[actor("ball"), robot, actor("incline"), actor("stationary"), terrain],
+            force_mode=mode,
+        )
+        sensors[f"links_{mode}"] = ContactSensorConfig(sources=sources, counterparts=[hit, untouched], force_mode=mode)
 
     def physics(mass: float, *, projectile: bool = False) -> PhysicsConfig:
         return PhysicsConfig(
@@ -168,6 +169,8 @@ def _run(sim: Any, record: bool) -> dict[str, Any]:
     samples: dict[str, list[Any]] = {name: [] for name in sim.sensor_config}
     states: list[Any] = []
     roots: list[Any] = []
+    torso_poses: list[Any] = []
+    torso_id = sim.find_rigid_body_indice("torso_link")
     initial_ball = sim.get_actor_states(["ball"], ids).clone()
 
     def support_robot() -> None:
@@ -185,6 +188,12 @@ def _run(sim: Any, record: bool) -> dict[str, Any]:
             history.append(sim.get_contact_data(name, "force_matrix").clone())
         states.append(sim.get_actor_states(["ball", "stationary"], ids).reshape(2, sim.num_envs, 13).clone())
         roots.append(sim.robot_root_states.clone())
+        torso_poses.append(
+            torch.cat(
+                [sim.rigid_body_pos_w[:, torso_id], sim.rigid_body_quat_w[:, torso_id]],
+                dim=-1,
+            ).clone()
+        )
 
     sim.hooks.add(Phase.PRE_STEP, support_robot, name="contact_rich.support")
     sim.hooks.add(Phase.POST_STEP, collect, name="contact_rich.collect")
@@ -210,42 +219,83 @@ def _run(sim: Any, record: bool) -> dict[str, Any]:
         "forces": {name: torch.stack(values).cpu() for name, values in samples.items()},
         "states": torch.stack(states).cpu(),
         "roots": torch.stack(roots).cpu(),
+        "torso": torch.stack(torso_poses).cpu(),
         "initial_ball": initial_ball.cpu(),
         "origins": sim.env_origins.cpu(),
         "dt": sim.sim_dt,
     }
 
 
+def _assert_stage(
+    matrices: dict[str, Any],
+    env: int,
+    stage: str,
+    mask: Any,
+    contacts: set[tuple[int, int]],
+) -> None:
+    import torch
+
+    assert mask.any(), f"Environment {env}: no geometry samples for {stage}."
+    expected = torch.zeros(len(_SOURCES), len(_COUNTERPARTS), dtype=torch.bool)
+    for source, counterpart in contacts:
+        expected[source, counterpart] = True
+    for mode, matrix in matrices.items():
+        samples = matrix[mask, env]
+        absent = samples.abs().amax(dim=(0, 3)).masked_fill(expected, 0)
+        largest = int(absent.argmax())
+        source, counterpart = divmod(largest, len(_COUNTERPARTS))
+        assert absent.max() < 1e-4, (
+            f"Environment {env}, {stage}, {mode}: unexpected force "
+            f"{_SOURCES[source]} -> {_COUNTERPARTS[counterpart]}: {absent.max().item()} N."
+        )
+        if contacts:
+            present = samples[:, expected].norm(dim=-1).amax(dim=0)
+            assert (present > 1).all(), f"Environment {env}, {stage}, {mode}: missing expected contact."
+
+
 def _assert_trace(trace: dict[str, Any]) -> list[dict[str, float]]:
     import torch
+
+    from holosoma.utils.rotations import quat_rotate_inverse
 
     force = trace["forces"]
     ball = trace["states"][:, 0]
     stationary = trace["states"][:, 1]
     dt = trace["dt"]
     time = (torch.arange(len(ball)) + 1) * dt
-    normal = force["ball_pairs"][:, :, 0]
-    total = force["ball_total"][:, :, 0]
-    links = force["ball_links"][:, :, 0]
-    torch.testing.assert_close(force["robot_ball"][:, :, 0, 0], -normal[:, :, 0], atol=0.02, rtol=0.002)
-    torch.testing.assert_close(force["link_ball"][:, :, 0, 0], -links[:, :, 0], atol=0.02, rtol=0.002)
-    torch.testing.assert_close(force["incline_ball"][:, :, 0, 0], -normal[:, :, 1], atol=0.02, rtol=0.002)
-    assert links[:, :, 1].abs().max() < 1e-4, "The projectile touched the unintended right wrist."
+    matrices = {
+        mode: torch.cat(
+            [force[f"scene_{mode}"][:, :, :, :2], force[f"links_{mode}"], force[f"scene_{mode}"][:, :, :, 2:]],
+            dim=3,
+        )
+        for mode in ("normal", "total")
+    }
+    for matrix in matrices.values():
+        torch.testing.assert_close(matrix[:, :, :, :6], -matrix[:, :, :, :6].transpose(2, 3), atol=0.02, rtol=0.002)
+    normal = matrices["normal"][:, :, 0, [1, 4, 6]]
+    total = matrices["total"][:, :, 0, [1, 4, 6]]
     direction = torch.tensor([math.sin(_ANGLE), 0.0, math.cos(_ANGLE)])
     tangent = torch.tensor([math.cos(_ANGLE), 0.0, -math.sin(_ANGLE)])
+    permanent = {(1, 6), (5, 6)}
+    impact_pairs = {(0, 1), (1, 0), (0, 2), (2, 0)}
+    incline_pairs = {(0, 4), (4, 0)}
     reports = []
     for env in range(ball.shape[1]):
         position = ball[:, env, :3] - trace["origins"][env]
         velocity = ball[:, env, 7:10]
-        magnitude = torch.linalg.vector_norm(normal[:, env], dim=-1)
-        assert normal[time < 0.10, env].abs().max() < 1e-4, "The airborne ball reported contact before the impact."
-        hit = (position[:, 0] < 0.30) & (position[:, 2] > 0.70) & (magnitude[:, 0] > 5)
-        assert hit.any(), f"Environment {env}: the ball missed the robot."
-        assert normal[hit, env, 1:].abs().max() < 1e-4, "The robot impact leaked into another counterpart column."
-        assert (torch.linalg.vector_norm(links[hit, env, 0], dim=-1) > 5).any(), (
-            "The intended torso link did not receive the impact."
-        )
+        torso = trace["torso"][:, env]
+        local_ball = quat_rotate_inverse(torso[:, 3:7], ball[:, env, :3] - torso[:, :3], w_last=True)
+        # The struck G1 torso capsule has a Y-axis segment at (x=.005, z=.22), radius .073.
+        capsule_delta = local_ball - torch.tensor([0.005, 0.0, 0.22])
+        capsule_delta[:, 1] = capsule_delta[:, 1].sign() * (capsule_delta[:, 1].abs() - 0.032).clamp(min=0)
+        torso_gap = capsule_delta.norm(dim=-1) - 0.073 - _BALL_RADIUS
+        hit = (torso_gap < 0.006) & (position[:, 2] > 0.70) & (time > 0.15) & (time < 0.35)
+        assert hit.any(), f"Environment {env}: the ball did not reach the torso geometry."
         hit_time = time[hit][0].item()
+        assert normal[hit, env, 0].norm(dim=-1).max() > 5, "The robot did not receive the geometric impact."
+        assert matrices["normal"][hit, env, 0, 2].norm(dim=-1).max() > 5, (
+            "The intended torso link did not receive the geometric impact."
+        )
         assert 0.10 < hit_time < 0.40, f"Unexpected robot impact time: {hit_time}"
         assert velocity[(time > hit_time) & (time < hit_time + 0.20), 0].max() > 0.1, (
             "The impact did not reverse the launched ball."
@@ -254,40 +304,109 @@ def _assert_trace(trace: dict[str, Any]) -> list[dict[str, float]]:
         delta = position - torch.tensor(_RAMP_POSITION)
         local_x = delta[:, 0] * math.cos(_ANGLE) - delta[:, 2] * math.sin(_ANGLE)
         local_z = delta[:, 0] * math.sin(_ANGLE) + delta[:, 2] * math.cos(_ANGLE)
-        on_incline = (
-            (local_x.abs() < 0.525 - _BALL_RADIUS)
-            & ((local_z - 0.05 - _BALL_RADIUS).abs() < 0.025)
-            & (magnitude[:, 1] > 1)
+        incline_gap = local_z - 0.05 - _BALL_RADIUS
+        box_distance = (
+            torch.stack(
+                [local_x.abs() - 0.525, delta[:, 1].abs() - 0.325, local_z.abs() - 0.05],
+                dim=-1,
+            )
+            .clamp(min=0)
+            .norm(dim=-1)
+            - _BALL_RADIUS
         )
+        # Solved forces precede the recorded poses by at most one integration step.
+        possible = torch.zeros(len(time), len(_SOURCES), len(_COUNTERPARTS), dtype=torch.bool)
+        for source, counterpart in permanent:
+            possible[:, source, counterpart] = True
+        for source, counterpart in impact_pairs:
+            possible[:, source, counterpart] = torso_gap < 0.015
+        for source, counterpart in incline_pairs:
+            possible[:, source, counterpart] = box_distance < 0.015
+        possible[:, 0, 6] = position[:, 2] - _BALL_RADIUS < 0.015
+        for mode, matrix in matrices.items():
+            unexpected = matrix[:, env].abs().masked_fill(possible[..., None], 0)
+            index = int(unexpected.argmax())
+            sample, remainder = divmod(index, len(_SOURCES) * len(_COUNTERPARTS) * 3)
+            source, remainder = divmod(remainder, len(_COUNTERPARTS) * 3)
+            counterpart = remainder // 3
+            assert unexpected.max() < 1e-4, (
+                f"Environment {env}, {mode}, step {sample + 1}: force between separated bodies "
+                f"{_SOURCES[source]} -> {_COUNTERPARTS[counterpart]}: {unexpected.max().item()} N."
+            )
+        near_incline = (
+            (local_x.abs() < 0.525 + _BALL_RADIUS)
+            & (delta[:, 1].abs() < 0.325 + _BALL_RADIUS)
+            & (incline_gap.abs() < 0.003)
+        )
+        assert near_incline.any(), f"Environment {env}: the ball missed the incline geometry."
+        first_incline = time[near_incline][0]
+        tangential_speed = velocity @ tangent
+        rolling_geometry = (
+            (local_x.abs() < 0.525 - _BALL_RADIUS)
+            & (delta[:, 1].abs() < 0.325 - _BALL_RADIUS)
+            & (incline_gap.abs() < 0.0002)
+            & ((velocity @ direction).abs() < 0.02)
+            & (tangential_speed > 0.2)
+        )
+        # Require a stable geometry window to exclude the apex of a small bounce.
+        on_incline = rolling_geometry.clone()
+        for offset in range(1, 6):
+            on_incline[offset:] &= rolling_geometry[:-offset]
+            on_incline[:-offset] &= rolling_geometry[offset:]
         assert on_incline.sum() >= 5, f"Environment {env}: the ball did not travel across the incline."
         incline_time = time[on_incline][0].item()
         assert incline_time > hit_time
-        assert normal[on_incline, env][:, [0, 2]].abs().max() < 1e-4, "The incline contact leaked into another column."
         incline_force = normal[on_incline, env, 1]
+        assert incline_force.norm(dim=-1).min() > 1, "The rolling ball received no incline support."
         alignment = incline_force @ direction / torch.linalg.vector_norm(incline_force, dim=-1)
         assert alignment.min() > 0.99, f"Incline force does not follow its tilted normal: {alignment.min()}"
-        tangential_speed = velocity[on_incline] @ tangent
         spin_speed = _BALL_RADIUS * ball[on_incline, env, 11]
-        rolling = (tangential_speed > 0.2) & (
-            (tangential_speed - spin_speed).abs() < 0.25 * tangential_speed.abs() + 0.2
-        )
+        rolling = (tangential_speed[on_incline] - spin_speed).abs() < 0.25 * tangential_speed[on_incline].abs() + 0.2
         assert rolling.any(), "The projectile did not roll down the incline."
         assert torch.linalg.vector_norm(total[on_incline, env, 1] - incline_force, dim=-1).max() > 0.1, (
             "Total force omitted tangential friction."
         )
 
-        on_ground = (position[:, 0] > 1.35) & ((position[:, 2] - _BALL_RADIUS).abs() < 0.015) & (magnitude[:, 2] > 1)
+        on_ground = (position[:, 0] > 1.35) & ((position[:, 2] - _BALL_RADIUS).abs() < 0.003)
         assert on_ground.any(), f"Environment {env}: the ball did not reach the terrain beyond the incline."
         ground_time = time[on_ground][0].item()
         assert ground_time > incline_time
-        ground_force = normal[on_ground, env, 2]
+        ground_geometry = (
+            on_ground
+            & (time > ground_time + 0.2)
+            & ((position[:, 2] - _BALL_RADIUS).abs() < 0.0002)
+            & (velocity[:, 2].abs() < 0.02)
+        )
+        ground_stable = ground_geometry.clone()
+        for offset in range(1, 6):
+            ground_stable[offset:] &= ground_geometry[:-offset]
+            ground_stable[:-offset] &= ground_geometry[offset:]
+        assert ground_stable.sum() >= 20
+        ground_force = normal[ground_stable, env, 2]
         assert ground_force[:, 2].min() > 0
         assert ground_force[:, :2].abs().max() < 0.01
-        ground_stable = on_ground & (time > ground_time + 0.2)
-        assert ground_stable.sum() >= 20
         torch.testing.assert_close(
             normal[ground_stable, env, 2].mean(dim=0), torch.tensor([0.0, 0.0, _BALL_MASS * 9.81]), atol=0.5, rtol=0.05
         )
+        stages = {
+            "launch": ((time < 0.18) & (torso_gap > 0.025), permanent),
+            "robot impact": (hit, permanent | impact_pairs),
+            "flight to incline": (
+                (time > 0.21) & (time < first_incline) & (torso_gap > 0.03) & (incline_gap > 0.03),
+                permanent,
+            ),
+            "incline rolling": (on_incline, permanent | incline_pairs),
+            "flight to terrain": (
+                (local_x > 0.525 + _BALL_RADIUS + 0.02)
+                & (position[:, 2] > _BALL_RADIUS + 0.02)
+                & (velocity[:, 2] < -0.02)
+                & (time < ground_time),
+                permanent,
+            ),
+            "terrain settling": (ground_stable, permanent | {(0, 6)}),
+        }
+        for stage, (mask, contacts) in stages.items():
+            _assert_stage(matrices, env, stage, mask, contacts)
 
         # The ball has no applied forces. Its velocity change independently constrains total contact impulse.
         impulse = total[:, env].sum(dim=(0, 1)) * dt
@@ -296,12 +415,12 @@ def _assert_trace(trace: dict[str, Any]) -> list[dict[str, float]]:
         measured[2] += _BALL_MASS * 9.81 * elapsed
         torch.testing.assert_close(impulse, measured, atol=0.15, rtol=0.10)
         calm = time > 0.15
-        box_force = force["stationary_ground"][calm, env, 0, 0]
+        box_force = matrices["normal"][calm, env, 5, 6]
         torch.testing.assert_close(
             box_force.mean(dim=0), torch.tensor([0.0, 0.0, _BOX_MASS * 9.81]), atol=0.5, rtol=0.05
         )
         assert stationary[calm, env, 7:10].abs().max() < 0.02, "The second actor did not remain stationary."
-        robot_ground = force["robot_ground"][calm, env, 0, 0, 2]
+        robot_ground = matrices["normal"][calm, env, 1, 6, 2]
         assert robot_ground.min() > 0.5, "The gantry lifted the robot clear of the terrain."
         assert robot_ground.mean() < 0.5 * _G1_MASS * 9.81, "The gantry did not support most of the robot's weight."
         root_height = trace["roots"][calm, env, 2] - trace["origins"][env, 2]
@@ -311,8 +430,9 @@ def _assert_trace(trace: dict[str, Any]) -> list[dict[str, float]]:
                 "robot": hit_time,
                 "incline": incline_time,
                 "terrain": ground_time,
-                "robot_peak_N": magnitude[:, 0].max().item(),
+                "robot_peak_N": normal[:, env, 0].norm(dim=-1).max().item(),
                 "incline_samples": float(on_incline.sum()),
+                **{f"{stage}_samples": float(mask.sum()) for stage, (mask, _) in stages.items()},
             }
         )
     return reports
