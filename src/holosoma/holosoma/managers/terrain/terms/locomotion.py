@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from holosoma.managers.terrain.base import TerrainTermBase
+from holosoma.simulator.base_simulator.state import DERIVED
 from holosoma.simulator.shared.terrain import Terrain
 from holosoma.utils import draw, warp_utils
 from holosoma.utils.rotations import quat_apply_yaw
@@ -87,9 +88,16 @@ class TerrainLocomotion(TerrainTermBase):
 
         # The simulator's state registry raycasts again on the first read after the simulation changed.
         state = self.env.simulator.state
-        state.register(("terrain_base_heights", "terrain_base_ray_hits"), self._get_base_heights)
+        state.register(
+            ("terrain_base_heights", "terrain_base_ray_hits"), self._get_base_heights, stale_with=(DERIVED,), stales=()
+        )
         if num_feet > 0:
-            state.register(("terrain_feet_heights", "terrain_feet_ray_hits"), self._get_feet_heights)
+            state.register(
+                ("terrain_feet_heights", "terrain_feet_ray_hits"),
+                self._get_feet_heights,
+                stale_with=(DERIVED,),
+                stales=(),
+            )
         else:
             self._no_feet = torch.zeros(self.num_envs, 0, device=self.device)
 
@@ -187,7 +195,7 @@ class TerrainLocomotion(TerrainTermBase):
     def _get_feet_heights(self, env_ids: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
         """Get feet heights from the terrain."""
         idx = env_ids if env_ids is not None else slice(None)
-        foot_positions = self.env.simulator._rigid_body_pos[idx][:, self._feet_height_indices, :]
+        foot_positions = self.env.simulator.rigid_body_pos_w[idx][:, self._feet_height_indices, :]
         ray_starts_world = foot_positions + self._offset_pos[None, None, ...]
         ray_directions_world = self._ray_directions_feet[idx]
         ray_hits_world = warp_utils.ray_cast(ray_starts_world, ray_directions_world, self.warp_mesh)

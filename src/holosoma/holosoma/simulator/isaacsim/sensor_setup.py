@@ -61,7 +61,7 @@ if TYPE_CHECKING:
 
 
 def build_cameras(sim: IsaacSim) -> None:
-    """Build an RTX camera or a native ray-cast geometry view before environment cloning.
+    """Build an RTX camera or a native ray-cast geometry view per local camera before environment cloning.
 
     The camera optical convention is OpenGL (-Z forward, +Y up), the same frame holosoma uses,
     so the mount offset passes through with ``convention="opengl"`` and no extra rotation.
@@ -70,6 +70,8 @@ def build_cameras(sim: IsaacSim) -> None:
     """
     sim.tiled_cameras = {}
     for cam_name, cam in sim.sensor_config.items():
+        if isinstance(cam, CameraSensorConfig) and cam.remote:
+            continue
         if is_isaacsim_raycast_camera(cam):
             from isaaclab.sensors import MultiMeshRayCasterCfg
 
@@ -132,6 +134,8 @@ def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
         if not isinstance(config, CameraSensorConfig):
             continue
         record = manager.register_camera(name, config)
+        if config.remote:
+            continue
         if is_isaacsim_raycast_camera(config):
             scene = cast(RaycastScene, sim.scene.sensors[name])
             sim.raycast_cameras[name] = RayCastDepthCamera(sim, config, scene)
@@ -175,32 +179,34 @@ def sync_camera_fabric_transforms(
     wrist camera); which cameras are hit is not explained. The USD offset stays correct, so it is
     copied back into Fabric for every camera.
     """
+    if not sim.tiled_cameras:
+        return
+    cameras = sim.tiled_cameras.values() if camera_name is None else [sim.tiled_cameras[camera_name]]
+    prims: list[Any] = []
+    for camera in cameras:
+        # Use the initialized view's cached ordering, matching set_local_poses' env indices.
+        view_prims = camera._view._prims
+        prims += view_prims if env_ids is None else [view_prims[i] for i in env_ids.tolist()]
+    copy_local_transforms_to_fabric(sim, prims)
+
+
+def copy_local_transforms_to_fabric(sim: IsaacSim, prims: list[Any]) -> None:
+    """Copy each prim's authored USD local transform into Fabric and recompute Fabric world transforms."""
     import carb
     import usdrt
     from pxr import Usd, UsdGeom
     from usdrt import Rt
 
-    # Isaac Lab's views keep camera poses in USD without Fabric or on a CPU device; the USD offset is
-    # then what renders, and there is no Fabric transform to correct.
-    if (
-        not sim.tiled_cameras
-        or sim.sim_device == "cpu"
-        or not carb.settings.get_settings().get("/physics/fabricEnabled")
-    ):
+    # Isaac Lab keeps poses in USD without Fabric or on a CPU device; there is then no Fabric transform.
+    if sim.sim_device == "cpu" or not carb.settings.get_settings().get("/physics/fabricEnabled"):
         return
     fabric_stage = usdrt.Usd.Stage.Attach(sim_utils.get_current_stage_id())
-    cameras = sim.tiled_cameras.values() if camera_name is None else [sim.tiled_cameras[camera_name]]
-    for camera in cameras:
-        # Use the initialized view's cached ordering, matching set_local_poses' env indices.
-        prims = camera._view._prims
-        if env_ids is not None:
-            prims = [prims[i] for i in env_ids.tolist()]
-        for prim in prims:
-            local = UsdGeom.Xformable(prim).GetLocalTransformation(Usd.TimeCode.Default())
-            fabric_prim = Rt.Xformable(fabric_stage.GetPrimAtPath(str(prim.GetPath())))
-            fabric_prim.GetFabricHierarchyLocalMatrixAttr().Set(
-                usdrt.Gf.Matrix4d(*(local[row][col] for row in range(4) for col in range(4)))
-            )
+    for prim in prims:
+        local = UsdGeom.Xformable(prim).GetLocalTransformation(Usd.TimeCode.Default())
+        fabric_prim = Rt.Xformable(fabric_stage.GetPrimAtPath(str(prim.GetPath())))
+        fabric_prim.GetFabricHierarchyLocalMatrixAttr().Set(
+            usdrt.Gf.Matrix4d(*(local[row][col] for row in range(4) for col in range(4)))
+        )
     usdrt.hierarchy.IFabricHierarchy().get_fabric_hierarchy(
         fabric_stage.GetFabricId(), fabric_stage.GetStageIdAsStageId()
     ).update_world_xforms()
@@ -217,15 +223,13 @@ def render_cameras(sim: IsaacSim, due: list[CameraRecord], env_ids: torch.Tensor
             continue
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
-            rgb = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
-            if rgb.dtype != torch.uint8:
-                rgb = rgb.clamp(0, 255).to(torch.uint8)
-            camera_record.set_frame("rgb", rgb, env_ids)
+            native = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
+            camera_record.set_frame("rgb", native if native.dtype == torch.uint8 else native.clamp(0, 255), env_ids)
         if "depth" in camera_record.config.data_types:
-            # distance_to_image_plane is float32 meters, image-plane. Ensure a trailing channel
-            # dim; CameraRecord applies the configured cross-backend no-return convention.
-            depth = out["distance_to_image_plane"].to(torch.float32)
-            camera_record.set_frame("depth", depth if depth.ndim == 4 else depth.unsqueeze(-1), env_ids)
+            # distance_to_image_plane is float32 meters, image-plane; CameraRecord applies the configured
+            # cross-backend no-return convention in place.
+            native = out["distance_to_image_plane"]
+            camera_record.set_frame("depth", native if native.ndim == 4 else native.unsqueeze(-1), env_ids)
 
 
 def _pattern(
@@ -769,10 +773,11 @@ def initialize_sensors(sim: IsaacSim) -> None:
 
 
 def render_sensors(sim: IsaacSim) -> None:
-    """Render if a camera is due or video is recording, then capture the sensors due this control step."""
+    """Render if a local camera is due or video is recording, then capture the sensors due this control step."""
     due = sim.sensor_manager.collect_due()
+    local = [record for record in due if not record.config.remote]
     recording = sim.video_recorder is not None and sim.video_recorder.is_recording
-    if any(record.name in sim.tiled_cameras for record in due) or recording:
+    if any(record.name in sim.tiled_cameras for record in local) or recording:
         sim.render_for_sensors()
-    render_cameras(sim, due)
+    render_cameras(sim, local)
     render_lidars(sim)

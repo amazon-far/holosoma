@@ -5,7 +5,8 @@ the pillar ONLY in envs [0, 2] to PER-ENV-DISTINCT world targets. Asserts:
   (a) WRITTEN envs [0,2] each land at their OWN distinct target (no transposition),
   (b) UNWRITTEN envs [1,3] are UNTOUCHED (still at the spawn pose),
 exercising the index encode/decode (get_object_indices / resolve_indices / write_object_states)
-for a strided subset rather than the full arange.
+for a strided subset rather than the full arange. Then writes ``object_root_states`` for envs [1, 3] and
+reads every object back through the actor API before stepping.
 
 Exits 0 on success, non-zero with a message on failure. Run under each backend's launcher.
 
@@ -101,8 +102,32 @@ def main() -> int:
     if not unwritten_ok:
         print("FAIL: subset write disturbed envs NOT in the subset (SCRAMBLE)")
         return 1
+    if not object_state_subset_ok(sim, num_envs):
+        return 1
     print("PASS: non-contiguous subset write is correctly indexed (no scramble)")
     return 0
+
+
+def object_state_subset_ok(sim, num_envs: int) -> bool:
+    """Write ``object_root_states`` for envs [1, 3] only, offset per object and env, and read it back unstepped."""
+    import torch
+
+    names = list(sim.object_state_names)
+    all_ids = torch.arange(num_envs, device=sim.sim_device)
+    before = torch.stack([sim.get_actor_states([name], all_ids) for name in names], 1)
+    subset = torch.tensor([1, 3], device=sim.sim_device)
+    want = before.clone()
+    offsets = torch.arange(1, len(names) + 1, device=sim.sim_device)[None, :] + 10 * subset[:, None]
+    want[subset, :, 1] += offsets.float()  # distinct y per (env, object), so a misindexed write shows
+    states = sim.state.get("object_root_states")
+    states[subset] = want[subset]
+    sim.state.flush_writes()
+    after = torch.stack([sim.get_actor_states([name], all_ids) for name in names], 1)
+    ok = torch.allclose(after[..., :7], want[..., :7], atol=1e-4)
+    print(f"  object_root_states subset write {names}: ok={ok}")
+    if not ok:
+        print(f"FAIL: object_root_states write of envs [1, 3] read back as {after[..., :3].tolist()}")
+    return ok
 
 
 if __name__ == "__main__":

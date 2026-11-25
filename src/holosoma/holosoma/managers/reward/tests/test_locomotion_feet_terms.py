@@ -40,8 +40,8 @@ class _StubSimulator:
     base_quat: torch.Tensor
 
     def __init__(self, gen: torch.Generator) -> None:
-        self._rigid_body_rot = _unit_quats(NUM_ENVS, NUM_BODIES, gen=gen)
-        self._rigid_body_pos = torch.randn(NUM_ENVS, NUM_BODIES, 3, generator=gen)
+        self.rigid_body_quat_w = _unit_quats(NUM_ENVS, NUM_BODIES, gen=gen)
+        self.rigid_body_pos_w = torch.randn(NUM_ENVS, NUM_BODIES, 3, generator=gen)
         self.contact_forces = torch.randn(NUM_ENVS, NUM_BODIES, 3, generator=gen)
         self.dof_pos = 2.0 * torch.randn(NUM_ENVS, NUM_DOF, generator=gen)
         lower = -0.5 - torch.rand(NUM_DOF, generator=gen)
@@ -88,11 +88,11 @@ def test_penalty_feet_ori_sums_selected_foot_tilts(feet: list[str]) -> None:
     indices = FEET_BY_SPEC[tuple(feet)]
     # Every unselected body tilts 90 degrees. Only selected feet contribute.
     quarter_turn = torch.tensor([2**-0.5, 0.0, 0.0, 2**-0.5])
-    env.simulator._rigid_body_rot[:] = quarter_turn
-    env.simulator._rigid_body_rot[:, indices] = torch.tensor([0.0, 0.0, 0.0, 1.0])
-    env.simulator._rigid_body_rot[1, indices[0]] = quarter_turn
-    env.simulator._rigid_body_rot[2, indices] = quarter_turn
-    env.simulator._rigid_body_rot[4, indices[0]] = torch.tensor([0.0, 0.0, 2**-0.5, 2**-0.5])
+    env.simulator.rigid_body_quat_w[:] = quarter_turn
+    env.simulator.rigid_body_quat_w[:, indices] = torch.tensor([0.0, 0.0, 0.0, 1.0])
+    env.simulator.rigid_body_quat_w[1, indices[0]] = quarter_turn
+    env.simulator.rigid_body_quat_w[2, indices] = quarter_turn
+    env.simulator.rigid_body_quat_w[4, indices[0]] = torch.tensor([0.0, 0.0, 2**-0.5, 2**-0.5])
 
     out = penalty_feet_ori(env, feet=feet)
 
@@ -102,7 +102,7 @@ def test_penalty_feet_ori_sums_selected_foot_tilts(feet: list[str]) -> None:
 
 def test_penalty_feet_ori_sole_axes_selects_the_projected_components() -> None:
     env = _env()
-    quats = env.simulator._rigid_body_rot[:, [2, 5]].reshape(-1, 4)
+    quats = env.simulator.rigid_body_quat_w[:, [2, 5]].reshape(-1, 4)
     gravity = gravity_vector(env).unsqueeze(1).expand(-1, 2, -1).reshape(-1, 3)
     foot_gravity = quat_rotate_inverse(quats, gravity, w_last=True).reshape(NUM_ENVS, 2, 3)
     expected = torch.sum(torch.sum(torch.square(foot_gravity[..., [0, 2]]), dim=-1) ** 0.5, dim=1)
@@ -125,14 +125,14 @@ def test_penalty_feet_ori_rejects_invalid_sole_axes(sole_axes: tuple[Any, ...]) 
 def test_penalty_close_feet_uses_lateral_distance_and_strict_threshold(yaw_quat: list[float]) -> None:
     env = _env()
     env.simulator.base_quat[:] = torch.tensor(yaw_quat)
-    env.simulator._rigid_body_pos.zero_()
+    env.simulator.rigid_body_pos_w.zero_()
     # Distances bracket the threshold, including equality and negative separation.
     distance = torch.tensor([0.05, 0.099, 0.1, 0.101, -0.05])
     lateral_axis = 1 if yaw_quat[2] == 0 else 0
-    env.simulator._rigid_body_pos[:, 5, lateral_axis] = distance
-    env.simulator._rigid_body_pos[:, 5, 1 - lateral_axis] = 2.0
+    env.simulator.rigid_body_pos_w[:, 5, lateral_axis] = distance
+    env.simulator.rigid_body_pos_w[:, 5, 1 - lateral_axis] = 2.0
     # Keep the equality case free of roundoff from the longitudinal projection.
-    env.simulator._rigid_body_pos[2, 5, 1 - lateral_axis] = 0.0
+    env.simulator.rigid_body_pos_w[2, 5, 1 - lateral_axis] = 0.0
 
     out = penalty_close_feet_xy(env, close_feet_threshold=0.1)
 

@@ -280,13 +280,17 @@ A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=No
 
 Within a phase, hooks run in registration order, which for plugins means the order their slots were selected — so declare what you need with `after` / `before`. Unconstrained hooks keep their order relative to each other.
 
-**Depend on the handle `add` returns.** The framework keeps the ones others follow: `task.simulator.sensor_render_hook`, the bridge's `transport_hook`, and `close_hook` on the shared ROS2 runtime. Keep your own on a public attribute if other code should be able to follow you.
+**Depend on the handle `add` returns.** The framework keeps the ones others follow: `task.simulator.sensor_render_hook` (camera buffers are final after it; a hook that fills buffers itself orders after `task.simulator.sensor_capture_hook` and before `sensor_render_hook`), the bridge's `transport_hook`, and `close_hook` on the shared ROS2 runtime. Keep your own on a public attribute if other code should be able to follow you.
 
 ```python
 task.hooks.add(
     Phase.FRAME_END, self.publish, name="my_plugin.publish", after=task.simulator.sensor_render_hook,
 )
 ```
+
+For physics in one process and camera rendering in another, the `cosim-render` plugin
+(`plugin.<key>:cosim-render`) shares state with a renderer process; see
+[GPU co-simulation](cosim.md).
 
 **To follow a provider you can't hold**, it publishes a member of its own `Enum` from its constructor and you reference that plus the slot it runs in, which resolves once every plugin is installed:
 

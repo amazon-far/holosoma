@@ -38,7 +38,6 @@ def test_close_synchronizes_releases_render_state_and_is_idempotent(
     backend.step_graph = object()
     backend._render_graph = object()
     backend._render_rgb_out = {1: object()}
-    backend._render_depth_out = {1: object()}
     backend._render_context = object()
     backend._lidar_render_context = object()
     backend._lidar_render_context_groups = (0, 1, 2, 4)
@@ -54,7 +53,6 @@ def test_close_synchronizes_releases_render_state_and_is_idempotent(
     assert backend.step_graph is None
     assert backend._render_graph is None
     assert backend._render_rgb_out == {}
-    assert backend._render_depth_out == {}
     assert backend._render_context is None
     state = vars(backend)
     assert state["_lidar_render_context"] is None

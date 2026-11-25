@@ -1,4 +1,4 @@
-"""Partial sensor re-renders: only sensors with a ``rerender`` callback redraw, into fresh buffers."""
+"""Partial sensor re-renders: only sensors with a ``rerender`` callback redraw their rows in place."""
 
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ def _depth_camera(manager: SensorManager, name: str) -> Any:
         far=3.0,
         depth_clipping_behavior="max",
         data_types=["depth"],
+        width=2,
+        height=2,
     )
     record = manager.register_camera(name, config)
     record.set_buffer("depth", torch.ones(NUM_ENVS, 2, 2, 1))
@@ -31,7 +33,7 @@ def _depth_camera(manager: SensorManager, name: str) -> Any:
 
 
 def test_sensor_manager_rerenders_only_sensors_that_support_it() -> None:
-    manager = SensorManager(device="cpu", control_hz=50.0)
+    manager = SensorManager(device="cpu", control_hz=50.0, num_envs=NUM_ENVS)
     partial = _depth_camera(manager, "partial")
     _depth_camera(manager, "full_only")
     calls: list[list[int]] = []
@@ -43,27 +45,18 @@ def test_sensor_manager_rerenders_only_sensors_that_support_it() -> None:
 
 
 def test_camera_buffer_rows_apply_depth_clipping_and_drop_device_copies() -> None:
-    manager = SensorManager(device="cpu", control_hz=50.0)
+    manager = SensorManager(device="cpu", control_hz=50.0, num_envs=NUM_ENVS)
     record = _depth_camera(manager, "cam")
-    stale_copy = record.buffer_on("depth", "meta")
+    stale_copy = record.buffer_on("depth", "cpu")
     rows = torch.tensor([float("inf"), 1.0, 0.05, 2.0]).view(1, 2, 2, 1)
 
-    record.set_buffer_rows("depth", torch.tensor([3]), rows)
+    ids = torch.tensor([3])
+    with record.writing("depth", ids) as depth:  # a partial re-render writes only these rows
+        depth[ids] = rows
 
     assert record.buffers["depth"][3].flatten().tolist() == [3.0, 1.0, 3.0, 2.0]
     assert torch.all(record.buffers["depth"][[0, 1, 2, 4]] == 1.0)
-    assert record.buffer_on("depth", "meta") is not stale_copy
-
-
-def test_buffer_rows_leave_previously_published_buffers_untouched() -> None:
-    manager = SensorManager(device="cpu", control_hz=50.0)
-    record = _depth_camera(manager, "cam")
-    published = record.buffers["depth"]
-
-    record.set_buffer_rows("depth", torch.tensor([0]), torch.full((1, 2, 2, 1), 2.0))
-
-    assert torch.all(published == 1.0)
-    assert record.buffers["depth"] is not published
+    assert record.buffer_on("depth", "cpu") is not stale_copy
 
 
 def test_simulator_rerender_with_empty_sensor_manager_is_a_no_op() -> None:

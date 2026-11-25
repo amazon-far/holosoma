@@ -434,10 +434,14 @@ class BaseTask:
         self.hooks.emit(Phase.FRAME_END)
         self.episode_length_buf += 1
         self._check_termination()
-        env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        env_ids = self._get_reset_env_ids()
         self._evaluate_frame(env_ids)
         self.reset_envs_idx(env_ids)
         self._step_managers()
+
+    def _get_reset_env_ids(self) -> torch.Tensor:
+        """Return ids of environments whose episodes ended this frame."""
+        return self.reset_buf.nonzero(as_tuple=False).flatten()
 
     def _evaluate_frame(self, env_ids: torch.Tensor) -> None:
         """Evaluate the frame on the state ``env_ids``' episodes ended in, before they reset."""

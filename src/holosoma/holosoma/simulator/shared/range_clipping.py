@@ -22,12 +22,14 @@ def clip_sensor_ranges(
     near: float,
     far: float,
     behavior: NoReturnClippingBehavior,
+    out: torch.Tensor | None = None,
 ) -> RangeClippingResult:
     """Apply one cross-backend no-return convention to metric sensor distances.
 
     A physical return is finite and lies in the inclusive ``[near, far]`` interval. Misses and
     out-of-range returns are reported as ``+inf`` (``"none"``), the far endpoint (``"max"``), or
-    zero (``"zero"``). ``hit_mask`` remains false for synthetic endpoint and zero values.
+    zero (``"zero"``). ``hit_mask`` remains false for synthetic endpoint and zero values. ``out``, a float32
+    tensor shaped like ``distances`` (``distances`` itself included), receives the ranges in place.
 
     ``near`` and ``far`` must be finite with ``near >= 0``, which every sensor config enforces. The
     interval test relies on it to reject non-finite distances, so an infinite ``far`` would report a
@@ -42,6 +44,9 @@ def clip_sensor_ranges(
         "max": far,
         "zero": 0.0,
     }
+    if out is not None:
+        fill = distances.new_tensor(clip_values[behavior])
+        return RangeClippingResult(ranges=torch.where(hit_mask, distances, fill, out=out), hit_mask=hit_mask)
     # Scalar ``other``, so no full-size fill tensor is allocated per frame.
     ranges = torch.where(hit_mask, distances, clip_values[behavior])
     return RangeClippingResult(ranges=ranges.to(torch.float32), hit_mask=hit_mask)
