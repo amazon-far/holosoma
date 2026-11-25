@@ -1,10 +1,9 @@
-"""Partial sensor re-renders: only sensors with a ``rerender`` callback redraw, into fresh buffers."""
+"""Partial sensor re-renders: gated by ``sim.num_rerenders_on_reset``, written into fresh buffers."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -28,18 +27,6 @@ def _depth_camera(manager: SensorManager, name: str) -> Any:
     record = manager.register_camera(name, config)
     record.set_buffer("depth", torch.ones(NUM_ENVS, 2, 2, 1))
     return record
-
-
-def test_sensor_manager_rerenders_only_sensors_that_support_it() -> None:
-    manager = SensorManager(device="cpu", control_hz=50.0)
-    partial = _depth_camera(manager, "partial")
-    _depth_camera(manager, "full_only")
-    calls: list[list[int]] = []
-    partial.rerender = lambda env_ids: calls.append(env_ids.tolist())
-
-    manager.rerender(torch.tensor([1, 2]))
-
-    assert calls == [[1, 2]]
 
 
 def test_camera_buffer_rows_apply_depth_clipping_and_drop_device_copies() -> None:
@@ -66,19 +53,16 @@ def test_buffer_rows_leave_previously_published_buffers_untouched() -> None:
     assert record.buffers["depth"] is not published
 
 
-def test_simulator_rerender_with_empty_sensor_manager_is_a_no_op() -> None:
+def test_simulator_rerenders_only_when_num_rerenders_on_reset_is_above_zero() -> None:
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
     sim: Any = object.__new__(BaseSimulator)
-    sim.simulator_config = SimpleNamespace(sim=SimpleNamespace(num_rerenders_on_reset=1))
-    sim._rerender_backend_sensors = lambda _env_ids: None
-    sim.sensor_manager = SensorManager("cpu", 50.0)
-    sim.rerender_sensors(torch.tensor([0]))
+    sim.simulator_config = SimpleNamespace(sim=SimpleNamespace(num_rerenders_on_reset=0))
+    calls: list[list[int]] = []
+    sim._rerender_backend_sensors = lambda env_ids: calls.append(env_ids.tolist())
 
-    sim.sensor_manager = MagicMock()
     sim.rerender_sensors(torch.tensor([0]))
-    sim.sensor_manager.rerender.assert_called_once()
+    sim.simulator_config.sim.num_rerenders_on_reset = 1
+    sim.rerender_sensors(torch.tensor([2]))
 
-    sim.simulator_config.sim.num_rerenders_on_reset = 0
-    sim.rerender_sensors(torch.tensor([0]))
-    sim.sensor_manager.rerender.assert_called_once()
+    assert calls == [[2]]

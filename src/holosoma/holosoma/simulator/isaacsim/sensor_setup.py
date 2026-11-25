@@ -135,7 +135,6 @@ def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
         if is_isaacsim_raycast_camera(config):
             scene = cast(RaycastScene, sim.scene.sensors[name])
             sim.raycast_cameras[name] = RayCastDepthCamera(sim, config, scene)
-            record.rerender = partial(sim.raycast_cameras[name].render, record)
             record.write_mount_pose = sim.raycast_cameras[name].write_mount_pose
             continue
         record.write_mount_pose = partial(_write_camera_mount_pose, sim, name)
@@ -716,10 +715,13 @@ def render_lidars(sim: IsaacSim, env_ids: torch.Tensor | None = None) -> None:
 
 
 def rerender_sensors(sim: IsaacSim, env_ids: torch.Tensor) -> None:
-    """Re-render ``env_ids`` for RTX cameras and LiDARs, leaving other envs' rows unchanged.
+    """Re-render ``env_ids`` for every camera and LiDAR, leaving other envs' rows unchanged.
 
-    RTX cameras render ``sim.num_rerenders_on_reset`` times; LiDARs cast once. A sensor with no
-    frame yet is captured for every env."""
+    RTX cameras render ``sim.num_rerenders_on_reset`` times; ray-cast cameras and LiDARs cast once.
+    A sensor with no frame yet is captured for every env."""
+    for record in sim.sensor_manager.cameras:
+        if record.name in sim.raycast_cameras:
+            sim.raycast_cameras[record.name].render(record, env_ids)
     tiled = [record for record in sim.sensor_manager.cameras if record.name in sim.tiled_cameras]
     if tiled:
         # Isaac Lab rewrites a camera's output for every env in place, and held frames can alias it.

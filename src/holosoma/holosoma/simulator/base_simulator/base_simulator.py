@@ -1026,11 +1026,9 @@ class BaseSimulator:
         """
         if self.simulator_config.sim.num_rerenders_on_reset > 0:
             self._rerender_backend_sensors(env_ids)
-            self.sensor_manager.rerender(env_ids)
 
     def _rerender_backend_sensors(self, env_ids: torch.Tensor) -> None:
-        """Re-render ``env_ids`` for the sensors the backend renders itself: cameras without a
-        ``rerender`` callback, and LiDARs."""
+        """Re-render ``env_ids`` for every camera and LiDAR."""
         raise NotImplementedError("The '_rerender_backend_sensors' method must be implemented in subclasses.")
 
     def get_camera_data(
