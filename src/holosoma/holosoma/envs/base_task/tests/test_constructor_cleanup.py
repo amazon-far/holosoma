@@ -84,7 +84,7 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
             assert hasattr(self, "viewer")
             events.append("plugins")
 
-        def capture_sensors(self) -> None:
+        def render_sensors(self, env_ids: object = None, num_renders: object = None) -> None:
             events.append("capture")
 
         def close(self) -> None:

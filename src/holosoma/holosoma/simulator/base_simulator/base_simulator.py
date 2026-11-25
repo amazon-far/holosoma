@@ -1028,12 +1028,6 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
 
-    def capture_sensors(self) -> None:
-        """Capture every mounted sensor for every env without advancing its update cadence.
-
-        Run once before the first reset, so every sensor has a frame for re-renders to update."""
-        self.render_sensors(num_renders=1)
-
     def get_camera_data(
         self,
         name: str,
