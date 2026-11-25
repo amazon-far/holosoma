@@ -315,9 +315,9 @@ class IsaacSim(BaseSimulator):
 
     # ----- Camera sensors (TiledCamera; child prim of the mount body, auto-follow) -----
 
-    def render_sensors(self, env_ids: torch.Tensor | None = None) -> None:
-        """Capture all due mounted sensors, or every sensor for ``env_ids``, into their cached buffers."""
-        sensor_setup.render_sensors(self, env_ids)
+    def render_sensors(self, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
+        """Capture all due mounted sensors into their cached buffers; see :meth:`BaseSimulator.render_sensors`."""
+        sensor_setup.render_sensors(self, env_ids, num_renders)
 
     def _get_base_body_name(self, preference_order: list[str]) -> str:
         """Get the base body name with fallback logic.

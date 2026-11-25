@@ -228,7 +228,7 @@ def test_mjwarp_shares_one_refitted_context_across_all_due_lidars(monkeypatch: p
     class _Manager:
         lidars = [first, second]
 
-        def collect_lidars_due(self, _env_ids=None):
+        def collect_lidars_due(self, _all_sensors=False):
             return [first, second]
 
     sim = SimpleNamespace(
@@ -418,10 +418,10 @@ def test_mjwarp_lidar_reuses_camera_bvh_without_duplicate_same_frame_refit(
     class _Manager:
         lidars = [lidar]
 
-        def collect_due(self, _env_ids=None):
+        def collect_due(self, _all_sensors=False):
             return [camera]
 
-        def collect_lidars_due(self, _env_ids=None):
+        def collect_lidars_due(self, _all_sensors=False):
             return [lidar]
 
     rendered = []

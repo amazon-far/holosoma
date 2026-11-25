@@ -1222,9 +1222,9 @@ class MuJoCo(BaseSimulator):
         """Create one shared manager for mounted cameras and LiDARs after model compilation."""
         create_sensors(self)
 
-    def render_sensors(self, env_ids: torch.Tensor | None = None) -> None:
-        """Capture all due mounted sensors, or every sensor for ``env_ids``, into their cached buffers."""
-        render_sensors(self, env_ids)
+    def render_sensors(self, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
+        """Capture all due mounted sensors into their cached buffers; see :meth:`BaseSimulator.render_sensors`."""
+        render_sensors(self, env_ids, num_renders)
 
     def setup_viewer(self) -> None:
         """Set up MuJoCo viewer using official mujoco.viewer API with keyboard callback."""

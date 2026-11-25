@@ -122,9 +122,9 @@ def initialize_camera_mounts(sim: MuJoCo) -> None:
         sim.sensor_manager.set_mount_pose(camera.name, sim.sensor_manager.get_mount_pose(camera.name))
 
 
-def render_cameras(sim: MuJoCo, env_ids: torch.Tensor | None = None) -> None:
-    """Render due cameras into their cached output buffers, or only the ``env_ids`` rows when re-rendering."""
-    due = sim.sensor_manager.collect_due(env_ids)
+def render_cameras(sim: MuJoCo, env_ids: torch.Tensor | None = None, *, all_sensors: bool = False) -> None:
+    """Render due cameras, or every camera with ``all_sensors``, writing only the ``env_ids`` rows when given."""
+    due = sim.sensor_manager.collect_due(all_sensors)
     if due:
         sim.backend.render_cameras(due, env_ids)
 
@@ -377,9 +377,9 @@ def _render_warp(
     finalize_lidar_returns(sensor_record, directions_local, distances, geom_ids=geom_ids, env_ids=env_ids)
 
 
-def render_lidars(sim: MuJoCo, env_ids: torch.Tensor | None = None) -> None:
-    """Scan the due LiDARs for every env, or only the ``env_ids`` rows when re-rendering."""
-    due = sim.sensor_manager.collect_lidars_due(env_ids)
+def render_lidars(sim: MuJoCo, env_ids: torch.Tensor | None = None, *, all_sensors: bool = False) -> None:
+    """Scan the due LiDARs, or every LiDAR with ``all_sensors``, writing only the ``env_ids`` rows when given."""
+    due = sim.sensor_manager.collect_lidars_due(all_sensors)
     if isinstance(sim.backend, WarpBackend):
         if not due:
             return
@@ -410,15 +410,17 @@ def create_sensors(sim: MuJoCo) -> None:
     register_lidars(sim, manager)
 
 
-def render_sensors(sim: MuJoCo, env_ids: torch.Tensor | None = None) -> None:
+def render_sensors(sim: MuJoCo, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
     """Capture all camera and LiDAR sensors due this control step.
 
-    With ``env_ids``, every sensor is re-rendered once for those envs and other envs' rows are left
-    unchanged."""
-    if not sim.sensor_config:
+    With ``num_renders``, every sensor is captured instead, once: MuJoCo renders the same image each
+    time. Only the ``env_ids`` rows are written when given; ``num_renders=0`` or an empty ``env_ids``
+    renders nothing."""
+    if not sim.sensor_config or num_renders == 0 or (env_ids is not None and env_ids.numel() == 0):
         return
     if isinstance(sim.backend, WarpBackend):
-        # Geometry may have moved since the last BVH refit (a physics step, or a reset).
+        # Geometry may have moved since the last BVH refit (a physics step, or a state write).
         sim.backend.begin_sensor_render()
-    render_cameras(sim, env_ids)
-    render_lidars(sim, env_ids)
+    all_sensors = num_renders is not None
+    render_cameras(sim, env_ids, all_sensors=all_sensors)
+    render_lidars(sim, env_ids, all_sensors=all_sensors)

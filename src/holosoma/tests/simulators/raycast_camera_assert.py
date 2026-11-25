@@ -93,7 +93,7 @@ def _check_rerender(sim):
     states[moved, 2] += 0.3
     sim.set_actor_states(["robot"], moved, states[moved])
     sim.refresh_sim_tensors()
-    sim.rerender_sensors(moved)
+    sim.render_sensors(moved, num_renders=1)
     after = sim.get_camera_data("raycast", "depth")[..., 0]
 
     if not torch.equal(after[0], before[0]):
@@ -136,7 +136,7 @@ def _check_scene(sim):
     states[:, 0] += 0.2
     sim.set_actor_states(["target"], moved, states)
     sim.refresh_sim_tensors()
-    sim.rerender_sensors(moved)
+    sim.render_sensors(moved, num_renders=1)
     after = sim.get_camera_data("raycast", "depth")[..., 0]
     if abs(float(after[1, 32, 32]) - 0.55) > 0.01:
         fails.append(f"env1: moved object's center depth {float(after[1, 32, 32]):.4f} != .55 m")
@@ -214,7 +214,7 @@ def _check_dynamic_scene(sim):
             # Hold the camera mount fixed; only the target's motion should change its depth.
             sim.set_actor_states(["robot"], env_ids, robot_states)
             sim.refresh_sim_tensors()
-            sim.rerender_sensors(moved)
+            sim.render_sensors(moved, num_renders=1)
         state = sim.get_actor_states(["target"], moved)[0].cpu().numpy()
         expected = _box_center_depth(sim, state)
         after = sim.get_camera_data("raycast", "depth")[..., 0]
@@ -329,9 +329,6 @@ def main() -> int:
     config = dataclasses.replace(
         config, device="cuda:0", training=dataclasses.replace(config.training, num_envs=_NUM_ENVS)
     )
-    sim_engine = dataclasses.replace(config.simulator.config.sim, num_rerenders_on_reset=1)
-    sim_config = dataclasses.replace(config.simulator.config, sim=sim_engine)
-    config = dataclasses.replace(config, simulator=dataclasses.replace(config.simulator, config=sim_config))
     sim, device, _app = launch_simulator(config, device="cuda:0")
     sim.set_headless(True)
     sim.setup()

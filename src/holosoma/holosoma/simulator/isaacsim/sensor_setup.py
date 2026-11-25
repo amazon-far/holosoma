@@ -700,9 +700,9 @@ def _app_updates_without_physics() -> Iterator[None]:
         settings.set_bool("/app/player/playSimulations", previous)
 
 
-def render_lidars(sim: IsaacSim, env_ids: torch.Tensor | None = None) -> None:
-    """Scan the due LiDARs for every env, or only the ``env_ids`` rows when re-rendering."""
-    for lidar_record in sim.sensor_manager.collect_lidars_due(env_ids):
+def render_lidars(sim: IsaacSim, env_ids: torch.Tensor | None = None, *, all_sensors: bool = False) -> None:
+    """Scan the due LiDARs, or every LiDAR with ``all_sensors``, writing only the ``env_ids`` rows when given."""
+    for lidar_record in sim.sensor_manager.collect_lidars_due(all_sensors):
         pattern = lidar_record.pattern_at(sim.time())
         sensor = sim.scene.sensors.get(lidar_record.name)
         if not isinstance(sensor, MutableMultiMeshRayCaster):
@@ -751,15 +751,18 @@ def initialize_sensors(sim: IsaacSim) -> None:
         camera.initialize()
 
 
-def render_sensors(sim: IsaacSim, env_ids: torch.Tensor | None = None) -> None:
+def render_sensors(sim: IsaacSim, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
     """Render if a camera is due or video is recording, then capture the sensors due this control step.
 
-    With ``env_ids``, every sensor is re-rendered for those envs and other envs' rows are left
-    unchanged: RTX cameras render ``sim.num_rerenders_on_reset`` times, ray-cast cameras and LiDARs
-    cast once."""
-    due = sim.sensor_manager.collect_due(env_ids)
+    With ``num_renders``, every sensor is captured instead, RTX cameras after that many renders and
+    ray-cast cameras and LiDARs with one cast. Only the ``env_ids`` rows are written when given;
+    ``num_renders=0`` or an empty ``env_ids`` renders nothing."""
+    if num_renders == 0 or (env_ids is not None and env_ids.numel() == 0):
+        return
+    all_sensors = num_renders is not None
+    due = sim.sensor_manager.collect_due(all_sensors)
     tiled = [record for record in due if record.name in sim.tiled_cameras]
-    if env_ids is None:
+    if num_renders is None:
         recording = sim.video_recorder is not None and sim.video_recorder.is_recording
         if tiled or recording:
             sim.render_for_sensors()
@@ -768,11 +771,11 @@ def render_sensors(sim: IsaacSim, env_ids: torch.Tensor | None = None) -> None:
         for record in tiled:
             for output, buffer in record.buffers.items():
                 record.buffers[output] = buffer.clone()
-        # render_for_sensors would skip: the physics step has not advanced since the frame's render.
-        for _ in range(sim.simulator_config.sim.num_rerenders_on_reset):
+        # render_for_sensors would skip when the physics step has not advanced since its last render.
+        for _ in range(num_renders):
             sim._render_frame()
         for record in tiled:
-            camera = sim.tiled_cameras[record.name]
-            camera._is_outdated[env_ids.to(camera._is_outdated.device)] = True
+            outdated = sim.tiled_cameras[record.name]._is_outdated
+            outdated[slice(None) if env_ids is None else env_ids.to(outdated.device)] = True
     render_cameras(sim, due, env_ids)
-    render_lidars(sim, env_ids)
+    render_lidars(sim, env_ids, all_sensors=all_sensors)

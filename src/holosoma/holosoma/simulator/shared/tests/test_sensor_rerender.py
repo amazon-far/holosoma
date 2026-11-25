@@ -52,14 +52,14 @@ def test_buffer_rows_leave_previously_published_buffers_untouched() -> None:
     assert record.buffers["depth"] is not published
 
 
-def test_rerender_collection_takes_every_camera_without_advancing_cadence() -> None:
+def test_collecting_all_sensors_does_not_advance_cadence() -> None:
     manager = SensorManager(device="cpu", control_hz=50.0)
     _depth_camera(manager, "a")
     _depth_camera(manager, "b")
     manager.collect_due()  # frame 0: both due
     counters = [record.step_counter for record in manager.cameras]
 
-    due = manager.collect_due(torch.tensor([1]))
+    due = manager.collect_due(all_sensors=True)
 
     assert [record.name for record in due] == ["a", "b"]
     assert [record.step_counter for record in manager.cameras] == counters

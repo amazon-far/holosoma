@@ -225,10 +225,12 @@ class BaseSimulator:
         self.sensor_render_hook: HookHandle = self.hooks.add(
             Phase.FRAME_END, self.render_sensors, name="sensors.render"
         )
-        # Episode-start hooks that change what sensors see (poses, lighting, materials) declare
-        # ``before=`` this handle, so the starting envs' frames show their changes.
+        # Re-renders the starting envs. Episode-start hooks that change what sensors see (poses,
+        # lighting, materials) declare ``before=`` this handle, so those frames show their changes.
         self.sensor_rerender_hook: HookHandle = self.hooks.add(
-            Phase.EPISODE_START, self.rerender_sensors, name="sensors.rerender"
+            Phase.EPISODE_START,
+            lambda env_ids: self.render_sensors(env_ids, self.simulator_config.sim.num_rerenders_on_reset),
+            name="sensors.rerender",
         )
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
@@ -1008,35 +1010,29 @@ class BaseSimulator:
 
     # ----- Mounted sensor interface -----
 
-    def render_sensors(self, env_ids: torch.Tensor | None = None) -> None:
+    def render_sensors(self, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
         """Capture all due mounted sensors at control frequency into their cached buffers.
 
         Called once per control step from the task loop (after the physics substeps, before
         observations compute), honoring each sensor's ``update_decimation``. Consumers then do
-        cheap cached reads through the camera/LiDAR accessors. With ``env_ids``, every sensor is
-        re-rendered for those envs only (see :meth:`rerender_sensors`)."""
+        cheap cached reads through the camera/LiDAR accessors.
+
+        Args:
+            env_ids: Envs whose rows are written; ``None`` writes every env, and an empty tensor
+                renders nothing.
+            num_renders: Render every sensor now, drawing the scene this many times, without
+                advancing update cadence; 0 renders nothing. ``None`` renders the sensors due
+                this control step. Re-rendering envs whose state was written outside physics
+                (resets, teleports) passes ``sim.num_rerenders_on_reset``; body poses must
+                already reflect that state.
+        """
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
 
     def capture_sensors(self) -> None:
-        """Capture every mounted sensor for every env, keeping each sensor's update cadence.
+        """Capture every mounted sensor for every env without advancing its update cadence.
 
         Run once before the first reset, so every sensor has a frame for re-renders to update."""
-        records = [*self.sensor_manager.cameras, *self.sensor_manager.lidars]
-        counters = [record.step_counter for record in records]
-        self.render_sensors()
-        for record, counter in zip(records, counters, strict=True):
-            record.step_counter = counter
-
-    def rerender_sensors(self, env_ids: torch.Tensor) -> None:
-        """Re-render ``env_ids`` into the sensor buffers, leaving other envs' rows unchanged.
-
-        Runs as the :attr:`sensor_rerender_hook` on ``EPISODE_START``; a mid-episode teleport that
-        needs fresh frames calls it directly. Sensors re-render only when
-        ``sim.num_rerenders_on_reset`` is above 0, and otherwise keep their frame. Body poses must
-        already reflect the state written for those envs.
-        """
-        if self.simulator_config.sim.num_rerenders_on_reset > 0:
-            self.render_sensors(env_ids)
+        self.render_sensors(num_renders=1)
 
     def get_camera_data(
         self,

@@ -822,7 +822,8 @@ class MotionCommand(CommandTermBase):
             self._env.simulator.forward_kinematics()
             # The teleport is an observation reset: re-render these envs' sensors, then drop their
             # history. It is not an episode start, so the EPISODE_START re-render does not run.
-            self._env.simulator.rerender_sensors(ended_env_ids)
+            simulator = self._env.simulator
+            simulator.render_sensors(ended_env_ids, simulator.simulator_config.sim.num_rerenders_on_reset)
             self._env.observation_manager.reset(ended_env_ids)
 
         self.update_relative_body_targets()
