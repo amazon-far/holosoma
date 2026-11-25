@@ -283,6 +283,10 @@ class MuJoCo(BaseSimulator):
             # constants before either backend uses them or Warp copies the model to the GPU.
             mujoco.mj_setConst(self.root_model, self.root_data)
 
+        # Avoid solving contacts at asset-default poses during startup.
+        self._set_robot_initial_state()
+        self._set_object_initial_states()
+
         # Backend selection based on configuration
         if self.simulator_config.mujoco_backend == MujocoBackend.WARP:
             if not WARP_AVAILABLE:
