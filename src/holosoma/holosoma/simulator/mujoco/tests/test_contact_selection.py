@@ -12,7 +12,9 @@ import pytest
 mujoco = pytest.importorskip("mujoco")
 
 from holosoma.config_types.full_sim import FullSimConfig  # noqa: E402
-from holosoma.config_types.sensor import ContactSensorConfig, ContactTargetConfig  # noqa: E402
+from holosoma.config_types.robot import RobotConfig, RobotInitState  # noqa: E402
+from holosoma.config_types.sensor import ContactSensorConfig, ContactTargetConfig, SensorConfig  # noqa: E402
+from holosoma.config_values.robot import g1_29dof  # noqa: E402
 from holosoma.config_values.simulator import mujoco as mujoco_config  # noqa: E402
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase  # noqa: E402
 from holosoma.simulator.mujoco.backends import ClassicBackend  # noqa: E402
@@ -351,6 +353,88 @@ def test_classic_queries_follow_consecutive_empty_and_opposite_solved_contacts()
     assert samples[3].count_nonzero() == 0
     # Solving the opposite contact must not mutate the prior owned snapshot.
     assert snapshots[1].body_forces[0, robot_body, 0] < -1
+
+
+def test_fixed_base_contacts_follow_canonical_rows_and_resolve_extra_asset_links() -> None:
+    scene = _scene(
+        """
+        <mujoco>
+          <option gravity="0 0 0"/>
+          <worldbody>
+            <geom name="ground" type="plane" size="5 5 .1" pos="0 0 -1"/>
+            <body name="robot_root">
+              <body name="robot_left" pos="-.08 0 0">
+                <joint name="robot_left_joint" type="slide" axis="1 0 0"/>
+                <geom type="sphere" size=".1" mass="1"/>
+              </body>
+              <body name="robot_right" pos=".08 0 0">
+                <joint name="robot_right_joint" type="slide" axis="1 0 0"/>
+                <geom type="sphere" size=".1" mass="1"/>
+              </body>
+              <body name="robot_helper" pos="2 0 0">
+                <joint name="robot_helper_joint" type="slide" axis="1 0 0"/>
+                <geom type="sphere" size=".1" mass="1"/>
+              </body>
+            </body>
+            <body name="box_root" pos="2.16 0 0">
+              <freejoint/><geom type="sphere" size=".1" mass="1"/>
+            </body>
+          </worldbody>
+          <actuator>
+            <motor name="robot_left_motor" joint="robot_left_joint"/>
+            <motor name="robot_right_motor" joint="robot_right_joint"/>
+            <motor name="robot_helper_motor" joint="robot_helper_joint"/>
+          </actuator>
+        </mujoco>
+        """
+    )
+    scene.robot_spec_meta = ActorSpecMeta(
+        prefix="robot_",
+        root_body="root",
+        body_names=["root", "left", "right", "helper"],
+        dof_joint_names=["left_joint", "right_joint", "helper_joint"],
+        actuator_names=["left_motor", "right_motor", "helper_motor"],
+    )
+    sensors: dict[str, SensorConfig] = {
+        "helper": ContactSensorConfig(
+            sources=[ContactTargetConfig(target_kind="robot_link", target="helper")],
+            counterparts=[_actor("box")],
+        )
+    }
+    targets = prepare_contact_targets(scene, sensors)
+    model = scene.world_spec.compile()
+    data = mujoco.MjData(model)
+    config = cast("FullSimConfig", SimpleNamespace(training=SimpleNamespace(num_envs=1)))
+    sim = MuJoCo.__new__(MuJoCo)
+    sim.robot_config = RobotConfig(
+        dof_names=["left_joint", "right_joint", "helper_joint"],
+        body_names=["right", "left"],
+        init_state=RobotInitState(position=[0, 0, 0]),
+        asset=dataclasses.replace(g1_29dof.asset, fix_base_link=True),
+    )
+    sim.root_model, sim.root_data = model, data
+    sim.scene_manager = scene
+    sim.sim_device = "cpu"
+    sim.backend = ClassicBackend(model, data, config, "cpu")
+    sim.sensor_config = sensors
+    sim.sensor_manager = SensorManager("cpu", 50.0, physics_hz=200.0)
+    sim.contact_target_map = targets
+    sim._set_robot_properties()
+    register_contacts(sim)
+    try:
+        sim.backend.step()
+        sim.sensor_manager.contact_step_completed()
+        assert sim.root_body_name is None
+        assert sim.body_names == ["right", "left"]
+        assert sim.sensor_manager.get_contact("contact_sensor").source_names == ["robot_link:right", "robot_link:left"]
+        default = sim.get_contact_data()
+        assert default.shape == (1, 2, 3)
+        assert default[0, 0, 0] > 1
+        assert default[0, 1, 0] < -1
+        torch.testing.assert_close(default, sim._robot_contact_forces())
+        assert sim.get_contact_data("helper")[0, 0, 0] < -1
+    finally:
+        sim.backend.close()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Classic contact transfer stream test requires CUDA")

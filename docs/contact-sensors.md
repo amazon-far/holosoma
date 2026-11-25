@@ -66,7 +66,11 @@ in_contact = (matrix.norm(dim=-1) > 1.0).any(dim=-1)   # Your threshold, per foo
 By default, sensors update after every solved physics step, before `POST_STEP` hooks.
 Set `update_decimation=4` for steps 4, 8, and 12.
 You can also use a frequency such as `"50Hz"` against the physics rate.
-Skipped updates keep the prior measurement. Resets clear selected environments until their next update.
+Skipped updates keep the prior measurement.
+
+Resets clear selected environments until their next update.
+Rendering does not update contact forces.
+Reset clearing applies even when `sim.num_rerenders_on_reset` is zero and does not restart the physics schedule.
 
 Consumers can keep history through the existing hooks.
 Use the default decimation of one to retain brief contacts.

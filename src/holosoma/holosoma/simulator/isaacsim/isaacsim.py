@@ -403,7 +403,8 @@ class IsaacSim(BaseSimulator):
         configure_robot_names(self, list(self._robot.joint_names), list(self._robot.body_names))
 
         self._contact_to_robot_body_ids = torch.tensor(
-            [self.contact_sensor.body_names.index(body_name) for body_name in self.body_names],
+            [self.contact_sensor.body_names.index(self.body_name_map[body_name]) for body_name in self.body_names],
+            dtype=torch.long,
             device=self.sim_device,
         )
 

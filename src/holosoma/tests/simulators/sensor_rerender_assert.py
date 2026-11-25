@@ -69,7 +69,9 @@ def main() -> int:
         config = _camera_presets.as_mjwarp(config)
     n = 1 if args.simulator == "mujoco" else 3
     device = "cpu" if args.simulator == "mujoco" else "cuda:0"
-    config = dataclasses.replace(config, device=device, training=dataclasses.replace(config.training, num_envs=n))
+    config = dataclasses.replace(
+        config, device=device, training=dataclasses.replace(config.training, num_envs=n, headless=True)
+    )
 
     sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(True)

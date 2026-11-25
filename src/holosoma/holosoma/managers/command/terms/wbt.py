@@ -855,6 +855,7 @@ class MotionCommand(CommandTermBase):
             # The teleport is an observation reset: re-render these envs' sensors, then drop their
             # history. It is not an episode start, so the EPISODE_START re-render does not run.
             simulator = self._env.simulator
+            simulator.sensor_manager.reset_contacts(ended_env_ids)
             simulator.render_sensors(ended_env_ids, simulator.simulator_config.sim.num_rerenders_on_reset)
             self._env.observation_manager.reset(ended_env_ids)
 

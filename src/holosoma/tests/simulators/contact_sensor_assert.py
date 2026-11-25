@@ -111,7 +111,7 @@ def _build(backend: str, num_envs: int, device: str | None = None):
     origins = torch.zeros(num_envs, 3, device=device)
     origins[:, 0] = torch.arange(num_envs, device=device) * 8
     initial = config.robot.init_state
-    root = torch.tensor([*initial.pos, *initial.rot, *initial.lin_vel, *initial.ang_vel], device=device)
+    root = torch.tensor(initial.root_state_list(), device=device)
     sim.create_envs(num_envs, origins, root)
     sim.prepare_sim()
     return sim
@@ -266,7 +266,7 @@ def _assert_contract(sim):
     states[:, 7:] = 0
     sim.set_actor_states(["top"], one, states)
     sim.hooks.emit(Phase.EPISODE_START, one)
-    sim.rerender_sensors(one)
+    sim.render_sensors(one, 1)
     sim.render_sensors()
     assert torch.count_nonzero(sim.get_contact_data("pairs", "force_matrix")[0]) == 0
     torch.testing.assert_close(sim.get_contact_data("pairs", "force_matrix")[1:], untouched)
@@ -276,7 +276,7 @@ def _assert_contract(sim):
 
     # The public physics-step API must recover contact rows without an external hook loop.
     sim.hooks.emit(Phase.FRAME_BEGIN)
-    sim.rerender_sensors(one)
+    sim.sensor_manager.reset_contacts(one)
     sim.simulate_at_each_physics_step()
     assert sim.contact_recorder.recorded_forces.shape[1] == 0
     sim.render_sensors()
@@ -298,12 +298,50 @@ def _assert_contract(sim):
     assert torch.all(torch.linalg.vector_norm(sim.get_contact_data("box_robot")[:, 0], dim=-1) > 1)
     torch.testing.assert_close(sim.get_contact_data("foot_box"), -box_foot, atol=0.1, rtol=0.02)
 
+    # Drawing keeps solved contacts. Episode resets clear them before drawing, even with zero passes.
+    config = sim.simulator_config
+    render_sensors = sim.render_sensors
+    try:
+        for count in (0, 1, 3):
+            record = sim.sensor_manager.get_contact("pairs")
+            held = sim.get_contact_data("pairs", "force_matrix")
+            assert held[0, 1, 1, 2] > 1
+            step_counter, frames = record.step_counter, sim.sensor_manager.frames_produced("pairs")
+            last_due = sim.sensor_manager.last_contact_due.copy()
+            sim.render_sensors(one, count)
+            sim.render_sensors()
+            assert sim.get_contact_data("pairs", "force_matrix") is held
+            assert (record.step_counter, sim.sensor_manager.frames_produced("pairs")) == (step_counter, frames)
+            assert sim.sensor_manager.last_contact_due == last_due
+
+            def render_after_reset(env_ids, num_renders, count=count, held=held):
+                assert torch.equal(env_ids, one)
+                assert num_renders == count
+                assert sim.get_contact_data("pairs", "force_matrix")[0].count_nonzero() == 0
+                torch.testing.assert_close(sim.get_contact_data("pairs", "force_matrix")[1:], held[1:])
+                render_sensors(env_ids, num_renders)
+
+            sim.simulator_config = dataclasses.replace(
+                config, sim=dataclasses.replace(config.sim, num_rerenders_on_reset=count)
+            )
+            sim.render_sensors = render_after_reset
+            sim.hooks.emit(Phase.EPISODE_START, one)
+            sim.render_sensors = render_sensors
+            assert sim.get_contact_data("pairs", "force_matrix")[0].count_nonzero() == 0
+            torch.testing.assert_close(sim.get_contact_data("pairs", "force_matrix")[1:], held[1:])
+            assert (record.step_counter, sim.sensor_manager.frames_produced("pairs")) == (step_counter, frames)
+            sim.simulate_at_each_physics_step()
+            assert sim.get_contact_data("pairs", "force_matrix")[0, 1, 1, 2] > 1
+    finally:
+        sim.simulator_config = config
+        sim.render_sensors = render_sensors
+
     # FK-only playback cannot replace the contact sample invalidated by this teleport.
     sim.kinematic_playback = True
     states = sim.get_actor_states(["floor_box"], one).clone()
     states[:, 2] = 4
     sim.set_actor_states(["floor_box"], one, states)
-    sim.rerender_sensors(one)
+    sim.sensor_manager.reset_contacts(one)
     _control_step(sim)
     assert torch.count_nonzero(sim.get_contact_data("pairs", "force_matrix")[0]) == 0
 

@@ -7,6 +7,7 @@ root DOF channels, the reference body, canonical column zero and raw NPZ column 
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,9 +18,13 @@ import torch
 import yaml
 
 from holosoma.config_types.command import CommandTermCfg, MotionConfig
+from holosoma.config_types.observation import ObservationManagerCfg, ObsGroupCfg, ObsTermCfg
 from holosoma.config_types.robot import RobotConfig, RobotInitState
+from holosoma.config_types.sensor import ContactSensorConfig
 from holosoma.config_values.robot import yam
 from holosoma.managers.command.terms.wbt import MotionCommand
+from holosoma.managers.observation.manager import ObservationManager
+from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.eval_utils import CheckpointConfig, load_saved_experiment_config
 from holosoma.utils.simulator_config import SimulatorType
 
@@ -95,6 +100,10 @@ def _write_clip(
 
 class _Simulator:
     """Tensor transport and deterministic FK for an articulation with a named root body."""
+
+    sensor_manager: SensorManager
+    simulator_config: SimpleNamespace
+    render_sensors: Callable[[torch.Tensor, int], None]
 
     def __init__(self, robot: RobotConfig, root_name: str = "anchor") -> None:
         self._body_list = robot.body_names
@@ -208,6 +217,62 @@ def test_root_selection_drives_accessors_and_reset(tmp_path: Path, selector: str
     expected = torch.cat((_POS[0] + origins[0], _QUAT[0], _LIN[0], _ANG[0]))
     torch.testing.assert_close(simulator.robot_root_states[0], expected)
     torch.testing.assert_close(simulator.robot_root_states[1], untouched)
+
+
+def contact_observation(env: Any) -> torch.Tensor:
+    return env.simulator.sensor_manager.get_contact("ground").buffers["forces"].flatten(1)
+
+
+@pytest.mark.parametrize("num_renders", [0, 1, 3])
+def test_clip_end_clears_only_teleported_contacts_and_observation_history(tmp_path: Path, num_renders: int) -> None:
+    path = tmp_path / "motion.npz"
+    _write_clip(path)
+    term, simulator = _command(_robot(), _motion(path, start_at_timestep_zero_prob=1.0))
+    env = term._env
+    env.log_dict = {}
+    simulator.sensor_manager = SensorManager("cpu", 50, num_envs=2)
+    sample = torch.tensor([1.0, 2.0]).view(2, 1, 1, 1).expand(-1, 1, 1, 3)
+    record = simulator.sensor_manager.register_contact("ground", ContactSensorConfig(), lambda: sample)
+    simulator.sensor_manager.contact_step_completed()
+    simulator.simulator_config = SimpleNamespace(sim=SimpleNamespace(num_rerenders_on_reset=num_renders))
+    rendered: list[torch.Tensor] = []
+
+    def render(env_ids: torch.Tensor, count: int) -> None:
+        assert env_ids.tolist() == [0]
+        assert count == num_renders
+        torch.testing.assert_close(simulator._rigid_body_pos[:, 2], simulator.robot_root_states[:, :3])
+        rendered.append(record.buffers["forces"].clone())
+
+    simulator.render_sensors = render
+    observation_cfg = ObservationManagerCfg(
+        groups={
+            "policy": ObsGroupCfg(
+                terms={"contacts": ObsTermCfg(func=f"{__name__}:contact_observation")}, history_length=3
+            )
+        }
+    )
+    env.observation_manager = ObservationManager(observation_cfg, env, "cpu")
+    for _ in range(2):
+        env.observation_manager.new_frame()
+        env.observation_manager.step()
+    term.time_steps[:] = torch.tensor([2, 0])
+    untouched = simulator.robot_root_states[1].clone()
+
+    term.step()
+
+    assert term.time_steps.tolist() == [0, 1]
+    assert len(rendered) == 1
+    assert rendered[0][:, 0, 0].tolist() == [0, 2]
+    assert record.buffers["forces"][:, 0, 0].tolist() == [0, 2]
+    assert record.buffers["force_matrix"][:, 0, 0, 0].tolist() == [0, 2]
+    assert simulator.sensor_manager.frames_produced("ground") == 1
+    torch.testing.assert_close(simulator.robot_root_states[0, :3], _POS[0] + simulator.scene.env_origins[0])
+    torch.testing.assert_close(simulator.robot_root_states[1], untouched)
+    env.observation_manager.new_frame()
+    observations = env.observation_manager.step()["policy"]
+    assert isinstance(observations, torch.Tensor)
+    assert observations[0].count_nonzero() == 0
+    torch.testing.assert_close(observations[1], torch.full((9,), 2.0))
 
 
 def _two_clips(tmp_path: Path, *, different_extras: bool = False) -> str:

@@ -26,7 +26,7 @@ class FullSimConfig:
     """Scene composition (rigid objects, scene files)."""
 
     sensors: dict[str, SensorConfig] = field(default_factory=dict)
-    """Mounted cameras and LiDARs, keyed by sensor name. Empty (default) = none."""
+    """Cameras, LiDARs, and contact sensors, keyed by sensor name. Empty = no configured sensors."""
 
     experiment_dir: str | None = None
     """Experiment directory path (computed from logger config in base_task)."""

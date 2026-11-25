@@ -76,6 +76,9 @@ class _ConstructorSimulator(_Simulator):
     def install_plugins(self) -> None:
         pass
 
+    def render_sensors(self, *, num_renders: int) -> None:
+        assert num_renders == 1
+
     def close(self) -> None:
         pass
 

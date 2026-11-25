@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from holosoma.config_types.full_sim import FullSimConfig
@@ -92,7 +94,7 @@ def test_reset_drops_stale_rows_and_device_copies_until_a_new_physics_sample() -
     manager.contact_step_completed()
     old_frame = record.buffers["forces"]
     old_copy = record.buffer_on("forces", "meta")
-    manager.rerender(torch.tensor([1]))
+    manager.reset_contacts(torch.tensor([1]))
     assert record.buffers["forces"][:, 0, 0].tolist() == [1, 0, 1]
     assert record.buffers["force_matrix"][:, 0, 0, 0].tolist() == [1, 0, 1]
     assert old_frame[:, 0, 0].tolist() == [1, 1, 1]
@@ -235,3 +237,65 @@ def test_reset_does_not_restart_the_shared_physics_cadence() -> None:
     manager.contact_step_completed()
     assert record.buffers["forces"][:, 0, 0].tolist() == [2, 2]
     assert manager.frames_produced("slow") == 2
+
+
+@pytest.mark.parametrize("num_renders", [0, 1, 3])
+def test_episode_reset_clears_contacts_before_render_without_advancing_physics(num_renders: int) -> None:
+    defaults = RunSimConfig()
+    simulator = dataclasses.replace(
+        defaults.simulator.config,
+        sim=dataclasses.replace(defaults.simulator.config.sim, num_rerenders_on_reset=num_renders),
+    )
+    config = FullSimConfig(
+        simulator=simulator,
+        robot=defaults.robot,
+        training=dataclasses.replace(defaults.training, num_envs=2),
+        logger=defaults.logger,
+    )
+    rendered: list[tuple[torch.Tensor | None, int | None, torch.Tensor]] = []
+
+    class ResetSimulator(BaseSimulator):
+        def render_sensors(self, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
+            rendered.append((env_ids, num_renders, self.get_contact_data("slow").clone()))
+
+    sim = ResetSimulator(config, None, "cpu")  # type: ignore[arg-type]
+    sample = torch.ones(2, 1, 1, 3)
+    captures: list[int] = []
+
+    def capture() -> torch.Tensor:
+        captures.append(len(captures))
+        return sample
+
+    record = sim.sensor_manager.register_contact("slow", ContactSensorConfig(update_decimation=4), capture)
+    for _ in range(5):
+        sim.sensor_manager.contact_step_completed()
+    old_frame = sim.get_contact_data("slow")
+    old_copy = record.buffer_on("forces", "meta")
+    ids = torch.tensor([0])
+
+    sim.hooks.emit(Phase.EPISODE_START, ids)
+
+    assert len(rendered) == 1
+    assert torch.equal(rendered[0][0], ids)
+    assert rendered[0][1] == num_renders
+    assert rendered[0][2][:, 0, 0].tolist() == [0, 1]
+    assert old_frame[:, 0, 0].tolist() == [1, 1]
+    assert record.buffer_on("forces", "meta") is not old_copy
+    assert record.buffers["force_matrix"][:, 0, 0, 0].tolist() == [0, 1]
+    assert sim.sensor_manager.last_contact_due == set()
+    assert sim.sensor_manager.frames_produced("slow") == 1
+    assert len(captures) == 1
+
+    sample.fill_(2)
+    for _ in range(2):
+        sim.render_sensors(ids, 3)
+        sim.hooks.emit(Phase.FRAME_END)
+        sim.sensor_manager.contact_step_completed()
+        assert sim.get_contact_data("slow")[:, 0, 0].tolist() == [0, 1]
+        assert sim.sensor_manager.frames_produced("slow") == 1
+        assert len(captures) == 1
+
+    sim.sensor_manager.contact_step_completed()
+    assert sim.get_contact_data("slow")[:, 0, 0].tolist() == [2, 2]
+    assert sim.sensor_manager.frames_produced("slow") == 2
+    assert len(captures) == 2

@@ -260,7 +260,12 @@ class BaseSimulator:
             num_envs=self.training_config.num_envs,
             physics_hz=sim_cfg.fps,
         )
-        self.hooks.add(Phase.EPISODE_START, self.sensor_manager.reset_contacts, name="sensors.reset_contacts")
+        self.hooks.add(
+            Phase.EPISODE_START,
+            self.sensor_manager.reset_contacts,
+            name="sensors.reset_contacts",
+            before=self.sensor_rerender_hook,
+        )
 
         # To be overridden by subclasses
         self.height_samples = None

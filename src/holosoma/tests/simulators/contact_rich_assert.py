@@ -121,7 +121,7 @@ def _build(backend: str, num_envs: int, device: str | None, record_dir: str | No
         config,
         scene=scene,
         robot=dataclasses.replace(
-            config.robot, init_state=dataclasses.replace(config.robot.init_state, pos=[0.0, 0.0, _ROOT_HEIGHT])
+            config.robot, init_state=dataclasses.replace(config.robot.init_state, position=[0.0, 0.0, _ROOT_HEIGHT])
         ),
         device=device or ("cpu" if backend == "mujoco" else "cuda:0"),
         training=dataclasses.replace(config.training, num_envs=num_envs, headless=True),
@@ -142,7 +142,7 @@ def _build(backend: str, num_envs: int, device: str | None, record_dir: str | No
     origins = torch.zeros(num_envs, 3, device=device)
     origins[:, 0] = torch.arange(num_envs, device=device) * 20
     initial = config.robot.init_state
-    root = torch.tensor([*initial.pos, *initial.rot, *initial.lin_vel, *initial.ang_vel], device=device)
+    root = torch.tensor(initial.root_state_list(), device=device)
     sim.create_envs(num_envs, origins, root)
     sim.prepare_sim()
     # Place every robot at its own origin before the projectile's first physics step.
@@ -150,7 +150,7 @@ def _build(backend: str, num_envs: int, device: str | None, record_dir: str | No
     robot_states = root.expand(num_envs, -1).clone()
     robot_states[:, :3] += sim.env_origins
     sim.set_actor_states(["robot"], ids, robot_states)
-    angles = config.robot.init_state.default_joint_angles
+    angles = config.robot.default_dof_positions()
     sim.set_dof_state_by_names(None, angles, dict.fromkeys(angles, 0.0))
     torch.testing.assert_close(sim.robot_root_states[:, :3], robot_states[:, :3], atol=1e-5, rtol=0)
     torch.testing.assert_close(sim.robot_root_states[:, 7:13], robot_states[:, 7:13], atol=1e-5, rtol=0)
