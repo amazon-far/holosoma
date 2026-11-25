@@ -12,7 +12,7 @@ from holosoma.simulator.mujoco.backends.classic_backend import ContactPairForces
 from holosoma.simulator.mujoco.contact_warp import _group_contact_forces  # noqa: E402
 from holosoma.utils.safe_torch_import import torch  # noqa: E402
 
-pytestmark = pytest.mark.no_sim
+pytestmark = pytest.mark.mujoco_classic
 
 
 @pytest.mark.parametrize("normal_only", [True, False])
