@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 torch = pytest.importorskip("torch")
-pytest.importorskip("mujoco")
+mujoco = pytest.importorskip("mujoco")
 
 # MuJoCo ClassicBackend (CPU) only.
 pytestmark = pytest.mark.mujoco_classic
@@ -28,7 +28,7 @@ from holosoma.config_types.scene import (  # noqa: E402
     SceneFileConfig,
 )
 from holosoma.simulator.shared.object_registry import ObjectType  # noqa: E402
-from tests.simulators.mujoco._build import build_classic_sim  # noqa: E402
+from tests.simulators.mujoco._build import build_classic_sim, classic_run_sim_config  # noqa: E402
 
 SMALL_BOX = "holosoma/data/scene_objects/boxes/small_box.urdf"
 SMALL_BOX_XML = "holosoma/data/scene_objects/boxes/small_box.xml"
@@ -83,6 +83,27 @@ def test_xml_format_object_spawns_and_falls():
     for _ in range(STEPS):
         sim.simulate_at_each_physics_step()
     assert _z(sim, "xbox") < z0 - 1e-3, "xml-format object did not fall"
+
+
+def test_configured_poses_precede_first_forward(monkeypatch):
+    first_qpos = []
+    forward = mujoco.mj_forward
+
+    def observe(model, data):
+        if not first_qpos:
+            first_qpos.append(data.qpos.copy())
+        return forward(model, data)
+
+    monkeypatch.setattr(mujoco, "mj_forward", observe)
+    obj = RigidObjectConfig(xml_file=SMALL_BOX_XML, position=[1, 2, 3], orientation=[0, 1, 0, 0])
+    config = classic_run_sim_config(SceneConfig(rigid_objects={"box": obj}))
+    with config.create_task() as task:
+        for name, expected in (
+            ("robot", [*config.robot.init_state.position, *config.robot.init_state.orientation]),
+            ("box", [*obj.position, *obj.orientation]),
+        ):
+            addr = task.simulator.object_addrs[name]["qpos_addr"]
+            assert first_qpos[0][addr : addr + 7] == pytest.approx(expected)
 
 
 def test_xml_static_body_holds_pose():
