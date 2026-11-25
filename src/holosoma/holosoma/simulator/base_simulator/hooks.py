@@ -334,6 +334,11 @@ class HookRegistry:
         self._invalidate(phase)
         return HookHandle(self, record)
 
+    @property
+    def installing_slot(self) -> str | None:
+        """The plugin slot being constructed under :meth:`installing`, or ``None`` outside it."""
+        return self._owner
+
     @contextmanager
     def installing(self, instance: str) -> Iterator[None]:
         """Scope registrations to the plugin slot being constructed, so its keys are published under it.
@@ -534,6 +539,11 @@ class HookRegistry:
                     record.callback(*args)
         finally:
             self._emitting.remove(phase)
+
+    @property
+    def emitting(self) -> frozenset[Phase]:
+        """The phases whose hooks are running now; empty outside any emission."""
+        return frozenset(self._emitting)
 
     def validate(self) -> None:
         """Resolve every phase now, without invoking a callback, so a bad graph fails at startup.
