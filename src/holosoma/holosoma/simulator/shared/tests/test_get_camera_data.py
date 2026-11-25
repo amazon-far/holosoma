@@ -64,7 +64,7 @@ def test_missing_buffer_raises_runtime_error() -> None:
 
 def test_returns_full_buffer_and_env_subset() -> None:
     buf = torch.arange(3 * 2 * 2 * 3, dtype=torch.uint8).reshape(3, 2, 2, 3)
-    rt = CameraRecord(name="head", config=None, buffers={"rgb": buf})  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
+    rt = CameraRecord(name="head", config=None, buffers={"rgb": buf}, rendered={"rgb"})  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
     sim = _sim(_Manager({"head": rt}))
     assert torch.equal(sim.get_camera_data("head", "rgb"), buf)  # env_ids=None -> all
     subset = sim.get_camera_data("head", "rgb", env_ids=[0, 2])
@@ -73,7 +73,7 @@ def test_returns_full_buffer_and_env_subset() -> None:
 
 def test_env_subset_slices_the_device_buffer() -> None:
     buf = torch.arange(3 * 1 * 1 * 3, dtype=torch.uint8).reshape(3, 1, 1, 3)
-    rt = CameraRecord(name="head", config=None, buffers={"rgb": buf})  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
+    rt = CameraRecord(name="head", config=None, buffers={"rgb": buf}, rendered={"rgb"})  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
     sim = _sim(_Manager({"head": rt}))
     # device + env_ids compose: slice the (cached) full buffer for that device.
     subset = sim.get_camera_data("head", "rgb", env_ids=[1, 2], device="cpu")
