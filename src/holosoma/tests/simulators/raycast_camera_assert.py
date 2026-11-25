@@ -329,6 +329,9 @@ def main() -> int:
     config = dataclasses.replace(
         config, device="cuda:0", training=dataclasses.replace(config.training, num_envs=_NUM_ENVS)
     )
+    sim_engine = dataclasses.replace(config.simulator.config.sim, num_rerenders_on_reset=1)
+    sim_config = dataclasses.replace(config.simulator.config, sim=sim_engine)
+    config = dataclasses.replace(config, simulator=dataclasses.replace(config.simulator, config=sim_config))
     sim, device, _app = launch_simulator(config, device="cuda:0")
     sim.set_headless(True)
     sim.setup()

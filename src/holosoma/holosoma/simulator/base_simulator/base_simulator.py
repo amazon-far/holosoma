@@ -1020,13 +1020,13 @@ class BaseSimulator:
         """Re-render ``env_ids`` into the sensor buffers, leaving other envs' rows unchanged.
 
         Runs as the :attr:`sensor_rerender_hook` on ``EPISODE_START``; a mid-episode teleport that
-        needs fresh frames calls it directly. Ray-cast cameras always re-render. Other sensors
-        re-render only when ``sim.num_rerenders_on_reset`` is above 0, and otherwise keep their
-        frame. Body poses must already reflect the state written for those envs.
+        needs fresh frames calls it directly. Sensors re-render only when
+        ``sim.num_rerenders_on_reset`` is above 0, and otherwise keep their frame. Body poses must
+        already reflect the state written for those envs.
         """
         if self.simulator_config.sim.num_rerenders_on_reset > 0:
             self._rerender_backend_sensors(env_ids)
-        self.sensor_manager.rerender(env_ids)
+            self.sensor_manager.rerender(env_ids)
 
     def _rerender_backend_sensors(self, env_ids: torch.Tensor) -> None:
         """Re-render ``env_ids`` for the sensors the backend renders itself: cameras without a
