@@ -149,6 +149,7 @@ class BaseTask:
         # Plugins may depend on backend/provider resources created above. Their CLOSE hooks are
         # registered last and therefore run first during reverse-order teardown.
         self.simulator.install_plugins()
+        self.simulator.capture_sensors()
 
         self._initialize_task_managers()
 

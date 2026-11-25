@@ -122,11 +122,11 @@ def initialize_camera_mounts(sim: MuJoCo) -> None:
         sim.sensor_manager.set_mount_pose(camera.name, sim.sensor_manager.get_mount_pose(camera.name))
 
 
-def render_cameras(sim: MuJoCo) -> None:
-    """Render due cameras into their cached output buffers."""
-    due = sim.sensor_manager.collect_due()
+def render_cameras(sim: MuJoCo, env_ids: torch.Tensor | None = None) -> None:
+    """Render due cameras into their cached output buffers, or only the ``env_ids`` rows when re-rendering."""
+    due = sim.sensor_manager.collect_due(env_ids)
     if due:
-        sim.backend.render_cameras(due)
+        sim.backend.render_cameras(due, env_ids)
 
 
 def register_lidars(sim: MuJoCo, manager: SensorManager) -> None:
@@ -282,8 +282,6 @@ def _warp_workspace(
 
 def _render_cpu(sim: MuJoCo, sensor_record: LidarRecord, *, env_ids: torch.Tensor | None = None) -> None:
     assert sim.root_model is not None
-    if "ranges" not in sensor_record.buffers:
-        env_ids = None
     pattern = sensor_record.pattern_at(sim.time())
     directions_local = pattern.directions.to("cpu")
     site_id = sensor_record.backend_cache["mujoco_site_id"]
@@ -338,8 +336,6 @@ def _render_warp(
     import warp as wp
 
     assert sim.root_model is not None
-    if "ranges" not in sensor_record.buffers:
-        env_ids = None
     pattern = sensor_record.pattern_at(sim_time)
     directions_local = pattern.directions
     ray_count = directions_local.shape[0]
@@ -382,8 +378,8 @@ def _render_warp(
 
 
 def render_lidars(sim: MuJoCo, env_ids: torch.Tensor | None = None) -> None:
-    """Scan every due LiDAR, or re-cast only the ``env_ids`` rows of every LiDAR."""
-    due = sim.sensor_manager.collect_lidars_due() if env_ids is None else sim.sensor_manager.lidars
+    """Scan the due LiDARs for every env, or only the ``env_ids`` rows when re-rendering."""
+    due = sim.sensor_manager.collect_lidars_due(env_ids)
     if isinstance(sim.backend, WarpBackend):
         if not due:
             return
@@ -404,21 +400,6 @@ def render_lidars(sim: MuJoCo, env_ids: torch.Tensor | None = None) -> None:
         _render_cpu(sim, sensor_record, env_ids=env_ids)
 
 
-def rerender_sensors(sim: MuJoCo, env_ids: torch.Tensor) -> None:
-    """Re-render ``env_ids`` for every camera and LiDAR once, leaving other envs' rows unchanged.
-
-    No-op unless ``sim.num_rerenders_on_reset`` is above 0. A LiDAR with no scan yet is captured
-    for every env."""
-    if sim.simulator_config.sim.num_rerenders_on_reset == 0:
-        return
-    if isinstance(sim.backend, WarpBackend):
-        # The reset moved geometry since this frame's BVH refit.
-        sim.backend.begin_sensor_render()
-    if sim.sensor_manager.cameras:
-        sim.backend.render_cameras(sim.sensor_manager.cameras, env_ids)
-    render_lidars(sim, env_ids)
-
-
 def create_sensors(sim: MuJoCo) -> None:
     """Register native sensors with the simulator's shared manager."""
     if not sim.sensor_config:
@@ -429,11 +410,15 @@ def create_sensors(sim: MuJoCo) -> None:
     register_lidars(sim, manager)
 
 
-def render_sensors(sim: MuJoCo) -> None:
-    """Capture all camera and LiDAR sensors due this control step."""
+def render_sensors(sim: MuJoCo, env_ids: torch.Tensor | None = None) -> None:
+    """Capture all camera and LiDAR sensors due this control step.
+
+    With ``env_ids``, every sensor is re-rendered once for those envs and other envs' rows are left
+    unchanged."""
     if not sim.sensor_config:
         return
     if isinstance(sim.backend, WarpBackend):
+        # Geometry may have moved since the last BVH refit (a physics step, or a reset).
         sim.backend.begin_sensor_render()
-    render_cameras(sim)
-    render_lidars(sim)
+    render_cameras(sim, env_ids)
+    render_lidars(sim, env_ids)

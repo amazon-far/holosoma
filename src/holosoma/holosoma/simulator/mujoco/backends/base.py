@@ -340,7 +340,7 @@ class IMujocoBackend(abc.ABC):
     def render_cameras(self, cameras: list[CameraRecord], env_ids: torch.Tensor | None = None) -> None:
         """Render the given cameras and store each one's canonical output buffer.
 
-        Writes each modality via ``record.set_frame(data_type, tensor, env_ids)``:
+        Writes each modality via ``record.set_buffer(data_type, tensor)``, or only the ``env_ids`` rows:
         ``rgb`` [N,H,W,3] uint8, ``depth`` [N,H,W,1] float32 meters (+inf no-hit), on ``self.device``.
 
         Parameters

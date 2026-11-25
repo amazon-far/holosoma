@@ -84,6 +84,9 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
             assert hasattr(self, "viewer")
             events.append("plugins")
 
+        def capture_sensors(self) -> None:
+            events.append("capture")
+
         def close(self) -> None:
             events.append("close")
 
@@ -136,5 +139,11 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
     with pytest.raises(_StopAfterInstallError):
         PolicyTask(config)  # type: ignore[arg-type]
 
-    assert events.index("prepare") < events.index("viewer") < events.index("plugins") < events.index("manager")
+    assert (
+        events.index("prepare")
+        < events.index("viewer")
+        < events.index("plugins")
+        < events.index("capture")
+        < events.index("manager")
+    )
     assert events[-1] == "close"

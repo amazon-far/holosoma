@@ -250,7 +250,7 @@ class ClassicBackend(IMujocoBackend):
                 if dt == "depth":
                     array[array >= far_clip * 0.99] = np.inf
                 tensor = torch.from_numpy(array).unsqueeze(0).to(self.device)
-                sensor_record.set_frame(dt, tensor, env_ids)  # [1,H,W,C]
+                sensor_record.set_buffer(dt, tensor)  # [1,H,W,C]; one env, so every env_ids is the whole frame
 
     def get_ctrl_tensor(self) -> None:
         """Classic backend doesn't support direct tensor writes.

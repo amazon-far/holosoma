@@ -48,14 +48,6 @@ class SensorRecord:
         self.buffers[output] = buffer
         self._drop_device_cache(output)
 
-    def set_frame(self, output: str, frame: torch.Tensor, env_ids: torch.Tensor | None = None) -> None:
-        """Store an every-env ``frame``, or only its ``env_ids`` rows once ``output`` has a buffer."""
-        if env_ids is None or output not in self.buffers:
-            self.set_buffer(output, frame)
-        else:
-            rows = env_ids.to(frame.device)
-            self.set_buffer_rows(output, rows, frame[rows])
-
     def _drop_device_cache(self, output: str) -> None:
         for key in [key for key in self._device_cache if key[0] == output]:
             del self._device_cache[key]
@@ -285,13 +277,21 @@ class SensorManager:
                 due.append(record)
         return due
 
-    def collect_due(self) -> list[CameraRecord]:
-        """Advance camera cadence (compatibility name retained for camera backends)."""
+    def collect_due(self, env_ids: torch.Tensor | None = None) -> list[CameraRecord]:
+        """Cameras due this control step for every env, advancing their cadence.
+
+        With ``env_ids``, every camera is due for those envs instead (a re-render), and cadence and
+        :attr:`last_due` are left alone."""
+        if env_ids is not None:
+            return self.cameras
         due = self._collect_due(self.cameras)
         self._last_camera_due = {record.name for record in due}
         return due
 
-    def collect_lidars_due(self) -> list[LidarRecord]:
+    def collect_lidars_due(self, env_ids: torch.Tensor | None = None) -> list[LidarRecord]:
+        """LiDARs due this control step for every env, or every LiDAR for ``env_ids``; see :meth:`collect_due`."""
+        if env_ids is not None:
+            return self.lidars
         due = self._collect_due(self.lidars)
         self._last_lidar_due = {record.name for record in due}
         return due
