@@ -61,6 +61,7 @@ def test_subset_order_broadcast_and_config_independence(manager: SensorManager) 
     written_ids, written_poses = writer.call_args.args
     torch.testing.assert_close(written_ids, ids)
     torch.testing.assert_close(written_poses, updates)
+    assert isinstance(record.config, (CameraSensorConfig, LidarSensorConfig))
     assert record.config.mount.position == [0.1, 0.2, 0.3]
     assert record.config.mount.orientation == [0.0, 1.0, 0.0, 0.0]
     updates.zero_()

@@ -62,35 +62,37 @@ class WarpContactReader:
     ) -> None:
         self.backend = backend
         self.normal_only = force_mode == "normal"
-        with wp.ScopedDevice(backend.mjw_device):
+        with wp.ScopedStream(backend.wp_stream):
             self.sources = wp.array(sources, dtype=wp.int32)
             self.counterparts = wp.array(counterparts, dtype=wp.int32)
             self.output = wp.zeros((backend.num_envs, len(sources), len(counterparts), 3), dtype=wp.float32)
-            self.torch_stream = torch.cuda.ExternalStream(
-                wp.get_stream(backend.mjw_device).cuda_stream, device=backend.device
-            )
+            # Load the kernel before capture. The graph only clears and reduces fixed native arrays.
+            wp.load_module(module=__name__, device=backend.mjw_device)
+            with wp.ScopedCapture(stream=backend.wp_stream) as capture:
+                self.output.zero_()
+                wp.launch(
+                    _group_contact_forces,
+                    dim=(backend._contact_ids.shape[0], self.sources.shape[0], self.counterparts.shape[0]),
+                    inputs=[
+                        backend.mjw_data.nacon,
+                        backend.mjw_data.contact.worldid,
+                        backend.mjw_data.contact.geom,
+                        backend.mjw_data.contact.frame,
+                        backend._contact_wrenches,
+                        self.sources,
+                        self.counterparts,
+                        self.normal_only,
+                    ],
+                    outputs=[self.output],
+                )
+            self.graph = capture.graph
         self.tensor = wp.to_torch(self.output)
 
     def __call__(self) -> torch.Tensor:
         backend = self.backend
-        consumer = torch.cuda.current_stream(backend.device)
-        self.torch_stream.wait_stream(consumer)
-        with wp.ScopedDevice(backend.mjw_device):
-            self.output.zero_()
-            wp.launch(
-                _group_contact_forces,
-                dim=(backend._contact_ids.shape[0], self.sources.shape[0], self.counterparts.shape[0]),
-                inputs=[
-                    backend.mjw_data.nacon,
-                    backend.mjw_data.contact.worldid,
-                    backend.mjw_data.contact.geom,
-                    backend.mjw_data.contact.frame,
-                    backend._contact_wrenches,
-                    self.sources,
-                    self.counterparts,
-                    self.normal_only,
-                ],
-                outputs=[self.output],
-            )
-        consumer.wait_stream(self.torch_stream)
+        consumer = backend.wait_for_torch()
+        # Finish the prior Torch clone before reusing the output, then expose this solved sample.
+        with wp.ScopedStream(backend.wp_stream):
+            wp.capture_launch(self.graph, stream=backend.wp_stream)
+        consumer.wait_stream(backend.torch_stream)
         return self.tensor

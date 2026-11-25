@@ -25,7 +25,7 @@ from holosoma.simulator.base_simulator.state import Columns
 from holosoma.simulator.mujoco import light_setup
 from holosoma.simulator.mujoco.backends import WARP_AVAILABLE, ClassicBackend, IMujocoBackend, WarpBackend
 from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags, mj_to_holosoma_quat
-from holosoma.simulator.mujoco.contact_setup import ContactPairForces, prepare_contact_targets
+from holosoma.simulator.mujoco.contact_setup import prepare_contact_targets
 from holosoma.simulator.mujoco.fields import prepare_fields, prepare_manager_fields
 from holosoma.simulator.mujoco.model_debug import print_mujoco_model_tree
 from holosoma.simulator.mujoco.robot_addressing import (
@@ -119,7 +119,6 @@ class MuJoCo(BaseSimulator):
         self.dof_pos = torch.zeros(0, device=device)
         self.dof_vel = torch.zeros(0, device=device)
         self.contact_forces = torch.zeros(0, device=device)
-        self.contact_pairs: ContactPairForces | None = None
 
         # Viewer
         self.viewer: mujoco.viewer.Handle | None = None
@@ -546,6 +545,8 @@ class MuJoCo(BaseSimulator):
         """
         assert self.root_model and self.root_data
         if is_static:
+            if isinstance(self.backend, ClassicBackend):
+                self.backend.invalidate_contact_forces()
             mujoco.mj_forward(self.root_model, self.root_data)
             body_id = self.static_object_body_ids[actor_name]
             return list(self.root_data.xpos[body_id]), list(self.root_data.xquat[body_id])
@@ -649,6 +650,14 @@ class MuJoCo(BaseSimulator):
         # Initialize contact forces tensor with correct shape [num_envs, num_bodies, 3]
         # This matches the interface expected by holosoma (IsaacSim pattern)
         self.contact_forces = torch.zeros(self.num_envs, self.num_bodies, 3, device=self.sim_device)
+        self.contact_recorder = ContactSubstepRecorder(
+            self.hooks,
+            lambda: self.contact_forces,
+            self.num_envs,
+            self.simulator_config.sim.control_decimation_steps,
+            self.num_bodies,
+            self.sim_device,
+        )
 
         # Initialize command system (Phase 1)
         # Command tensor format: [vx, vy, vz, yaw_rate, walk_stand, waist_yaw, ..., height, ...]
@@ -695,7 +704,8 @@ class MuJoCo(BaseSimulator):
         Resets simulation data, sets initial robot state, configures the object registry,
         and creates tensor views for efficient state access during simulation.
         """
-        self.contact_pairs = None
+        if isinstance(self.backend, ClassicBackend):
+            self.backend.invalidate_contact_forces()
         # Reset simulation data
         assert self.root_data
         mujoco.mj_resetData(self.root_model, self.root_data)
@@ -827,7 +837,7 @@ class MuJoCo(BaseSimulator):
             qvel_addr = self.object_addrs["robot"]["qvel_addr"]
             state.register("base_linear_acc", Columns(qacc, range(qvel_addr, qvel_addr + 3)))
         if b > 0:
-            state.register("contact_forces", self.sensor_manager.get_contact("contact_sensor").read_legacy_forces)
+            state.register("contact_forces", self._robot_contact_forces)
 
         env_ids = torch.arange(n, device=device)
         if self.robot_config.asset.fix_base_link:
@@ -896,7 +906,6 @@ class MuJoCo(BaseSimulator):
 
     def _advance_substep(self) -> None:
         """Advance simulation by one physics step."""
-        self.contact_pairs = None
         with self.state.mutation():
             if self.kinematic_playback:
                 self._forward_kinematics()
@@ -904,6 +913,14 @@ class MuJoCo(BaseSimulator):
                 # Must run before backend.step() consumes xfrc_applied.
                 self.flush_external_wrench()
                 self.backend.step()
+
+    def _robot_contact_forces(self) -> torch.Tensor:
+        """Preserve the native total-force convention for the existing robot API."""
+        if isinstance(self.backend, ClassicBackend):
+            # Select on the owned CPU snapshot before transfer; the native GPU tensor is reusable.
+            forces = self.backend.contact_pairs().body_forces[:, self.body_ids]
+            return forces.to(self.sim_device)
+        return self.backend.compute_contact_forces()[:, self._body_ids_t]
 
     def _forward_kinematics(self) -> None:
         """Kinematics, COM position, camera/light and COM velocity stages; no collision or dynamics."""

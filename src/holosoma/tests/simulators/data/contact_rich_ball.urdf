@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<robot name="contact_ball">
+  <link name="ball">
+    <inertial>
+      <mass value="1"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.00256" ixy="0" ixz="0" iyy="0.00256" iyz="0" izz="0.00256"/>
+    </inertial>
+    <visual>
+      <geometry><sphere radius="0.08"/></geometry>
+      <material name="orange"><color rgba="1 0.35 0.05 1"/></material>
+    </visual>
+    <collision><geometry><sphere radius="0.08"/></geometry></collision>
+  </link>
+</robot>

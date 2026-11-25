@@ -9,13 +9,12 @@ from holosoma.utils.safe_torch_import import torch
 class ContactSubstepRecorder:
     """Contact forces at each physics substep of the current control step.
 
-    ``FRAME_BEGIN`` re-anchors the next sample to slot 0. By default, ``POST_STEP`` appends
-    ``current_forces()``. Managed sensors can disable that hook and call ``record`` after each
-    actual solver step, including calls outside a hook-driven loop.
+    Owns its own hooks: ``POST_STEP`` appends ``current_forces()``, ``FRAME_BEGIN`` re-anchors the
+    next sample to slot 0. A loop that emits those phases therefore needs no contact-specific code,
+    but one that steps physics without emitting ``POST_STEP`` records nothing.
 
     Slot i holds the forces *after* substep i, unlike the ``*_substep`` buffers in joint_control,
     which record the state entering the substep. Read through :attr:`recorded_forces`.
-    For named sensors, the body axis follows the configured source groups.
     """
 
     def __init__(
@@ -26,17 +25,13 @@ class ContactSubstepRecorder:
         decimation: int,
         num_bodies: int,
         device: str,
-        *,
-        hook_prefix: str = "contact",
-        record_on_post_step: bool = True,
     ) -> None:
         self.buffer = torch.zeros(num_envs, decimation, num_bodies, 3, device=device)
         self._current_forces = current_forces
         self._decimation = decimation
         self._substep_idx = 0
-        hooks.add(Phase.FRAME_BEGIN, self.begin_frame, name=f"{hook_prefix}.begin_frame")
-        if record_on_post_step:
-            hooks.add(Phase.POST_STEP, self._record_current, name=f"{hook_prefix}.record")
+        hooks.add(Phase.FRAME_BEGIN, self.begin_frame, name="contact.begin_frame")
+        hooks.add(Phase.POST_STEP, self._record_current, name="contact.record")
 
     @property
     def recorded_forces(self) -> torch.Tensor:

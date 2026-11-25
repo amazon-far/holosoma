@@ -24,7 +24,6 @@ from holosoma.config_types.sensor import (  # noqa: E402
     SensorMountConfig,
 )
 from holosoma.config_values.simulator import mujoco as mujoco_config  # noqa: E402
-from holosoma.simulator.base_simulator.hooks import HookRegistry  # noqa: E402
 from holosoma.simulator.mujoco.backends.classic_backend import ClassicBackend  # noqa: E402
 from holosoma.simulator.mujoco.mujoco import MuJoCo  # noqa: E402
 from holosoma.simulator.mujoco.scene_manager import ActorSpecMeta, MujocoSceneManager  # noqa: E402
@@ -56,9 +55,7 @@ def _make_sim(model: Any, sensors: dict[str, SensorConfig], origins: torch.Tenso
     instance.body_names = ["root" if root_id >= 0 else "world"]
     instance.body_ids = [max(root_id, 0)]
     cfg = instance.simulator_config.sim
-    instance.sensor_manager = SensorManager(
-        "cpu", cfg.fps / cfg.control_decimation_steps, physics_hz=cfg.fps, hooks=HookRegistry()
-    )
+    instance.sensor_manager = SensorManager("cpu", cfg.fps / cfg.control_decimation_steps, physics_hz=cfg.fps)
     create_sensors(instance)
     initialize_camera_mounts(instance)
     return instance

@@ -6,8 +6,9 @@ import numpy as np
 import pytest
 
 wp = pytest.importorskip("warp")
+pytest.importorskip("mujoco")
 
-from holosoma.simulator.mujoco.contact_forces import ContactPairForces  # noqa: E402
+from holosoma.simulator.mujoco.backends.classic_backend import ContactPairForces  # noqa: E402
 from holosoma.simulator.mujoco.contact_warp import _group_contact_forces  # noqa: E402
 from holosoma.utils.safe_torch_import import torch  # noqa: E402
 

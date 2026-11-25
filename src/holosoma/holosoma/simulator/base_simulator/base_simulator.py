@@ -160,6 +160,7 @@ class BaseSimulator:
     )
     base_linear_acc = StateTensor("Robot root linear acceleration, ``[num_envs, 3]``.")
     contact_forces = StateTensor("Net contact force per robot body, ``[num_envs, num_bodies, 3]``.")
+    contact_recorder: ContactSubstepRecorder
 
     # Backend mappings populated during setup. Canonical names/counts are properties of robot_config.
     body_ids: list[int]
@@ -209,7 +210,7 @@ class BaseSimulator:
         self.scene_config = tyro_config.scene
         self.sensor_config = tyro_config.sensors
         for name in self.sensor_config:
-            if name == "contact_sensor" or name.startswith("__holosoma_contact_"):
+            if name == "contact_sensor":
                 raise ValueError(f"Sensor name '{name}' is reserved for native contact sensors. Choose another name.")
         self.robot_config = tyro_config.robot
         self.video_config = tyro_config.logger.video
@@ -258,7 +259,6 @@ class BaseSimulator:
             sim_cfg.fps / sim_cfg.control_decimation_steps,
             num_envs=self.training_config.num_envs,
             physics_hz=sim_cfg.fps,
-            hooks=self.hooks,
         )
         self.hooks.add(Phase.EPISODE_START, self.sensor_manager.reset_contacts, name="sensors.reset_contacts")
 
@@ -1082,18 +1082,14 @@ class BaseSimulator:
         env_ids: EnvIds | None = None,
         device: torch.device | str | None = None,
     ) -> torch.Tensor:
-        """Read a named contact sensor's latest measurement or current frame's substeps.
+        """Read a named contact sensor's latest force measurement.
 
         ``forces`` is float32 ``[N, S, 3]`` in world coordinates and Newtons.
         ``force_matrix`` is float32 ``[N, S, T, 3]``, with one column per counterpart group.
         An unfiltered sensor has one column named ``all``.
-        ``in_contact`` is bool ``[N, S]`` and applies the threshold to each column's force norm.
-        ``substep_forces`` is ``[N, H, S, 3]`` when ``record_substeps`` is enabled.
-        H counts solved substeps since ``FRAME_BEGIN``, independently of the update cadence.
         S follows the configuration's source order. T follows its counterpart order.
         Forces act on the source bodies. Returned tensors are shared and read-only.
         Resets clear selected measurements until an update after a physics step.
-        Cleared history rows resume at the next solved substep.
         """
         if not self.sensor_manager.has_contact(name):
             raise NotImplementedError(
@@ -1101,24 +1097,12 @@ class BaseSimulator:
                 f"Created contact sensors: {self.sensor_manager.contact_names}."
             )
         record = self.sensor_manager.get_contact(name)
-        if data_type == "substep_forces" and record.recorder is not None:
-            history = record.recorder.recorded_forces
-            if device is not None:
-                history = history.to(device)
-            return history if env_ids is None else history[env_ids]
         if data_type not in record.buffers:
-            available = [*record.buffers, *(["substep_forces"] if record.recorder is not None else [])]
-            raise ValueError(f"Contact sensor '{name}' has no '{data_type}' output. Available: {sorted(available)}.")
+            raise ValueError(
+                f"Contact sensor '{name}' has no '{data_type}' output. Available: {sorted(record.buffers)}."
+            )
         buffer = record.buffer_on(data_type, device)
         return buffer if env_ids is None else buffer[env_ids]
-
-    @property
-    def contact_recorder(self) -> ContactSubstepRecorder:
-        """Compatibility view of the managed robot sensor's existing substep recorder."""
-        recorder = self.sensor_manager.get_contact("contact_sensor").legacy_recorder
-        if recorder is None:
-            raise RuntimeError("The default robot contact recorder is not initialized.")
-        return recorder
 
     def get_lidar_data(
         self,

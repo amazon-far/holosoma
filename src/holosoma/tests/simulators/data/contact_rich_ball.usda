@@ -1,0 +1,20 @@
+#usda 1.0
+(
+    defaultPrim = "contact_ball"
+    metersPerUnit = 1.0
+    upAxis = "Z"
+)
+def Xform "contact_ball" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+)
+{
+    float physics:mass = 1
+    float3 physics:diagonalInertia = (0.00256, 0.00256, 0.00256)
+    def Sphere "geom" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 0.08
+        color3f[] primvars:displayColor = [(1, 0.35, 0.05)]
+    }
+}

@@ -15,7 +15,6 @@ import numpy.typing as npt
 
 from holosoma.config_types.sensor import ContactSensorConfig, ContactTargetConfig, SensorConfig
 from holosoma.simulator.mujoco.backends import ClassicBackend, WarpBackend
-from holosoma.simulator.mujoco.contact_forces import ContactPairForces
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
@@ -129,29 +128,13 @@ def selection_masks(
     return source_masks, counterpart_masks
 
 
-def _classic_pairs(sim: MuJoCo) -> ContactPairForces:
-    if sim.contact_pairs is None:
-        assert isinstance(sim.backend, ClassicBackend)
-        sim.contact_pairs = sim.backend.contact_pairs()
-    return sim.contact_pairs
-
-
 def _read_classic(
-    sim: MuJoCo,
+    backend: ClassicBackend,
     sources: npt.NDArray[np.int32],
     counterparts: npt.NDArray[np.int32],
     force_mode: str,
 ) -> torch.Tensor:
-    return _classic_pairs(sim).matrix(sources, counterparts, force_mode=force_mode)
-
-
-def _legacy_robot_forces(sim: MuJoCo) -> torch.Tensor:
-    forces = (
-        sim.backend.compute_contact_forces()
-        if isinstance(sim.backend, WarpBackend)
-        else _classic_pairs(sim).body_forces
-    )
-    return forces[:, sim._body_ids_t]
+    return backend.contact_pairs().matrix(sources, counterparts, force_mode=force_mode)
 
 
 def _reader(
@@ -164,7 +147,8 @@ def _reader(
         from holosoma.simulator.mujoco.contact_warp import WarpContactReader
 
         return WarpContactReader(sim.backend, sources, counterparts, config.force_mode)
-    return partial(_read_classic, sim, sources, counterparts, config.force_mode)
+    assert isinstance(sim.backend, ClassicBackend)
+    return partial(_read_classic, sim.backend, sources, counterparts, config.force_mode)
 
 
 def register_contacts(sim: MuJoCo) -> None:
@@ -181,7 +165,6 @@ def register_contacts(sim: MuJoCo) -> None:
         "contact_sensor",
         default,
         _reader(sim, sources, np.ones((1, model.ngeom), dtype=np.int32), default),
-        legacy_capture=partial(_legacy_robot_forces, sim),
     )
     for name, config in sim.sensor_config.items():
         if isinstance(config, ContactSensorConfig):

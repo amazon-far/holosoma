@@ -54,6 +54,7 @@ from holosoma.simulator.isaacsim.object_spawner import (
 from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures, register_terrain_mesh_cache
 from holosoma.simulator.base_simulator.state import Columns
 from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw
+from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
 from holosoma.simulator.shared.object_registry import ObjectType
@@ -84,6 +85,7 @@ class IsaacSim(BaseSimulator):
         # populated by _load_scene_files; read in _collect_spawned_actors to classify.
         self.scene_file_static_names: set[str] = set()
         self.contact_readers: dict[str, IsaacContactReader] = {}
+        self.contact_views: dict[str, ContactSensor] = {}
 
         sim_config: SimulationCfg = SimulationCfg(
             dt=1.0 / self.simulator_config.sim.fps,
@@ -520,6 +522,14 @@ class IsaacSim(BaseSimulator):
         sensor_setup.initialize_sensors(self)
 
         self._register_state()
+        self.contact_recorder = ContactSubstepRecorder(
+            self.hooks,
+            lambda: self.contact_forces,
+            self.num_envs,
+            self.simulator_config.sim.control_decimation_steps,
+            self.num_bodies,
+            self.sim_device,
+        )
 
         # Create state adapter after object registry and robot state are set
         self._state_adapter = IsaacSimStateAdapter(
@@ -605,7 +615,7 @@ class IsaacSim(BaseSimulator):
                 out[rows], joint_ids=self.dof_ids, env_ids=rows
             ),
         )
-        self.state.register("contact_forces", self.sensor_manager.get_contact("contact_sensor").read_legacy_forces)
+        self.state.register("contact_forces", self._robot_contact_forces)
         body_sources = {
             "_rigid_body_pos": lambda: data.body_pos_w,
             # Isaac Lab stores wxyz; holosoma uses xyzw.

@@ -16,8 +16,8 @@ from holosoma.config_types.sensor import ContactSensorConfig, ContactTargetConfi
 from holosoma.config_values.simulator import mujoco as mujoco_config  # noqa: E402
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase  # noqa: E402
 from holosoma.simulator.mujoco.backends import ClassicBackend  # noqa: E402
+from holosoma.simulator.mujoco.backends.classic_backend import ContactPairForces  # noqa: E402
 from holosoma.simulator.mujoco.contact_setup import (  # noqa: E402
-    ContactPairForces,
     prepare_contact_targets,
     register_contacts,
     resolve_target_geoms,
@@ -26,6 +26,7 @@ from holosoma.simulator.mujoco.contact_setup import (  # noqa: E402
 from holosoma.simulator.mujoco.mujoco import MuJoCo  # noqa: E402
 from holosoma.simulator.mujoco.scene_manager import ActorSpecMeta, MujocoSceneManager  # noqa: E402
 from holosoma.simulator.mujoco.sensor_setup import render_sensors  # noqa: E402
+from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder  # noqa: E402
 from holosoma.simulator.shared.sensor_manager import SensorManager  # noqa: E402
 from holosoma.utils.safe_torch_import import torch  # noqa: E402
 
@@ -267,7 +268,7 @@ def test_sensors_and_legacy_api_share_one_native_extraction_per_substep(monkeypa
     scene = _scene()
     normal = ContactSensorConfig(counterparts=[_actor("box")])
     sensors = {
-        "normal": dataclasses.replace(normal, record_substeps=True),
+        "normal": normal,
         "total": dataclasses.replace(normal, force_mode="total"),
         "slow": dataclasses.replace(normal, update_decimation=2),
     }
@@ -285,11 +286,14 @@ def test_sensors_and_legacy_api_share_one_native_extraction_per_substep(monkeypa
             body_names=["root"],
             body_ids=[model.body("robot_root").id],
             _body_ids_t=torch.tensor([model.body("robot_root").id]),
+            sim_device="cpu",
             sensor_config=sensors,
-            sensor_manager=SensorManager("cpu", 50.0, physics_hz=200.0, hooks=hooks),
+            sensor_manager=SensorManager("cpu", 50.0, physics_hz=200.0),
             contact_target_map=targets,
-            contact_pairs=None,
         ),
+    )
+    recorder = ContactSubstepRecorder(
+        hooks, lambda: MuJoCo._robot_contact_forces(sim), 1, 4, len(sim.body_names), "cpu"
     )
     register_contacts(sim)
     native = mujoco.mj_contactForce
@@ -306,13 +310,112 @@ def test_sensors_and_legacy_api_share_one_native_extraction_per_substep(monkeypa
     assert calls == list(range(data.ncon))
     assert sim.sensor_manager.get_contact("normal").buffers["forces"][0, 0, 0] < -1
     assert sim.sensor_manager.get_contact("total").buffers["forces"][0, 0, 0] < -1
-    legacy = sim.sensor_manager.get_contact("contact_sensor")
-    assert legacy.legacy_recorder is not None
-    torch.testing.assert_close(legacy.read_legacy_forces(), legacy.legacy_recorder.latest_forces)
+    torch.testing.assert_close(MuJoCo._robot_contact_forces(sim), recorder.latest_forces)
     assert calls == list(range(data.ncon))
     data.qpos[0] = -4
-    mujoco.mj_forward(model, data)
-    sim.contact_pairs = None
+    sim.backend.step()
     sim.sensor_manager.contact_step_completed()
     render_sensors(sim)
     np.testing.assert_array_equal(sim.sensor_manager.get_contact("normal").buffers["forces"], 0)
+
+
+def test_classic_queries_follow_consecutive_empty_and_opposite_solved_contacts() -> None:
+    scene = _scene()
+    config = ContactSensorConfig(counterparts=[_actor("box")])
+    targets = prepare_contact_targets(scene, {"pairs": config})
+    model = scene.world_spec.compile()
+    data = mujoco.MjData(model)
+    backend_config = cast("FullSimConfig", SimpleNamespace(training=SimpleNamespace(num_envs=1)))
+    backend = ClassicBackend(model, data, backend_config, "cpu")
+    sources, counterparts = selection_masks(model, targets, config)
+    robot_body = model.body("robot_root").id
+    box_joint = model.body_jntadr[model.body("box_root").id]
+    box_qpos = model.jnt_qposadr[box_joint]
+    samples = []
+    snapshots = []
+    for box_x in (1.0, 0.16, -0.16, 1.0):
+        data.qpos[:] = model.qpos0
+        data.qpos[0] = 0
+        data.qpos[box_qpos] = box_x
+        data.qvel[:] = 0
+        backend.step()
+        pairs = backend.contact_pairs()
+        force = pairs.matrix(sources, counterparts, force_mode="normal")[0, 0, 0]
+        torch.testing.assert_close(force, backend.compute_contact_forces()[0, robot_body])
+        assert pairs is backend.contact_pairs()
+        samples.append(force.clone())
+        snapshots.append(pairs)
+    assert samples[0].count_nonzero() == 0
+    assert samples[1][0] < -1
+    assert samples[2][0] > 1
+    assert samples[3].count_nonzero() == 0
+    # Solving the opposite contact must not mutate the prior owned snapshot.
+    assert snapshots[1].body_forces[0, robot_body, 0] < -1
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Classic contact transfer stream test requires CUDA")
+def test_classic_robot_reads_keep_owned_samples_after_opposite_solves_on_other_streams(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scene = _scene()
+    model = scene.world_spec.compile()
+    data = mujoco.MjData(model)
+    config = cast("FullSimConfig", SimpleNamespace(training=SimpleNamespace(num_envs=1)))
+    backend = ClassicBackend(model, data, config, "cuda:0")
+    body_ids = [model.body("box_root").id, model.body("robot_root").id]
+    sim = cast(
+        "MuJoCo",
+        SimpleNamespace(
+            backend=backend,
+            body_ids=body_ids,
+            _body_ids_t=torch.tensor(body_ids, device=backend.device),
+            sim_device=backend.device,
+        ),
+    )
+    consumers = [torch.cuda.Stream(device=backend.device), torch.cuda.Stream(device=backend.device)]
+    # Prime each caller's allocator before the delayed interval, so allocation cannot hide the race.
+    for consumer in consumers:
+        with torch.cuda.stream(consumer):
+            warm = [torch.empty(1, len(body_ids), 3, device=backend.device) for _ in range(4)]
+        consumer.synchronize()
+        del warm
+    native = mujoco.mj_contactForce
+    calls = []
+
+    def counted(model: Any, data: Any, index: int, result: Any) -> None:
+        calls.append(index)
+        native(model, data, index, result)
+
+    monkeypatch.setattr(mujoco, "mj_contactForce", counted)
+    joint = model.body_jntadr[model.body("box_root").id]
+    box_qpos = model.jnt_qposadr[joint]
+    samples = []
+    expected = []
+    try:
+        for index, box_x in enumerate((0.16, -0.16, 1.0)):
+            with torch.cuda.stream(consumers[index % len(consumers)]):
+                data.qpos[:] = model.qpos0
+                data.qpos[0] = 0
+                data.qpos[box_qpos] = box_x
+                data.qvel[:] = 0
+                backend.step()
+                pairs = backend.contact_pairs()
+                assert pairs.body_forces.device.type == "cpu"
+                expected.append(pairs.body_forces[:, body_ids].clone())
+                # An asynchronous gather from the reusable native GPU tensor can read the next solve.
+                torch.cuda._sleep(20_000_000)
+                forces = MuJoCo._robot_contact_forces(sim)
+                torch.cuda._sleep(20_000_000)
+                samples.append(forces.clone())
+        for consumer in consumers:
+            consumer.synchronize()
+        assert calls == [0, 0]
+        for sample, snapshot in zip(samples, expected, strict=True):
+            torch.testing.assert_close(sample.cpu(), snapshot, rtol=0, atol=0)
+        assert samples[0][0, 0, 0] > 1
+        assert samples[0][0, 1, 0] < -1
+        assert samples[1][0, 0, 0] < -1
+        assert samples[1][0, 1, 0] > 1
+        assert samples[2].count_nonzero() == 0
+    finally:
+        backend.close()

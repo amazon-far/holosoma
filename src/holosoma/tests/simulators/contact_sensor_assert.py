@@ -32,12 +32,16 @@ def _build(backend: str, num_envs: int, device: str | None = None):
         "pairs": ContactSensorConfig(
             sources=[actor("top"), actor("floor_box")],
             counterparts=[actor("pedestal"), terrain],
-            record_substeps=True,
         ),
         "pairs_control": ContactSensorConfig(
             sources=[actor("top"), actor("floor_box")],
             counterparts=[actor("pedestal"), terrain],
         ),
+        "pairs_reversed": ContactSensorConfig(
+            sources=[actor("top"), actor("floor_box")],
+            counterparts=[terrain, actor("pedestal")],
+        ),
+        "__holosoma_contact_0": ContactSensorConfig(sources=[actor("floor_box")]),
         "reaction": ContactSensorConfig(sources=[actor("pedestal")], counterparts=[actor("top")]),
         "floor_total": ContactSensorConfig(sources=[actor("floor_box")], counterparts=[terrain], force_mode="total"),
         "robot_ground": ContactSensorConfig(counterparts=[terrain]),
@@ -174,13 +178,17 @@ def _assert_contract(sim):
     expected[:, 0, 0, 2] = 2 * 9.81
     expected[:, 1, 1, 2] = 3 * 9.81
     torch.testing.assert_close(matrix, expected, atol=0.5, rtol=0.02)
+    torch.testing.assert_close(sim.get_contact_data("pairs_reversed", "force_matrix"), matrix[:, :, [1, 0]])
+    torch.testing.assert_close(sim.get_contact_data("__holosoma_contact_0"), matrix[:, 1:].sum(dim=2))
     torch.testing.assert_close(sim.get_contact_data("reaction"), -matrix[:, 0, :1], atol=0.1, rtol=0.02)
-    assert sim.get_contact_data("pairs", "in_contact").all()
     torch.testing.assert_close(sim.get_contact_data("pairs_control"), sim.get_contact_data("pairs"))
-    history = sim.get_contact_data("pairs", "substep_forces")
-    assert history.shape == (sim.num_envs, sim.simulator_config.sim.control_decimation_steps, 2, 3)
-    torch.testing.assert_close(history[:, -1], sim.get_contact_data("pairs"))
-    assert sim.contact_recorder is sim.sensor_manager.get_contact("contact_sensor").legacy_recorder
+    assert sim.contact_recorder.recorded_forces.shape == (
+        sim.num_envs,
+        sim.simulator_config.sim.control_decimation_steps,
+        sim.num_bodies,
+        3,
+    )
+    torch.testing.assert_close(sim.contact_recorder.latest_forces, sim.contact_forces)
     assert sim.get_contact_data("body_pair").shape == (sim.num_envs, 1, 3)
     assert torch.count_nonzero(sim.get_contact_data("body_pair")) == 0
     assert sim.get_contact_data().shape == (sim.num_envs, sim.num_bodies, 3)
@@ -199,6 +207,8 @@ def _assert_contract(sim):
         "contact_sensor",
         "pairs",
         "pairs_control",
+        "pairs_reversed",
+        "__holosoma_contact_0",
         "reaction",
         "floor_total",
         "robot_ground",
@@ -218,14 +228,13 @@ def _assert_contract(sim):
     sim.set_actor_states(["floor_box"], ids, states)
     frame_output = sim.get_contact_data("pairs_control")
     sim.hooks.emit(Phase.FRAME_BEGIN)
-    assert sim.get_contact_data("pairs", "substep_forces").shape[1] == 0
+    assert sim.contact_recorder.recorded_forces.shape[1] == 0
     sim.simulate_at_each_physics_step()
-    # Physics outputs and history are available before POST_STEP and FRAME_END.
+    # Measurements are available before POST_STEP; the existing recorder follows its hook.
     assert sim.get_contact_data("pairs_control") is frame_output
-    assert sim.get_contact_data("pairs", "substep_forces").shape[1] == 1
-    torch.testing.assert_close(sim.get_contact_data("pairs", "substep_forces")[:, 0], sim.get_contact_data("pairs"))
+    assert sim.contact_recorder.recorded_forces.shape[1] == 0
     sim.hooks.emit(Phase.POST_STEP)
-    assert sim.get_contact_data("pairs", "substep_forces").shape[1] == 1
+    assert sim.contact_recorder.recorded_forces.shape[1] == 1
     normal = sim.get_contact_data("pairs")[:, 1]
     total = sim.get_contact_data("floor_total")[:, 0]
     assert torch.all(normal[:, 2] > 1)
@@ -243,7 +252,7 @@ def _assert_contract(sim):
     control_output = sim.get_contact_data("pairs_control")
     assert control_output is not frame_output
     torch.testing.assert_close(control_output, sim.get_contact_data("pairs"))
-    assert sim.get_contact_data("pairs", "substep_forces").shape[1] == decimation
+    assert sim.contact_recorder.recorded_forces.shape[1] == decimation
     sim.hooks.emit(Phase.FRAME_END)
     assert sim.get_contact_data("pairs_control") is control_output
 
@@ -251,7 +260,6 @@ def _assert_contract(sim):
 
     # Reset only env 0. Rendering without a solve must not restore stale forces.
     untouched = sim.get_contact_data("pairs", "force_matrix")[1:].clone()
-    untouched_history = sim.get_contact_data("pairs", "substep_forces")[1:].clone()
     one = torch.tensor([0], device=sim.sim_device)
     states = sim.get_actor_states(["top"], one).clone()
     states[:, 2] = 3
@@ -262,8 +270,6 @@ def _assert_contract(sim):
     sim.render_sensors()
     assert torch.count_nonzero(sim.get_contact_data("pairs", "force_matrix")[0]) == 0
     torch.testing.assert_close(sim.get_contact_data("pairs", "force_matrix")[1:], untouched)
-    assert sim.get_contact_data("pairs", "substep_forces")[0].count_nonzero() == 0
-    torch.testing.assert_close(sim.get_contact_data("pairs", "substep_forces")[1:], untouched_history)
     _control_step(sim)
     assert torch.count_nonzero(sim.get_contact_data("pairs", "force_matrix")[0, 0]) == 0
     assert sim.get_contact_data("pairs", "force_matrix")[0, 1, 1, 2] > 1
@@ -272,7 +278,7 @@ def _assert_contract(sim):
     sim.hooks.emit(Phase.FRAME_BEGIN)
     sim.rerender_sensors(one)
     sim.simulate_at_each_physics_step()
-    assert sim.get_contact_data("pairs", "substep_forces").shape[1] == 1
+    assert sim.contact_recorder.recorded_forces.shape[1] == 0
     sim.render_sensors()
     assert sim.get_contact_data("pairs", "force_matrix")[0, 1, 1, 2] > 1
 
@@ -300,10 +306,11 @@ def _assert_contract(sim):
     sim.rerender_sensors(one)
     _control_step(sim)
     assert torch.count_nonzero(sim.get_contact_data("pairs", "force_matrix")[0]) == 0
-    assert sim.get_contact_data("pairs", "substep_forces").shape[1] == 0
 
 
 def _assert_isaac_setup_errors(sim):
+    import json
+
     from holosoma.config_types.sensor import ContactSensorConfig, ContactTargetConfig
     from holosoma.simulator.isaacsim.contact_setup import build_contacts
 
@@ -326,14 +333,32 @@ def _assert_isaac_setup_errors(sim):
             "counterpart groups overlap",
         ),
     ]
-    original_config, original_readers = sim.sensor_config, sim.contact_readers
+    used_bodies = {body for reader in sim.contact_readers.values() for group in reader.source_bodies for body in group}
+    assert set(sim.contact_views) == used_bodies
+    for sensor in sim.contact_views.values():
+        if len(sensor.cfg.filter_prim_paths_expr) > 1:
+            view = sensor.contact_physx_view
+            print(
+                "Isaac contact layout: "
+                + json.dumps(
+                    {
+                        "patterns": sensor.cfg.filter_prim_paths_expr,
+                        "sensor_paths": view.sensor_paths,
+                        "filter_paths": view.filter_paths,
+                    }
+                )
+            )
+            break
+    else:
+        raise AssertionError("Expected a shared native view with multiple counterpart filters.")
+    original_config, original_readers, original_views = sim.sensor_config, sim.contact_readers, sim.contact_views
     try:
         for config, expected in cases:
             sim.sensor_config = {"invalid": config}
             with pytest.raises(ValueError, match=expected):
                 build_contacts(sim)
     finally:
-        sim.sensor_config, sim.contact_readers = original_config, original_readers
+        sim.sensor_config, sim.contact_readers, sim.contact_views = original_config, original_readers, original_views
 
 
 def main() -> int:

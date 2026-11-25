@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from isaaclab.sensors import ContactSensor, ContactSensorCfg
 from pxr import Usd, UsdPhysics
@@ -80,35 +80,46 @@ def _counterpart_paths(sim: IsaacSim, target: ContactTargetConfig) -> list[str]:
 class IsaacContactReader:
     """Aggregate native normal and friction forces into the configured group axes."""
 
-    views: list[list[list[ContactSensor]]]
+    views: dict[str, ContactSensor]
+    source_bodies: list[list[str]]
+    counterpart_columns: dict[str, list[list[int]]]
     config: ContactSensorConfig
     num_envs: int
     device: str
 
     def __call__(self) -> torch.Tensor:
         matrix = torch.zeros(
-            self.num_envs, len(self.views), len(self.views[0]), 3, dtype=torch.float32, device=self.device
+            self.num_envs,
+            len(self.source_bodies),
+            len(self.config.counterparts) or 1,
+            3,
+            dtype=torch.float32,
+            device=self.device,
         )
-        for source, groups in enumerate(self.views):
-            for counterpart, sensors in enumerate(groups):
-                for sensor in sensors:
-                    data = sensor.data
-                    if not self.config.counterparts:
-                        matrix[:, source, counterpart] += data.net_forces_w.sum(dim=1)
-                    else:
-                        if data.force_matrix_w is None:
-                            raise RuntimeError("The native contact sensor returned no filtered forces.")
-                        matrix[:, source, counterpart] += data.force_matrix_w.sum(dim=(1, 2))
-                        if self.config.force_mode == "total":
-                            if data.friction_forces_w is None:
-                                raise RuntimeError("The native contact sensor returned no friction forces.")
-                            matrix[:, source, counterpart] += data.friction_forces_w.sum(dim=(1, 2))
+        for source, bodies in enumerate(self.source_bodies):
+            for body in bodies:
+                data = self.views[body].data
+                if not self.config.counterparts:
+                    matrix[:, source, 0] += data.net_forces_w[:, 0]
+                    continue
+                if data.force_matrix_w is None:
+                    raise RuntimeError("The native contact sensor returned no filtered forces.")
+                forces = data.force_matrix_w[:, 0]
+                if self.config.force_mode == "total":
+                    if data.friction_forces_w is None:
+                        raise RuntimeError("The native contact sensor returned no friction forces.")
+                    forces = forces + data.friction_forces_w[:, 0]
+                for counterpart, columns in enumerate(self.counterpart_columns[body]):
+                    matrix[:, source, counterpart] += forces[:, columns].sum(dim=1)
         return matrix
 
 
 def build_contacts(sim: IsaacSim) -> None:
-    """Build one native view per source body and counterpart group before cloning."""
+    """Share one native single-body view across all named contact measurements."""
     sim.contact_readers = {}
+    sim.contact_views = {}
+    view_configs: dict[str, ContactSensorCfg] = {}
+    selections: dict[str, tuple[list[list[str]], list[list[str]]]] = {}
     for name, config in sim.sensor_config.items():
         if not isinstance(config, ContactSensorConfig):
             continue
@@ -119,34 +130,72 @@ def build_contacts(sim: IsaacSim) -> None:
         selected = [path for group in counterparts for path in group]
         if len(set(selected)) != len(selected):
             raise ValueError(f"Contact sensor '{name}' counterpart groups overlap after native body resolution.")
-        groups: list[list[list[ContactSensor]]] = []
-        for source_index, source in enumerate(config.sources):
-            source_views: list[list[ContactSensor]] = []
-            bodies = _source_bodies(sim, source)
-            for counterpart_index, colliders in enumerate(counterparts or [[]]):
-                views = []
-                for body_index, body in enumerate(bodies):
-                    cfg = ContactSensorCfg(
-                        prim_path=body.replace(_ENV_PATH, _ENV_EXPRESSION),
-                        update_period=0.0,
-                        filter_prim_paths_expr=[path.replace(_ENV_PATH, _ENV_EXPRESSION) for path in colliders],
-                        track_friction_forces=config.force_mode == "total",
-                        max_contact_data_count_per_prim=config.isaacsim.max_contact_data_count_per_prim,
-                        track_air_time=False,
-                        debug_vis=config.isaacsim.debug_vis,
-                    )
-                    sensor = ContactSensor(cfg)
-                    # Single-body views support native one-to-many filtering, including grouped sources.
-                    key = f"__holosoma_contact_{name}_{source_index}_{counterpart_index}_{body_index}"
-                    sim.scene.sensors[key] = sensor
-                    views.append(sensor)
-                source_views.append(views)
-            groups.append(source_views)
-        sim.contact_readers[name] = IsaacContactReader(groups, config, sim.training_config.num_envs, sim.sim_device)
+        sources = [_source_bodies(sim, source) for source in config.sources]
+        selections[name] = sources, counterparts
+        filters = [path.replace(_ENV_PATH, _ENV_EXPRESSION) for path in selected]
+        for body in dict.fromkeys(path for group in sources for path in group):
+            if body not in view_configs:
+                view_configs[body] = ContactSensorCfg(
+                    prim_path=body.replace(_ENV_PATH, _ENV_EXPRESSION),
+                    update_period=0.0,
+                    filter_prim_paths_expr=[],
+                    track_air_time=False,
+                    debug_vis=sim.debug_viz_enabled,
+                    max_contact_data_count_per_prim=config.isaacsim.max_contact_data_count_per_prim,
+                )
+            cfg = view_configs[body]
+            cfg.filter_prim_paths_expr.extend(path for path in filters if path not in cfg.filter_prim_paths_expr)
+            cfg.track_friction_forces |= config.force_mode == "total"
+            cfg.max_contact_data_count_per_prim = max(
+                cfg.max_contact_data_count_per_prim, config.isaacsim.max_contact_data_count_per_prim
+            )
+
+    index = 0
+    for body, cfg in view_configs.items():
+        sensor = ContactSensor(cfg)
+        key = f"__holosoma_contact_{index}"
+        while key in sim.scene.sensors or key in sim.sensor_config:
+            index += 1
+            key = f"__holosoma_contact_{index}"
+        sim.scene.sensors[key] = sensor
+        sim.contact_views[body] = sensor
+        index += 1
+
+    for name, (sources, counterparts) in selections.items():
+        columns = {
+            body: [
+                [
+                    view_configs[body].filter_prim_paths_expr.index(path.replace(_ENV_PATH, _ENV_EXPRESSION))
+                    for path in group
+                ]
+                for group in counterparts
+            ]
+            for body in dict.fromkeys(path for group in sources for path in group)
+        }
+        sim.contact_readers[name] = IsaacContactReader(
+            sim.contact_views,
+            sources,
+            columns,
+            cast(ContactSensorConfig, sim.sensor_config[name]),
+            sim.training_config.num_envs,
+            sim.sim_device,
+        )
 
 
 def register_contacts(sim: IsaacSim) -> None:
     """Expose the existing robot sensor and configured contact views through the shared manager."""
+    for body, sensor in sim.contact_views.items():
+        view = sensor.contact_physx_view
+        if (
+            sensor.num_bodies != 1
+            or view.sensor_count != sim.num_envs
+            or view.filter_count != len(sensor.cfg.filter_prim_paths_expr)
+        ):
+            raise RuntimeError(
+                f"Contact view '{body}' resolved an unexpected native layout: "
+                f"{view.sensor_count} sensors, {sensor.num_bodies} bodies per environment, "
+                f"{view.filter_count} filters for {len(sensor.cfg.filter_prim_paths_expr)} patterns."
+            )
     default = ContactSensorConfig(
         sources=[ContactTargetConfig(target_kind="robot_link", target=name) for name in sim.body_names]
     )
@@ -154,7 +203,6 @@ def register_contacts(sim: IsaacSim) -> None:
         "contact_sensor",
         default,
         lambda: sim._robot_contact_forces().unsqueeze(2),
-        legacy_capture=sim._robot_contact_forces,
     )
     for name, reader in sim.contact_readers.items():
         sim.sensor_manager.register_contact(name, reader.config, reader)

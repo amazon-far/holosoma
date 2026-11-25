@@ -7,6 +7,7 @@ environment simulation code.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 import mujoco
@@ -15,7 +16,6 @@ import numpy.typing as npt
 import torch
 from loguru import logger
 
-from holosoma.simulator.mujoco.contact_forces import ContactPairForces
 from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 from .base import IMujocoBackend, apply_sensor_scene_flags, holosoma_to_mj_quat, mj_to_holosoma_quat
@@ -24,6 +24,31 @@ if TYPE_CHECKING:
     from holosoma.config_types.full_sim import FullSimConfig
     from holosoma.config_types.sensor import CameraDataType
     from holosoma.simulator.shared.sensor_manager import LidarRecord
+
+
+@dataclass
+class ContactPairForces:
+    """One solved contact snapshot shared by the body and grouped force readers."""
+
+    geoms: npt.NDArray[np.int32]
+    normal: npt.NDArray[np.float32]
+    total: npt.NDArray[np.float32]
+    body_forces: torch.Tensor
+    """Owned CPU float32 values, independent of the native API's reusable output tensor."""
+
+    def matrix(
+        self,
+        source_masks: npt.NDArray[np.int32],
+        counterpart_masks: npt.NDArray[np.int32],
+        *,
+        force_mode: str,
+    ) -> torch.Tensor:
+        matrix = np.zeros((source_masks.shape[0], counterpart_masks.shape[0], 3), dtype=np.float32)
+        first, second = self.geoms.T
+        forces = self.normal if force_mode == "normal" else self.total
+        matrix += np.einsum("sc,tc,ca->sta", source_masks[:, second], counterpart_masks[:, first], forces)
+        matrix -= np.einsum("sc,tc,ca->sta", source_masks[:, first], counterpart_masks[:, second], forces)
+        return torch.from_numpy(matrix).unsqueeze(0)
 
 
 class ClassicBackend(IMujocoBackend):
@@ -76,6 +101,7 @@ class ClassicBackend(IMujocoBackend):
         self._contact_wrench_64 = np.empty(6, dtype=np.float64)
         self._contact_capacity = 0
         self._grow_contact_buffers(self._INITIAL_CONTACT_CAPACITY)
+        self._contact_pairs: ContactPairForces | None = None
         self._closed = False
         self._cam_ids: dict[str, int] = {}
         self._mj_renderers: dict[str, dict[CameraDataType, mujoco.Renderer]] = {}
@@ -135,8 +161,13 @@ class ClassicBackend(IMujocoBackend):
 
     def step(self) -> None:
         """Advance simulation by one timestep using mj_step."""
+        self.invalidate_contact_forces()
         mujoco.mj_step(self.model, self.data)
         self._kinematics_pending = True
+
+    def invalidate_contact_forces(self) -> None:
+        """Discard the snapshot before a native step, reset, or forward dynamics call."""
+        self._contact_pairs = None
 
     def physics_time(self) -> float:
         """Return MuJoCo's native simulation clock."""
@@ -274,64 +305,59 @@ class ClassicBackend(IMujocoBackend):
         Returns
         -------
         torch.Tensor
-            World-frame contact forces [1, model.nbody, 3].
+            World-frame contact forces [1, model.nbody, 3] in reusable storage.
+            ``contact_pairs().body_forces`` provides an owned CPU snapshot.
         """
+        if self._contact_pairs is not None:
+            return self._force_tensor
         contact_count = self.data.ncon
         if contact_count > self._contact_capacity:
             self._grow_contact_buffers(contact_count)
 
         self._body_contact_forces_32.fill(0.0)
-        if contact_count == 0:
-            self._force_tensor[0].copy_(self._body_contact_forces_t)
-            return self._force_tensor
-
-        for contact_index in range(contact_count):
-            mujoco.mj_contactForce(self.model, self.data, contact_index, self._contact_wrench_64)
-            self._contact_frame_forces_64[contact_index] = self._contact_wrench_64[:3]
-
         contact_frames = np.asarray(self.data.contact.frame)[:contact_count].reshape(-1, 3, 3)
-        np.matmul(
-            contact_frames.transpose(0, 2, 1),
-            self._contact_frame_forces_64[:contact_count, :, None],
-            out=self._contact_world_forces_64[:contact_count, :, None],
-        )
-        np.copyto(
-            self._contact_world_forces_32[:contact_count],
-            self._contact_world_forces_64[:contact_count],
-            casting="unsafe",
-        )
-        body_ids = self._contact_body_ids[: 2 * contact_count].reshape(contact_count, 2)
-        np.take(
-            self.model.geom_bodyid,
-            np.asarray(self.data.contact.geom)[:contact_count],
-            out=body_ids,
-        )
-        contributions = self._contact_contributions[: 2 * contact_count]
-        np.negative(self._contact_world_forces_32[:contact_count], out=contributions[::2])
-        np.copyto(contributions[1::2], self._contact_world_forces_32[:contact_count])
-        np.add.at(
-            self._body_contact_forces_32,
-            self._contact_body_ids[: 2 * contact_count],
-            contributions,
-        )
-        self._force_tensor[0].copy_(self._body_contact_forces_t)
+        geoms = np.asarray(self.data.contact.geom)[:contact_count]
+        if contact_count:
+            for contact_index in range(contact_count):
+                mujoco.mj_contactForce(self.model, self.data, contact_index, self._contact_wrench_64)
+                self._contact_frame_forces_64[contact_index] = self._contact_wrench_64[:3]
 
+            np.matmul(
+                contact_frames.transpose(0, 2, 1),
+                self._contact_frame_forces_64[:contact_count, :, None],
+                out=self._contact_world_forces_64[:contact_count, :, None],
+            )
+            np.copyto(
+                self._contact_world_forces_32[:contact_count],
+                self._contact_world_forces_64[:contact_count],
+                casting="unsafe",
+            )
+            body_ids = self._contact_body_ids[: 2 * contact_count].reshape(contact_count, 2)
+            np.take(self.model.geom_bodyid, geoms, out=body_ids)
+            contributions = self._contact_contributions[: 2 * contact_count]
+            np.negative(self._contact_world_forces_32[:contact_count], out=contributions[::2])
+            np.copyto(contributions[1::2], self._contact_world_forces_32[:contact_count])
+            np.add.at(
+                self._body_contact_forces_32,
+                self._contact_body_ids[: 2 * contact_count],
+                contributions,
+            )
+        self._force_tensor[0].copy_(self._body_contact_forces_t)
+        rigid = (geoms >= 0).all(axis=1)
+        normal = contact_frames[rigid, 0] * self._contact_frame_forces_64[:contact_count][rigid, :1]
+        self._contact_pairs = ContactPairForces(
+            geoms=geoms[rigid].astype(np.int32),
+            normal=normal.astype(np.float32),
+            total=self._contact_world_forces_32[:contact_count][rigid].copy(),
+            body_forces=torch.from_numpy(self._body_contact_forces_32.copy()).unsqueeze(0),
+        )
         return self._force_tensor
 
     def contact_pairs(self) -> ContactPairForces:
-        """Snapshot the optimized native extraction for every managed contact reader."""
-        body_forces = self.compute_contact_forces().clone()
-        count = self.data.ncon
-        geoms = np.asarray(self.data.contact.geom)[:count]
-        rigid = (geoms >= 0).all(axis=1)
-        frames = np.asarray(self.data.contact.frame)[:count].reshape(-1, 3, 3)
-        normal = frames[rigid, 0] * self._contact_frame_forces_64[:count][rigid, :1]
-        return ContactPairForces(
-            geoms=geoms[rigid].astype(np.int32),
-            normal=normal.astype(np.float32),
-            total=self._contact_world_forces_32[:count][rigid].copy(),
-            body_forces=body_forces,
-        )
+        """Read the same native extraction used by the legacy body-force tensor."""
+        self.compute_contact_forces()
+        assert self._contact_pairs is not None
+        return self._contact_pairs
 
     def get_applied_forces_view(self) -> npt.NDArray[Any]:
         """Get writable view for external applied forces.
@@ -432,4 +458,5 @@ class ClassicBackend(IMujocoBackend):
             quat_mj = holosoma_to_mj_quat(quats[0]).detach().cpu().numpy()  # type: ignore[union-attr]  # [len(body_ids), 4] wxyz
             for i, body_id in enumerate(body_ids):
                 self.model.body_quat[body_id] = quat_mj[i]
+        self.invalidate_contact_forces()
         mujoco.mj_forward(self.model, self.data)  # refresh xpos/xquat from the new body_pos/quat

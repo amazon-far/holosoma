@@ -21,9 +21,8 @@ pytestmark = pytest.mark.no_sim
         {"counterparts": [ContactTargetConfig(), ContactTargetConfig()]},
         {"force_mode": "total"},
         {"force_mode": "invalid"},
-        {"force_threshold": -1.0},
-        {"force_threshold": float("nan")},
-        {"force_threshold": float("inf")},
+        {"force_threshold": 1.0},
+        {"record_substeps": True},
         {"update_decimation": 0},
         {"unexpected": True},
     ],
@@ -69,8 +68,7 @@ def test_contact_capacity_must_be_positive() -> None:
         IsaacSimContactConfig(max_contact_data_count_per_prim=0)
 
 
-def test_contact_defaults_update_each_physics_step_without_history() -> None:
+def test_contact_defaults_update_each_physics_step() -> None:
     assert ContactSensorConfig().update_decimation == 1
-    assert not ContactSensorConfig().record_substeps
     with pytest.raises(ValidationError):
         ContactSensorConfig(update_phase="frame_end")  # type: ignore[call-arg]

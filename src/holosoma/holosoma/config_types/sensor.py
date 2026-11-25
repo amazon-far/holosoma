@@ -732,12 +732,10 @@ class ContactTargetConfig:
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
 class IsaacSimContactConfig:
-    """Native Isaac Sim contact storage and visualization controls."""
+    """Native Isaac Sim contact storage."""
 
     max_contact_data_count_per_prim: int = 64
     """Capacity per source body and environment for native contact data."""
-
-    debug_vis: bool = False
 
     @model_validator(mode="after")
     def validate_capacity(self) -> IsaacSimContactConfig:
@@ -766,16 +764,9 @@ class ContactSensorConfig:
     """``normal`` excludes friction. ``total`` adds tangential friction and requires explicit counterparts.
     Neither mode includes contact torque, joint forces, or externally applied forces."""
 
-    force_threshold: float = 1.0
-    """``in_contact`` is true when any counterpart column's resultant force norm exceeds this value."""
-
     update_decimation: DecimationLike = 1
     """Update after every N completed physics steps, or at a frequency such as ``"100Hz"``.
     The first update occurs after one full interval. Frequency strings use the physics rate."""
-
-    record_substeps: bool = False
-    """Retain every physics sample of the current control frame as ``substep_forces``.
-    Recording runs at the physics rate, independently of the output update cadence."""
 
     isaacsim: IsaacSimContactConfig = field(default_factory=IsaacSimContactConfig)
 
@@ -791,8 +782,6 @@ class ContactSensorConfig:
                 raise ValueError(f"ContactSensorConfig.{name} must not contain duplicate selectors.")
         if self.force_mode == "total" and not self.counterparts:
             raise ValueError("ContactSensorConfig.force_mode='total' requires explicit counterparts on every backend.")
-        if not math.isfinite(self.force_threshold) or self.force_threshold < 0:
-            raise ValueError("ContactSensorConfig.force_threshold must be finite and non-negative.")
         validate_decimation_like(self.update_decimation, field="ContactSensorConfig update_decimation")
         return self
 
