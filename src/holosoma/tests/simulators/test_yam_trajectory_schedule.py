@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from tests.simulators.yam_trajectory_assert import _run_until
 
 pytestmark = pytest.mark.no_sim

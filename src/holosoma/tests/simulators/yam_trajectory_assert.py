@@ -39,9 +39,9 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 from holosoma.config_types.simulator import BridgeConfig
 from holosoma.config_types.video import FixedCameraConfig
 from holosoma.config_values.plugin import yam_trajectory
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from holosoma.utils.path import resolve_asset_path
-from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit
+from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit
 
 ROBOT_KEY = "yam"
 EE_BODY = "gripper"
@@ -96,8 +96,8 @@ CAMERA = FixedCameraConfig(position=[1.1, -1.1, 0.75], target=[0.12, 0.05, 0.28]
 RECORD_FPS = 50
 
 
-def _build(simulator: str, record_dir: str | None = None) -> tuple[Any, Any]:
-    """Build the robot with a trajectory plugin and no SDK transport."""
+def _build(simulator: str, record_dir: str | None = None) -> Any:
+    """The run_sim config for the robot with a trajectory plugin and no SDK transport."""
     config = build_run_sim_config(simulator, "empty", ROBOT_KEY, "terrain_locomotion_plane")
     device = "cpu" if simulator == "mujoco" else "cuda:0"
     sim_init = dataclasses.replace(config.simulator.config, bridge=BridgeConfig(enabled=False))
@@ -125,19 +125,9 @@ def _build(simulator: str, record_dir: str | None = None) -> tuple[Any, Any]:
         device=device,
         plugin={"motion": yam_trajectory},
     )
-    sim, device, _app = launch_simulator(config, device=device)
-    import torch
-
-    sim.set_headless(True)
-    sim.setup()
-    sim.setup_terrain()
-    sim.load_assets()
-    origins = torch.zeros(1, 3, device=device)
-    base_init = torch.tensor(config.robot.init_state.root_state_list(), device=device, dtype=torch.float32)
-    sim.create_envs(1, origins, base_init)
-    sim.prepare_sim()
-    sim.install_plugins()
-    return sim, config
+    return dataclasses.replace(
+        config, training=dataclasses.replace(config.training, num_envs=1, headless=True), time_scale=0.0
+    )
 
 
 def _run_until(sim: Any, t_end: float) -> None:
@@ -362,17 +352,19 @@ def main() -> int:
     parser.add_argument("--record", default=None, metavar="DIR", help="save an mp4 of the run to DIR")
     args = parser.parse_args()
 
-    sim, config = _build(args.simulator, args.record)
-    if args.record is not None:
-        sim.video_recorder.start_recording(episode_id=0)
-    print(
-        f"[{args.simulator}] robot={config.robot.asset.robot_type} sdk_type={config.robot.bridge.sdk_type} "
-        f"dof={sim.dof_names} bodies={sim.body_names} sim_dt={sim.sim_dt}"
-    )
-    fails = check_fk_table(config) + run_checks(sim, config)
-    if args.record is not None:
-        sim.video_recorder.stop_recording()
-        print(f"VIDEO saved under {args.record}")
+    config = _build(args.simulator, args.record)
+    with config.create_task() as task:
+        sim = task.simulator
+        if args.record is not None:
+            sim.video_recorder.start_recording(episode_id=0)
+        print(
+            f"[{args.simulator}] robot={config.robot.asset.robot_type} sdk_type={config.robot.bridge.sdk_type} "
+            f"dof={sim.dof_names} bodies={sim.body_names} sim_dt={sim.sim_dt}"
+        )
+        fails = check_fk_table(config) + run_checks(sim, config)
+        if args.record is not None:
+            sim.video_recorder.stop_recording()
+            print(f"VIDEO saved under {args.record}")
 
     if args.result_file:
         with open(args.result_file, "w") as fh:

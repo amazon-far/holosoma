@@ -109,7 +109,6 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
     monkeypatch.setattr(base_task_module, "ResetEventManager", create_reset_manager)
     monkeypatch.setattr(BaseTask, "_load_assets", lambda _task: None)
     monkeypatch.setattr(BaseTask, "_create_envs", lambda _task: None)
-    monkeypatch.setattr(BaseTask, "_setup_robot_body_indices", lambda _task: None)
     monkeypatch.setattr(BaseTask, "_initialize_task_managers", lambda _task: events.append("managers"))
     monkeypatch.setattr(BaseTask, "_init_buffers", lambda _task: None)
     monkeypatch.setattr(BaseTask, "_prepare_manager_fields", lambda _task: None)
