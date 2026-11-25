@@ -32,7 +32,7 @@ from holosoma.cosim.cuda import BufferSpec, FieldSpec
 from holosoma.cosim.render.plugin import scene_layout
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.envs.simulation_task import simulation_env_origins
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from holosoma.simulator.session import task_session
 from holosoma.utils.config_registry import parse_config
 

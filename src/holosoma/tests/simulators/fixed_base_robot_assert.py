@@ -83,7 +83,6 @@ def _build(simulator: str, num_envs: int) -> tuple[Any, Any]:
     base_init = torch.tensor(config.robot.init_state.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(num_envs, origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
     return sim, config
 
 

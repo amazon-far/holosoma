@@ -72,7 +72,7 @@ def capture(sim: Any, saved: dict[str, Any]) -> None:
 
 def record_episodes(sim: Any, saved: dict[str, Any]) -> None:
     """Append each episode emission on ``sim`` to ``saved["episodes"]`` as ``(phase, env_ids)``."""
-    from holosoma.simulator.base_simulator.hooks import Phase
+    from holosoma.hooks import Phase
 
     episodes = saved.setdefault("episodes", [])
     for phase in (Phase.EPISODE_END, Phase.EPISODE_START):
@@ -84,7 +84,7 @@ def peer(endpoint: str, output: Path, num_envs: int, loopback: bool, backend: st
 
     from holosoma.cosim.bridge import PeerBridge
     from holosoma.cosim.render.renderer import RenderHandler, create_render_task
-    from holosoma.simulator.base_simulator.hooks import Phase
+    from holosoma.hooks import Phase
 
     saved: dict[str, Any] = {}
 
@@ -113,7 +113,7 @@ def peer(endpoint: str, output: Path, num_envs: int, loopback: bool, backend: st
 def head(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bool) -> None:
     import torch
 
-    from holosoma.simulator.base_simulator.hooks import Phase
+    from holosoma.hooks import Phase
 
     saved: dict[str, Any] = {}
     with config(num_envs, loopback, endpoint=endpoint).create_task() as task:

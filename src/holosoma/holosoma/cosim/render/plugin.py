@@ -34,12 +34,13 @@ from loguru import logger
 
 from holosoma.cosim.base import HeadPlugin
 from holosoma.cosim.bridge import as_received
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import CosimRenderPluginConfig
+    from holosoma.envs.base_task.base_task import BaseTask
+    from holosoma.hooks import HookHandle, HookRegistry
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-    from holosoma.simulator.base_simulator.hooks import HookHandle, HookRegistry
 
 
 def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
@@ -63,16 +64,16 @@ class CosimRenderPlugin(HeadPlugin):
     Episode starts are published too, so the renderer can end and start the same episodes.
     """
 
-    def __init__(self, cfg: CosimRenderPluginConfig, simulator: BaseSimulator) -> None:
-        manager = simulator.sensor_manager
+    def __init__(self, cfg: CosimRenderPluginConfig, task: BaseTask) -> None:
+        manager = task.simulator.sensor_manager
         if not manager.cameras:
             raise ValueError("The head publishes when its cameras are due; configure at least one camera")
-        slot = simulator.hooks.installing_slot
+        slot = task.hooks.installing_slot
         self.remote = [record for record in manager.cameras if slot is not None and record.config.remote == slot]
         if len({record.effective_decimation for record in self.remote}) > 1:
             rates = {record.name: record.effective_decimation for record in self.remote}
             raise ValueError(f"Remote cameras of one co-simulation plugin must share a decimation, got {rates}")
-        super().__init__(cfg, simulator)
+        super().__init__(cfg, task)
         read = set(self.bridge.reads)
         self._unread_mounts = [
             (record, record.mount_poses.clone())

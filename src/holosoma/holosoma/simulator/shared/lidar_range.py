@@ -22,9 +22,6 @@ class LidarReturnRecord(Protocol):
     def writing(self, output: str, env_ids: torch.Tensor | None = None) -> AbstractContextManager[torch.Tensor]:
         """Write one output's buffer in place for the current scan."""
 
-    def set_buffer_rows(self, output: str, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
-        """Overwrite the ``env_ids`` rows of one existing output."""
-
 
 def points_from_ranges(directions: torch.Tensor, ranges: torch.Tensor, out: torch.Tensor | None = None) -> torch.Tensor:
     """Convert reported radial ranges into sensor-frame XYZ, preserving configured sentinels; into ``out`` if given."""

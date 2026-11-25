@@ -251,7 +251,7 @@ def test_classic_camera_render_uses_configured_sensor_scene_option() -> None:
     camera = SimpleNamespace(
         name="head",
         config=SimpleNamespace(data_types=["rgb"]),
-        writing=lambda data_type, env_ids=None: nullcontext(buffers[data_type]),
+        writing=lambda data_type, _env_ids=None: nullcontext(buffers[data_type]),
     )
 
     backend.render_cameras(cast("Any", [camera]))

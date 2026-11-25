@@ -36,7 +36,7 @@ def test_mount_pose_state_follows_set_mount_pose_and_writes_only_changed_rows() 
     writes: list[list[int]] = []
     local.write_mount_pose = lambda ids, _poses: writes.append(ids.tolist())
     state = SimState()
-    BaseSimulator._register_mount_poses(cast("Any", SimpleNamespace(state=state, sensor_manager=manager)))
+    BaseSimulator.register_mount_poses(cast("Any", SimpleNamespace(state=state, sensor_manager=manager)))
 
     state.get("mount_pose/remote")
     moved = torch.tensor([0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
@@ -57,7 +57,7 @@ def test_writing_the_mount_pose_field_keeps_it_valid_and_matching_the_sensor() -
     manager = SensorManager("cpu", 50.0, num_envs=1)
     manager.register_camera("cam", _cam()).write_mount_pose = lambda _ids, _poses: None
     state = SimState()
-    BaseSimulator._register_mount_poses(cast("Any", SimpleNamespace(state=state, sensor_manager=manager)))
+    BaseSimulator.register_mount_poses(cast("Any", SimpleNamespace(state=state, sensor_manager=manager)))
 
     held = state.get("mount_pose/cam")
     for step in (0.1, 0.2):  # a held reference can be written and flushed repeatedly

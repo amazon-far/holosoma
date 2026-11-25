@@ -12,16 +12,16 @@ import torch
 
 from holosoma.cosim.bridge import HeadBridge, Snapshot
 from holosoma.cosim.cuda import BufferSpec, FieldSpec, allocate_shared, shared_state_allocator
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import CosimPluginConfig
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-    from holosoma.simulator.base_simulator.hooks import HookHandle, HookRegistry
+    from holosoma.envs.base_task.base_task import BaseTask
+    from holosoma.hooks import HookHandle, HookRegistry
 
 
 class HeadPlugin:
-    """Share ``simulator``'s state with a peer through a :class:`HeadBridge` and close it with the simulator.
+    """Share the task's simulator state with a peer through a :class:`HeadBridge` and close it with the task.
 
     Subclasses choose the fields the peer writes, the handshake the peer checks, and the hooks that
     publish. Installs the shared cache allocator, so it must run before anything reads simulator state;
@@ -30,13 +30,17 @@ class HeadPlugin:
 
     name = "cosim"
 
-    def __init__(self, cfg: CosimPluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(self, cfg: CosimPluginConfig, task: BaseTask) -> None:
+        simulator = task.simulator
         if not cfg.endpoint:
             raise ValueError("Set the co-simulation endpoint with --plugin.<key>.endpoint")
         if torch.device(simulator.sim_device).type != "cuda":
             raise ValueError("Co-simulation shares state through CUDA IPC; run the head on a CUDA device")
-        if simulator.hooks.installing_slot is None:
-            raise RuntimeError("Co-simulation plugins are constructed by install_plugins, which names their slot")
+        if task.hooks.installing_slot is None:
+            raise RuntimeError(
+                "Co-simulation plugins are constructed by the task's plugin install, which names their slot"
+            )
+        self.task = task
         self.simulator = simulator
         self.bridge = HeadBridge(
             simulator,
@@ -45,8 +49,8 @@ class HeadPlugin:
             writes=self.writes(),
             handshake=self.handshake(),
         )
-        self._hooks = list(self.install(simulator.hooks))
-        simulator.hooks.add(Phase.CLOSE, self.close, name=f"{self.name}.close")
+        self._hooks = list(self.install(task.hooks))
+        task.hooks.add(Phase.CLOSE, self.close, name=f"{self.name}.close")
 
     def writes(self) -> list[str]:
         """Names of the simulator's fields the peer writes: they serve the peer's memory, read in place after each

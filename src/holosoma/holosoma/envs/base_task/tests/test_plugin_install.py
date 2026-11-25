@@ -26,6 +26,9 @@ class _FakeSimulator:
     def apply_forces(self, actor: str, force: list[float]) -> None:
         self.forces.append((actor, force))
 
+    def register_mount_poses(self) -> None:
+        pass
+
 
 def _install(configs: dict[str, PluginConfig]) -> BaseTask:
     """Run BaseTask's plugin installation on a task holding only what installation reads."""

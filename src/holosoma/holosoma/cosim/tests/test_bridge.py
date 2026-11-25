@@ -21,7 +21,7 @@ from holosoma.cosim.base import PeerHandler
 from holosoma.cosim.cuda import BufferSpec, SharedStateAllocator
 from holosoma.cosim.render.plugin import CosimRenderPlugin
 from holosoma.cosim.render.renderer import RenderHandler, RenderTask
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.sensor_manager import SensorManager
 
 pytestmark = pytest.mark.no_sim
@@ -416,7 +416,10 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
         Phase.FRAME_END, lambda: None, name="sensors.render", after=fake.sensor_capture_hook
     )
     with fake.hooks.installing("cosim"):
-        head = CosimRenderPlugin(CosimRenderPluginConfig(endpoint="ipc:///unused"), cast("Any", sim))
+        head = CosimRenderPlugin(
+            CosimRenderPluginConfig(endpoint="ipc:///unused"),
+            cast("Any", SimpleNamespace(simulator=sim, hooks=fake.hooks)),
+        )
     return head, manager, images, calls
 
 

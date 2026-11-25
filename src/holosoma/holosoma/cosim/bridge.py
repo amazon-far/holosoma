@@ -39,8 +39,8 @@ from holosoma.cosim.cuda import BufferSpec, FieldSpec, MappedBuffers, SharedStat
 if TYPE_CHECKING:
     import torch
 
+    from holosoma.hooks import Phase
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-    from holosoma.simulator.base_simulator.hooks import Phase
 
 STARTUP_TIMEOUT_MS = 300000
 EXCHANGE_TIMEOUT_MS = 30000

@@ -22,6 +22,7 @@ from holosoma.config_types.sensor import (  # noqa: E402
     SensorMountConfig,
 )
 from holosoma.config_values.run_sim import mujoco as mujoco_preset  # noqa: E402
+from holosoma.hooks import Phase  # noqa: E402
 from holosoma.simulator.mujoco.scene_manager import (  # noqa: E402
     LIDAR_FILTER_SITE_PREFIX,
     LIDAR_MOUNT_SITE_PREFIX,
@@ -90,7 +91,7 @@ def test_armature_override_matches_authored_constraint_physics(tmp_path: Path) -
         np.testing.assert_allclose(sim.root_data.qpos[qpos_id], reference_data.qpos[0], rtol=1e-6)
         np.testing.assert_allclose(sim.root_data.qvel[qvel_id], reference_data.qvel[0], rtol=1e-6)
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
 
 
 @pytest.mark.parametrize("authored_orientation", ['quat="1 1 0 0"', 'euler="1.5707963267948966 0 0"'])
@@ -125,7 +126,7 @@ def test_fixed_base_spawn_overrides_authored_root_orientation(tmp_path: Path, au
         sim.simulate_at_each_physics_step()
         torch.testing.assert_close(sim.get_actor_states(["robot"], env_ids), expected)
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
 
 
 def test_fixed_robot_placement_preserves_static_object_authored_orientation(tmp_path: Path) -> None:
@@ -160,7 +161,7 @@ def test_fixed_robot_placement_preserves_static_object_authored_orientation(tmp_
             torch.testing.assert_close(actor[3:7], torch.full((4,), 0.5))
             sim.simulate_at_each_physics_step()
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
 
 
 @pytest.mark.parametrize("sensor_kind", ["camera", "lidar_mount", "lidar_filter"])

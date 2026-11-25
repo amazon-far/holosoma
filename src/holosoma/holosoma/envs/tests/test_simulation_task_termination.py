@@ -40,7 +40,7 @@ def _task(cfg: TerminationManagerCfg) -> SimulationTask:
     task = object.__new__(SimulationTask)
     task.num_envs = 3
     task.device = "cpu"
-    task.robot_config = cast("RobotConfig", SimpleNamespace(init_state=SimpleNamespace(default_joint_angles={})))
+    task.robot_config = cast("RobotConfig", SimpleNamespace(default_dof_positions=dict))
     task.dof_names = []
     task._init_buffers()
     task.termination_manager = TerminationManager(cfg, task, task.device)

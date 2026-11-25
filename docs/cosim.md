@@ -113,7 +113,7 @@ written writable field flushes into the head's simulation at its next mutation.
 import torch
 
 from holosoma.cosim.base import PeerHandler, HeadPlugin
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from holosoma.simulator.base_simulator.state import DERIVED, STATE
 
 

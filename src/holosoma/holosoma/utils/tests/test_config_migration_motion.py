@@ -105,8 +105,8 @@ def test_sparse_motion_params_preserve_reset_clamp_after_checkpoint_load(
         dof_pos=torch.full((2, count), -0.3),
         dof_vel=torch.zeros(2, count),
         robot_root_states=torch.zeros(2, 13),
-        _rigid_body_pos=torch.zeros(2, len(config.robot.body_names), 3),
-        _rigid_body_rot=torch.tensor([0.0, 0.0, 0.0, 1.0]).repeat(2, len(config.robot.body_names), 1),
+        rigid_body_pos_w=torch.zeros(2, len(config.robot.body_names), 3),
+        rigid_body_quat_w=torch.tensor([0.0, 0.0, 0.0, 1.0]).repeat(2, len(config.robot.body_names), 1),
         scene=SimpleNamespace(env_origins=torch.zeros(2, 3)),
     )
     simulator.get_dof_limits_properties = lambda: (simulator.dof_pos_limits, torch.zeros(count), torch.zeros(count))

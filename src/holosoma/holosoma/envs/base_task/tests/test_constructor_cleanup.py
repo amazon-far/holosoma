@@ -70,6 +70,9 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
         def prepare_sim(self) -> None:
             self.prepared = True
 
+        def register_mount_poses(self) -> None:
+            pass
+
         def setup_viewer(self) -> None:
             assert self.prepared
             self.viewer = object()

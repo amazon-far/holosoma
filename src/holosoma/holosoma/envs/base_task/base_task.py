@@ -174,6 +174,7 @@ class BaseTask:
     def _install_plugins(self) -> None:
         """Construct each configured plugin as ``cls(cfg, task)`` once the task is fully built."""
         self.installed_plugins: dict[str, Any] = {}
+        self.simulator.register_mount_poses()
         for key, plugin_config in self.config.plugin.items():
             # Scoped so the plugin's published keys belong to its slot, for HookRef to resolve.
             with self.hooks.installing(key):

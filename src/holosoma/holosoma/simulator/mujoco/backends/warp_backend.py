@@ -709,7 +709,9 @@ class WarpBackend(IMujocoBackend):
                         # remap to +inf (the no-hit sentinel).
                         if env_ids is None:
                             with cam.writing("depth") as depth:  # [N,H,W,1]
-                                mjw.get_depth(self._render_context, cam_id, self._depth_far, wp.from_torch(depth[..., 0]))
+                                mjw.get_depth(
+                                    self._render_context, cam_id, self._depth_far, wp.from_torch(depth[..., 0])
+                                )
                                 depth.mul_(self._depth_far).masked_fill_(depth <= 0, float("inf"))
                         else:
                             dep = torch.empty_like(cam.buffers["depth"][..., 0])  # [N,H,W]
