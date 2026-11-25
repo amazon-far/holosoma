@@ -71,9 +71,7 @@ def _build(simulator: str, num_envs: int, device: str | None = None):
     if num_envs > 1:
         origins[:, 0] = torch.arange(num_envs, device=device, dtype=torch.float32) * 8.0
     init_state = config.robot.init_state
-    base_init = torch.tensor(
-        list(init_state.pos) + list(init_state.rot) + list(init_state.lin_vel) + list(init_state.ang_vel), device=device
-    )
+    base_init = torch.tensor(init_state.root_state_list(), device=device)
     sim.create_envs(num_envs, origins, base_init)
     sim.prepare_sim()
     return sim

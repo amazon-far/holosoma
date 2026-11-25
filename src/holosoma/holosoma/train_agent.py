@@ -188,7 +188,7 @@ def train_on_task(tyro_config: ExperimentConfig, env: PolicyTask, setup: Trainin
         wandb_kwargs: dict[str, Any] = {
             "project": wandb_cfg.project or default_project,
             "name": wandb_cfg.name or default_run_name,
-            "config": dataclasses.asdict(tyro_config),
+            "config": tyro_config.to_serializable_dict(),
             "dir": str(wandb_dir),
             "mode": wandb_cfg.mode,
         }

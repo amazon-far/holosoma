@@ -31,14 +31,13 @@ from holosoma.config_types.scene import (
 
 pytestmark = pytest.mark.no_sim
 
-# The 13 required RobotAssetConfig fields, so each test only varies link_physics. Values are
+# The 12 required RobotAssetConfig fields, so each test only varies link_physics. Values are
 # arbitrary since no asset is loaded here.
 _BASE: dict[str, Any] = {
     "asset_root": "x",
     "collapse_fixed_joints": True,
     "replace_cylinder_with_capsule": True,
     "flip_visual_attachments": False,
-    "armature": 0.001,
     "thickness": 0.01,
     "urdf_file": "u.urdf",
     "usd_file": None,

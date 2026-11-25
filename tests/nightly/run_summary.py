@@ -79,11 +79,8 @@ TREND_BETTER = "🟢"
 TREND_WORSE = "🔴"
 TREND_FLAT = "⚪"
 
-# Simulator tag values set by nightly.simulator_tag, which is not always a config name --
-# both MuJoCo backends report `mujoco`, and the GPU one is tagged `mjwarp`. "isaacgym" is retained
-# for ARCHIVED runs only -- the backend is retired; dropping it would make historical runs resolve
-# their exp_name to the literal tag instead of falling back to "unknown-sim".
-KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "mujoco", "mjwarp"}
+# Supported simulator tags emitted by nightly.simulator_tag. Warp uses mjwarp rather than its mujoco config name.
+KNOWN_SIMULATORS = {"isaacsim", "mujoco", "mjwarp"}
 # GPU count for a multi-GPU nightly run; used only as a fallback for legacy runs
 # tagged with "multigpu" but no explicit "gpus-N" tag. Keep in sync with nightly.py.
 MULTIGPU_NUM_GPUS = 4
@@ -128,7 +125,7 @@ class NightlyRun(NamedTuple):
         """Human-readable label for the "Failed runs" list.
 
         Includes simulator + GPU count so runs of the SAME experiment across
-        different matrix dimensions (e.g. single- vs multi-GPU, isaacgym vs
+        different matrix dimensions (e.g. single- vs multi-GPU, mujoco vs
         isaacsim) are distinguishable rather than collapsing to a duplicate.
         """
         return f"{self.exp_name} ({self.simulator}, {self.gpus})"
@@ -562,7 +559,7 @@ def post_summary_to_slack():
 
     # Each failed run is labelled with its simulator + GPU count so the same
     # experiment failing on different matrix dimensions (single- vs multi-GPU,
-    # isaacgym vs isaacsim) shows up as distinct entries instead of duplicates.
+    # mujoco vs isaacsim) shows up as distinct entries instead of duplicates.
     problem_runs = [run.failed_run_label() for run in nightly_runs if run.status not in HEALTHY_STATUSES]
 
     if problem_runs:

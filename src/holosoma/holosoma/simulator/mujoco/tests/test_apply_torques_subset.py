@@ -10,18 +10,22 @@ reads, via ``cast``) over both backend paths:
 
 from __future__ import annotations
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pytest
 
 # no_sim lane runs in an env without the mujoco package (isaacsim conda); the test
 # needs the real mjModel/mjData for the classic path, so skip when unavailable.
-mujoco = pytest.importorskip("mujoco")
+if TYPE_CHECKING:
+    import mujoco
+else:
+    mujoco = pytest.importorskip("mujoco")
 
-from holosoma.simulator.mujoco.mujoco import MuJoCo  # noqa: E402  (needs mujoco importable)
-from holosoma.simulator.mujoco.robot_addressing import resolve_dof_actuator_ids  # noqa: E402
-from holosoma.utils.safe_torch_import import torch  # noqa: E402
+from holosoma.simulator.mujoco.mujoco import MuJoCo
+from holosoma.simulator.mujoco.robot_addressing import validate_dof_actuators
+from holosoma.simulator.mujoco.scene_manager import ActorSpecMeta
+from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
 
@@ -45,16 +49,21 @@ _MJCF = """
 </mujoco>
 """
 
-# Same joints, actuators declared in a different order (and named unlike their joints).
+# Same named motors, declared in a different order.
 _MJCF_SHUFFLED_ACTUATORS = (
     _MJCF.split("<actuator>")[0]
     + """<actuator>
-    <motor name="m2" joint="j2"/><motor name="m0" joint="j0"/>
-    <motor name="m3" joint="j3"/><motor name="m1" joint="j1"/>
+    <motor name="j2" joint="j2"/><motor name="j0" joint="j0"/>
+    <motor name="j3" joint="j3"/><motor name="j1" joint="j1"/>
   </actuator>
 </mujoco>
 """
 )
+
+
+def _actuator_ids(model: mujoco.MjModel) -> list[int]:
+    meta = ActorSpecMeta(prefix="", root_body="b0", dof_joint_names=list(_DOFS))
+    return validate_dof_actuators(model, meta, _DOFS, {})
 
 
 class _ClassicStub:
@@ -65,7 +74,7 @@ class _ClassicStub:
         self.root_data = mujoco.MjData(self.root_model)
         self.dof_names = list(_DOFS)
         self.num_dof = len(_DOFS)
-        self._dof_actuator_ids = resolve_dof_actuator_ids(self.root_model, self.dof_names, {})
+        self._dof_actuator_ids = _actuator_ids(self.root_model)
         self.backend = type("B", (), {"get_ctrl_tensor": staticmethod(lambda: None)})()
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
@@ -81,7 +90,7 @@ class _WarpStub:
         self.root_data = mujoco.MjData(self.root_model)
         self.dof_names = list(_DOFS)
         self.num_dof = len(_DOFS)
-        self._dof_actuator_ids_t = torch.tensor(resolve_dof_actuator_ids(self.root_model, self.dof_names, {}))
+        self._dof_actuator_ids_t = torch.tensor(_actuator_ids(self.root_model))
         self._ctrl = torch.zeros(num_envs, len(_DOFS))
         self.backend = type("B", (), {"get_ctrl_tensor": staticmethod(lambda: self._ctrl)})()
 

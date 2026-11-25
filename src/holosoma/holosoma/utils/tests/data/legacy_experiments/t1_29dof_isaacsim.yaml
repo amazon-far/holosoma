@@ -129,9 +129,7 @@ command:
         stand_prob: 0.2
     locomotion_gait:
       func: holosoma.managers.command.terms.locomotion:LocomotionGait
-      params:
-        gait_period: 1.0
-        gait_period_randomization_width: 0.2
+      params: {}
   step_terms:
     locomotion_command:
       func: holosoma.managers.command.terms.locomotion:LocomotionCommand
@@ -140,8 +138,7 @@ command:
       func: holosoma.managers.command.terms.locomotion:LocomotionGait
       params: {}
 curriculum:
-  params:
-    num_compute_average_epl: 1000
+  params: {}
   reset_terms: {}
   setup_terms:
     average_episode_tracker:
@@ -199,13 +196,13 @@ logger:
     vertical_fov: 45.0
     width: 640
 nightly:
-  iterations: 5000
+  iterations: 10000
   metrics:
     Episode/rew_tracking_ang_vel:
-    - 0.7
+    - 0.8
     - inf
     Episode/rew_tracking_lin_vel:
-    - 0.55
+    - 0.75
     - inf
 observation:
   clip_observations: 100.0
@@ -226,7 +223,7 @@ observation:
           func: holosoma.managers.observation.terms.locomotion:base_ang_vel
           noise: 0.0
           params: {}
-          scale: 0.25
+          scale: 1.0
         command_ang_vel:
           clip: null
           func: holosoma.managers.observation.terms.locomotion:command_ang_vel
@@ -256,7 +253,7 @@ observation:
           func: holosoma.managers.observation.terms.locomotion:dof_vel
           noise: 0.1
           params: {}
-          scale: 0.05
+          scale: 0.1
         projected_gravity:
           clip: null
           func: holosoma.managers.observation.terms.locomotion:projected_gravity
@@ -285,13 +282,13 @@ observation:
           func: holosoma.managers.observation.terms.locomotion:base_ang_vel
           noise: 0.0
           params: {}
-          scale: 0.25
+          scale: 1.0
         base_lin_vel:
           clip: null
           func: holosoma.managers.observation.terms.locomotion:base_lin_vel
           noise: 0.0
           params: {}
-          scale: 2.0
+          scale: 1.0
         command_ang_vel:
           clip: null
           func: holosoma.managers.observation.terms.locomotion:command_ang_vel
@@ -321,7 +318,7 @@ observation:
           func: holosoma.managers.observation.terms.locomotion:dof_vel
           noise: 0.0
           params: {}
-          scale: 0.05
+          scale: 0.1
         projected_gravity:
           clip: null
           func: holosoma.managers.observation.terms.locomotion:projected_gravity
@@ -407,22 +404,22 @@ randomization:
       params:
         base_com_range:
           x:
-          - -0.05
-          - 0.05
+          - -0.01
+          - 0.01
           y:
-          - -0.05
-          - 0.05
+          - -0.01
+          - 0.01
           z:
-          - -0.05
-          - 0.05
-        enabled: true
+          - -0.01
+          - 0.01
+        enabled: false
     randomize_friction_startup:
       func: holosoma.managers.randomization.terms.locomotion:randomize_friction_startup
       params:
         enabled: true
         friction_range:
-        - 0.5
-        - 1.25
+        - 0.1
+        - 1.0
     setup_action_delay_buffers:
       func: holosoma.managers.randomization.terms.locomotion:setup_action_delay_buffers
       params:
@@ -499,6 +496,23 @@ reward:
       func: holosoma.managers.reward.terms.locomotion:pose
       params:
         pose_weights:
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
+        - 50.0
         - 0.01
         - 1.0
         - 5.0
@@ -511,23 +525,6 @@ reward:
         - 0.01
         - 5.0
         - 5.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
-        - 50.0
       tags:
       - penalty_curriculum
       weight: -0.5
@@ -546,22 +543,21 @@ reward:
 robot:
   actions_dim: 29
   algo_obs_dim_dict: {}
-  apply_dof_armature_in_isaacgym: true
   arm_dof_names:
-  - left_shoulder_pitch_joint
-  - left_shoulder_roll_joint
-  - left_shoulder_yaw_joint
-  - left_elbow_joint
-  - left_wrist_roll_joint
-  - left_wrist_pitch_joint
-  - left_wrist_yaw_joint
-  - right_shoulder_pitch_joint
-  - right_shoulder_roll_joint
-  - right_shoulder_yaw_joint
-  - right_elbow_joint
-  - right_wrist_roll_joint
-  - right_wrist_pitch_joint
-  - right_wrist_yaw_joint
+  - Left_Shoulder_Pitch
+  - Left_Shoulder_Roll
+  - Left_Elbow_Pitch
+  - Left_Elbow_Yaw
+  - Left_Wrist_Pitch
+  - Left_Wrist_Yaw
+  - Left_Hand_Roll
+  - Right_Shoulder_Pitch
+  - Right_Shoulder_Roll
+  - Right_Elbow_Pitch
+  - Right_Elbow_Yaw
+  - Right_Wrist_Pitch
+  - Right_Wrist_Yaw
+  - Right_Hand_Roll
   asset:
     armature: 0.001
     asset_root: '@holosoma/data/robots'
@@ -572,8 +568,7 @@ robot:
     fix_base_link: false
     flip_visual_attachments: false
     link_physics:
-      density: null
-      isaacgym: null
+      density: 0.001
       isaacsim: null
       mass: null
       mujoco: null
@@ -584,51 +579,50 @@ robot:
         max_linear_velocity: 1000.0
     mesh_root: null
     replace_cylinder_with_capsule: true
-    robot_type: g1_29dof
+    robot_type: t1_29dof
     thickness: 0.01
-    urdf_file: g1/g1_29dof.urdf
+    urdf_file: t1/t1_29dof.urdf
     usd_file: null
-    xml_file: g1/g1_29dof.xml
+    xml_file: t1/t1_29dof.xml
   body_names:
-  - pelvis
-  - left_hip_pitch_link
-  - left_hip_roll_link
-  - left_hip_yaw_link
-  - left_knee_link
-  - left_ankle_pitch_link
-  - left_ankle_roll_link
+  - Trunk
+  - H1
+  - H2
+  - AL1
+  - AL2
+  - AL3
+  - AL4
+  - AL5
+  - AL6
+  - left_hand_link
+  - AR1
+  - AR2
+  - AR3
+  - AR4
+  - AR5
+  - AR6
+  - right_hand_link
+  - Waist
+  - Hip_Pitch_Left
+  - Hip_Roll_Left
+  - Hip_Yaw_Left
+  - Shank_Left
+  - Ankle_Cross_Left
+  - left_foot_link
   - left_foot_contact_point
-  - right_hip_pitch_link
-  - right_hip_roll_link
-  - right_hip_yaw_link
-  - right_knee_link
-  - right_ankle_pitch_link
-  - right_ankle_roll_link
+  - Hip_Pitch_Right
+  - Hip_Roll_Right
+  - Hip_Yaw_Right
+  - Shank_Right
+  - Ankle_Cross_Right
+  - right_foot_link
   - right_foot_contact_point
-  - waist_yaw_link
-  - waist_roll_link
-  - torso_link
-  - left_shoulder_pitch_link
-  - left_shoulder_roll_link
-  - left_shoulder_yaw_link
-  - left_elbow_link
-  - left_wrist_roll_link
-  - left_wrist_pitch_link
-  - left_wrist_yaw_link
-  - right_shoulder_pitch_link
-  - right_shoulder_roll_link
-  - right_shoulder_yaw_link
-  - right_elbow_link
-  - right_wrist_roll_link
-  - right_wrist_pitch_link
-  - right_wrist_yaw_link
   bridge:
     controlled_dof_names: []
     excluded_dof_names: []
     motor_type: serial
     sdk_robot_type: null
-    sdk_type: unitree
-  contact_pairs_multiplier: 16
+    sdk_type: booster
   control:
     action_clip_value: 100.0
     action_scale: 0.25
@@ -637,314 +631,314 @@ robot:
     clip_torques: true
     control_type: P
     damping:
-      ankle_pitch: 1.814445687
-      ankle_roll: 1.814445687
-      elbow: 0.907222843
-      hip_pitch: 2.557889765
-      hip_roll: 6.308801854
-      hip_yaw: 2.557889765
-      knee: 6.308801854
-      shoulder_pitch: 0.907222843
-      shoulder_roll: 0.907222843
-      shoulder_yaw: 0.907222843
-      waist_pitch: 1.814445687
-      waist_roll: 1.814445687
-      waist_yaw: 2.557889765
-      wrist_pitch: 1.068141502
-      wrist_roll: 0.907222843
-      wrist_yaw: 1.068141502
+      Ankle_Pitch: 3.0
+      Ankle_Roll: 3.0
+      Elbow_Pitch: 0.5
+      Elbow_Yaw: 0.5
+      Hand_Roll: 0.5
+      Head_pitch: 0.5
+      Head_yaw: 0.5
+      Hip_Pitch: 5.0
+      Hip_Roll: 5.0
+      Hip_Yaw: 5.0
+      Knee: 5.0
+      Shoulder_Pitch: 0.5
+      Shoulder_Roll: 0.5
+      Waist: 5.0
+      Wrist_Pitch: 0.5
+      Wrist_Yaw: 0.5
     stiffness:
-      ankle_pitch: 28.501246196
-      ankle_roll: 28.501246196
-      elbow: 14.250623098
-      hip_pitch: 40.179238471
-      hip_roll: 99.098427777
-      hip_yaw: 40.179238471
-      knee: 99.098427777
-      shoulder_pitch: 14.250623098
-      shoulder_roll: 14.250623098
-      shoulder_yaw: 14.250623098
-      waist_pitch: 28.501246196
-      waist_roll: 28.501246196
-      waist_yaw: 40.179238471
-      wrist_pitch: 16.778327481
-      wrist_roll: 14.250623098
-      wrist_yaw: 16.778327481
+      Ankle_Pitch: 50.0
+      Ankle_Roll: 50.0
+      Elbow_Pitch: 20.0
+      Elbow_Yaw: 20.0
+      Hand_Roll: 20.0
+      Head_pitch: 5.0
+      Head_yaw: 5.0
+      Hip_Pitch: 200.0
+      Hip_Roll: 200.0
+      Hip_Yaw: 200.0
+      Knee: 200.0
+      Shoulder_Pitch: 20.0
+      Shoulder_Roll: 20.0
+      Waist: 200.0
+      Wrist_Pitch: 20.0
+      Wrist_Yaw: 20.0
   critic_obs_dim: -1
   dof_armature_list:
-  - 0.01017752
-  - 0.025101925
-  - 0.01017752
-  - 0.025101925
-  - 0.00721945
-  - 0.00721945
-  - 0.01017752
-  - 0.025101925
-  - 0.01017752
-  - 0.025101925
-  - 0.00721945
-  - 0.00721945
-  - 0.01017752
-  - 0.00721945
-  - 0.00721945
-  - 0.003609725
-  - 0.003609725
-  - 0.003609725
-  - 0.003609725
-  - 0.003609725
-  - 0.00425
-  - 0.00425
-  - 0.003609725
-  - 0.003609725
-  - 0.003609725
-  - 0.003609725
-  - 0.003609725
-  - 0.00425
-  - 0.00425
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.03
   dof_effort_limit_list:
-  - 88.0
-  - 139.0
-  - 88.0
-  - 139.0
-  - 50.0
-  - 50.0
-  - 88.0
-  - 139.0
-  - 88.0
-  - 139.0
-  - 50.0
-  - 50.0
-  - 88.0
-  - 50.0
-  - 50.0
-  - 25.0
-  - 25.0
-  - 25.0
-  - 25.0
-  - 25.0
-  - 5.0
-  - 5.0
-  - 25.0
-  - 25.0
-  - 25.0
-  - 25.0
-  - 25.0
-  - 5.0
-  - 5.0
+  - 7.0
+  - 7.0
+  - 18.0
+  - 18.0
+  - 18.0
+  - 18.0
+  - 18.0
+  - 18.0
+  - 18.0
+  - 18.0
+  - 18.0
+  - 18.0
+  - 18.0
+  - 18.0
+  - 18.0
+  - 18.0
+  - 30.0
+  - 45.0
+  - 30.0
+  - 30.0
+  - 60.0
+  - 12.0
+  - 12.0
+  - 45.0
+  - 30.0
+  - 30.0
+  - 60.0
+  - 12.0
+  - 12.0
   dof_joint_friction_list:
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 0.0
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
   dof_names:
-  - left_hip_pitch_joint
-  - left_hip_roll_joint
-  - left_hip_yaw_joint
-  - left_knee_joint
-  - left_ankle_pitch_joint
-  - left_ankle_roll_joint
-  - right_hip_pitch_joint
-  - right_hip_roll_joint
-  - right_hip_yaw_joint
-  - right_knee_joint
-  - right_ankle_pitch_joint
-  - right_ankle_roll_joint
-  - waist_yaw_joint
-  - waist_roll_joint
-  - waist_pitch_joint
-  - left_shoulder_pitch_joint
-  - left_shoulder_roll_joint
-  - left_shoulder_yaw_joint
-  - left_elbow_joint
-  - left_wrist_roll_joint
-  - left_wrist_pitch_joint
-  - left_wrist_yaw_joint
-  - right_shoulder_pitch_joint
-  - right_shoulder_roll_joint
-  - right_shoulder_yaw_joint
-  - right_elbow_joint
-  - right_wrist_roll_joint
-  - right_wrist_pitch_joint
-  - right_wrist_yaw_joint
+  - AAHead_yaw
+  - Head_pitch
+  - Left_Shoulder_Pitch
+  - Left_Shoulder_Roll
+  - Left_Elbow_Pitch
+  - Left_Elbow_Yaw
+  - Left_Wrist_Pitch
+  - Left_Wrist_Yaw
+  - Left_Hand_Roll
+  - Right_Shoulder_Pitch
+  - Right_Shoulder_Roll
+  - Right_Elbow_Pitch
+  - Right_Elbow_Yaw
+  - Right_Wrist_Pitch
+  - Right_Wrist_Yaw
+  - Right_Hand_Roll
+  - Waist
+  - Left_Hip_Pitch
+  - Left_Hip_Roll
+  - Left_Hip_Yaw
+  - Left_Knee_Pitch
+  - Left_Ankle_Pitch
+  - Left_Ankle_Roll
+  - Right_Hip_Pitch
+  - Right_Hip_Roll
+  - Right_Hip_Yaw
+  - Right_Knee_Pitch
+  - Right_Ankle_Pitch
+  - Right_Ankle_Roll
   dof_obs_size: 29
   dof_pos_lower_limit_list:
-  - -2.5307
-  - -0.5236
-  - -2.7576
-  - -0.087267
-  - -0.87267
-  - -0.2618
-  - -2.5307
-  - -2.9671
-  - -2.7576
-  - -0.087267
-  - -0.87267
-  - -0.2618
-  - -2.618
-  - -0.52
-  - -0.52
-  - -3.0892
-  - -1.5882
-  - -2.618
-  - -1.0472
-  - -1.972222054
-  - -1.61443
-  - -1.61443
-  - -3.0892
-  - -2.2515
-  - -2.618
-  - -1.0472
-  - -1.972222054
-  - -1.61443
-  - -1.61443
+  - -1.57
+  - -0.35
+  - -3.31
+  - -1.74
+  - -2.27
+  - -2.27
+  - -2.27
+  - -2.27
+  - -2.27
+  - -3.31
+  - -1.57
+  - -2.27
+  - -2.27
+  - -2.27
+  - -2.27
+  - -2.27
+  - -1.57
+  - -1.8
+  - -0.3
+  - -1.0
+  - 0.0
+  - -0.87
+  - -0.44
+  - -1.8
+  - -1.57
+  - -1.0
+  - 0.0
+  - -0.87
+  - -0.44
   dof_pos_upper_limit_list:
-  - 2.8798
-  - 2.9671
-  - 2.7576
-  - 2.8798
-  - 0.5236
-  - 0.2618
-  - 2.8798
-  - 0.5236
-  - 2.7576
-  - 2.8798
-  - 0.5236
-  - 0.2618
-  - 2.618
-  - 0.52
-  - 0.52
-  - 2.6704
-  - 2.2515
-  - 2.618
-  - 2.0944
-  - 1.972222054
-  - 1.61443
-  - 1.61443
-  - 2.6704
-  - 1.5882
-  - 2.618
-  - 2.0944
-  - 1.972222054
-  - 1.61443
-  - 1.61443
+  - 1.57
+  - 1.22
+  - 1.22
+  - 1.57
+  - 2.27
+  - 2.27
+  - 2.27
+  - 2.27
+  - 2.27
+  - 1.22
+  - 1.74
+  - 2.27
+  - 2.27
+  - 2.27
+  - 2.27
+  - 2.27
+  - 1.57
+  - 1.57
+  - 1.57
+  - 1.0
+  - 2.34
+  - 0.35
+  - 0.44
+  - 1.57
+  - 0.3
+  - 1.0
+  - 2.34
+  - 0.35
+  - 0.44
   dof_vel_limit_list:
-  - 32.0
-  - 20.0
-  - 32.0
-  - 20.0
-  - 37.0
-  - 37.0
-  - 32.0
-  - 20.0
-  - 32.0
-  - 20.0
-  - 37.0
-  - 37.0
-  - 32.0
-  - 37.0
-  - 37.0
-  - 37.0
-  - 37.0
-  - 37.0
-  - 37.0
-  - 37.0
-  - 22.0
-  - 22.0
-  - 37.0
-  - 37.0
-  - 37.0
-  - 37.0
-  - 37.0
-  - 22.0
-  - 22.0
+  - 12.56
+  - 12.56
+  - 18.84
+  - 18.84
+  - 18.84
+  - 18.84
+  - 18.84
+  - 18.84
+  - 18.84
+  - 18.84
+  - 18.84
+  - 18.84
+  - 18.84
+  - 18.84
+  - 18.84
+  - 18.84
+  - 10.88
+  - 12.5
+  - 10.9
+  - 10.9
+  - 11.7
+  - 18.8
+  - 12.4
+  - 12.5
+  - 10.9
+  - 10.9
+  - 11.7
+  - 18.8
+  - 12.4
   flip_sign_joint_names:
-  - left_hip_roll_joint
-  - left_hip_yaw_joint
-  - right_hip_roll_joint
-  - right_hip_yaw_joint
-  - left_ankle_roll_joint
-  - right_ankle_roll_joint
-  - waist_roll_joint
-  - waist_yaw_joint
-  - left_shoulder_roll_joint
-  - left_shoulder_yaw_joint
-  - right_shoulder_roll_joint
-  - right_shoulder_yaw_joint
-  - left_wrist_roll_joint
-  - left_wrist_yaw_joint
-  - right_wrist_roll_joint
-  - right_wrist_yaw_joint
-  foot_body_name: ankle_roll_link
+  - AAHead_yaw
+  - Left_Shoulder_Roll
+  - Left_Elbow_Yaw
+  - Left_Wrist_Yaw
+  - Left_Hand_Roll
+  - Right_Shoulder_Roll
+  - Right_Elbow_Yaw
+  - Right_Wrist_Yaw
+  - Right_Hand_Roll
+  - Waist
+  - Left_Hip_Roll
+  - Left_Hip_Yaw
+  - Left_Ankle_Roll
+  - Right_Hip_Roll
+  - Right_Hip_Yaw
+  - Right_Ankle_Roll
+  foot_body_name: foot_link
   foot_height_name: foot_contact_point
   has_torso: true
   has_upper_body_dof: true
   hips_dof_names:
-  - left_hip_pitch_joint
-  - left_hip_roll_joint
-  - left_hip_yaw_joint
-  - right_hip_pitch_joint
-  - right_hip_roll_joint
-  - right_hip_yaw_joint
+  - Left_Hip_Pitch
+  - Left_Hip_Roll
+  - Left_Hip_Yaw
+  - Right_Hip_Pitch
+  - Right_Hip_Roll
+  - Right_Hip_Yaw
   init_state:
     ang_vel:
     - 0.0
     - 0.0
     - 0.0
     default_joint_angles:
-      left_ankle_pitch_joint: -0.363
-      left_ankle_roll_joint: 0.0
-      left_elbow_joint: 0.6
-      left_hip_pitch_joint: -0.312
-      left_hip_roll_joint: 0.0
-      left_hip_yaw_joint: 0.0
-      left_knee_joint: 0.669
-      left_shoulder_pitch_joint: 0.2
-      left_shoulder_roll_joint: 0.2
-      left_shoulder_yaw_joint: 0.0
-      left_wrist_pitch_joint: 0.0
-      left_wrist_roll_joint: 0.0
-      left_wrist_yaw_joint: 0.0
-      right_ankle_pitch_joint: -0.363
-      right_ankle_roll_joint: 0.0
-      right_elbow_joint: 0.6
-      right_hip_pitch_joint: -0.312
-      right_hip_roll_joint: 0.0
-      right_hip_yaw_joint: 0.0
-      right_knee_joint: 0.669
-      right_shoulder_pitch_joint: 0.2
-      right_shoulder_roll_joint: -0.2
-      right_shoulder_yaw_joint: 0.0
-      right_wrist_pitch_joint: 0.0
-      right_wrist_roll_joint: 0.0
-      right_wrist_yaw_joint: 0.0
-      waist_pitch_joint: 0.0
-      waist_roll_joint: 0.0
-      waist_yaw_joint: 0.0
+      AAHead_yaw: 0.0
+      Head_pitch: 0.0
+      Left_Ankle_Pitch: -0.25
+      Left_Ankle_Roll: 0.0
+      Left_Elbow_Pitch: 0.0
+      Left_Elbow_Yaw: -0.5
+      Left_Hand_Roll: 0.0
+      Left_Hip_Pitch: -0.2
+      Left_Hip_Roll: 0.0
+      Left_Hip_Yaw: 0.0
+      Left_Knee_Pitch: 0.4
+      Left_Shoulder_Pitch: 0.2
+      Left_Shoulder_Roll: -1.35
+      Left_Wrist_Pitch: 0.0
+      Left_Wrist_Yaw: 0.0
+      Right_Ankle_Pitch: -0.25
+      Right_Ankle_Roll: 0.0
+      Right_Elbow_Pitch: 0.0
+      Right_Elbow_Yaw: 0.5
+      Right_Hand_Roll: 0.0
+      Right_Hip_Pitch: -0.2
+      Right_Hip_Roll: 0.0
+      Right_Hip_Yaw: 0.0
+      Right_Knee_Pitch: 0.4
+      Right_Shoulder_Pitch: 0.2
+      Right_Shoulder_Roll: 1.35
+      Right_Wrist_Pitch: 0.0
+      Right_Wrist_Yaw: 0.0
+      Waist: 0.0
     lin_vel:
     - 0.0
     - 0.0
@@ -952,7 +946,7 @@ robot:
     pos:
     - 0.0
     - 0.0
-    - 0.8
+    - 0.68
     rot:
     - 0.0
     - 0.0
@@ -962,141 +956,151 @@ robot:
   - left_foot_contact_point
   - right_foot_contact_point
   knee_dof_names:
-  - left_knee_joint
-  - right_knee_joint
-  knee_joint_min_threshold: 0.2
-  knee_name: knee_link
+  - Left_Knee_Pitch
+  - Right_Knee_Pitch
+  knee_joint_min_threshold: 0.35
+  knee_name: Shank
   left_ankle_dof_names:
-  - left_ankle_pitch_joint
-  - left_ankle_roll_joint
+  - Left_Ankle_Pitch
+  - Left_Ankle_Roll
   left_arm_dof_names:
-  - left_shoulder_pitch_joint
-  - left_shoulder_roll_joint
-  - left_shoulder_yaw_joint
-  - left_elbow_joint
-  - left_wrist_roll_joint
-  - left_wrist_pitch_joint
-  - left_wrist_yaw_joint
+  - Left_Shoulder_Pitch
+  - Left_Shoulder_Roll
+  - Left_Elbow_Pitch
+  - Left_Elbow_Yaw
+  - Left_Wrist_Pitch
+  - Left_Wrist_Yaw
+  - Left_Hand_Roll
   lidar_height_offset: 0.5
   lower_dof_names:
-  - left_hip_pitch_joint
-  - left_hip_roll_joint
-  - left_hip_yaw_joint
-  - left_knee_joint
-  - left_ankle_pitch_joint
-  - left_ankle_roll_joint
-  - right_hip_pitch_joint
-  - right_hip_roll_joint
-  - right_hip_yaw_joint
-  - right_knee_joint
-  - right_ankle_pitch_joint
-  - right_ankle_roll_joint
+  - Waist
+  - Left_Hip_Pitch
+  - Left_Hip_Roll
+  - Left_Hip_Yaw
+  - Left_Knee_Pitch
+  - Left_Ankle_Pitch
+  - Left_Ankle_Roll
+  - Right_Hip_Pitch
+  - Right_Hip_Roll
+  - Right_Hip_Yaw
+  - Right_Knee_Pitch
+  - Right_Ankle_Pitch
+  - Right_Ankle_Roll
   num_bodies: 32
   num_feet: 2
   penalize_contacts_on:
-  - pelvis
-  - shoulder
-  - hip
+  - Trunk
+  - H1
+  - H2
+  - AL
+  - AR
+  - Waist
+  - Hip
+  - Shank
+  - Ankle
   policy_obs_dim: -1
   randomize_link_body_names:
-  - pelvis
-  - left_hip_yaw_link
-  - left_hip_roll_link
-  - left_hip_pitch_link
-  - left_knee_link
-  - right_hip_yaw_link
-  - right_hip_roll_link
-  - right_hip_pitch_link
-  - right_knee_link
+  - Trunk
+  - Hip_Pitch_Left
+  - Hip_Roll_Left
+  - Hip_Yaw_Left
+  - Shank_Left
+  - Ankle_Cross_Left
+  - left_foot_link
+  - Hip_Pitch_Right
+  - Hip_Roll_Right
+  - Hip_Yaw_Right
+  - Shank_Right
+  - Ankle_Cross_Right
+  - right_foot_link
   right_ankle_dof_names:
-  - right_ankle_pitch_joint
-  - right_ankle_roll_joint
+  - Right_Ankle_Pitch
+  - Right_Ankle_Roll
   right_arm_dof_names:
-  - right_shoulder_pitch_joint
-  - right_shoulder_roll_joint
-  - right_shoulder_yaw_joint
-  - right_elbow_joint
-  - right_wrist_roll_joint
-  - right_wrist_pitch_joint
-  - right_wrist_yaw_joint
+  - Right_Shoulder_Pitch
+  - Right_Shoulder_Roll
+  - Right_Elbow_Pitch
+  - Right_Elbow_Yaw
+  - Right_Wrist_Pitch
+  - Right_Wrist_Yaw
+  - Right_Hand_Roll
   soft_dof_pos_limit: 0.95
   symmetry_joint_names:
-    left_ankle_pitch_joint: right_ankle_pitch_joint
-    left_ankle_roll_joint: right_ankle_roll_joint
-    left_elbow_joint: right_elbow_joint
-    left_hip_pitch_joint: right_hip_pitch_joint
-    left_hip_roll_joint: right_hip_roll_joint
-    left_hip_yaw_joint: right_hip_yaw_joint
-    left_knee_joint: right_knee_joint
-    left_shoulder_pitch_joint: right_shoulder_pitch_joint
-    left_shoulder_roll_joint: right_shoulder_roll_joint
-    left_shoulder_yaw_joint: right_shoulder_yaw_joint
-    left_wrist_pitch_joint: right_wrist_pitch_joint
-    left_wrist_roll_joint: right_wrist_roll_joint
-    left_wrist_yaw_joint: right_wrist_yaw_joint
-    right_ankle_pitch_joint: left_ankle_pitch_joint
-    right_ankle_roll_joint: left_ankle_roll_joint
-    right_elbow_joint: left_elbow_joint
-    right_hip_pitch_joint: left_hip_pitch_joint
-    right_hip_roll_joint: left_hip_roll_joint
-    right_hip_yaw_joint: left_hip_yaw_joint
-    right_knee_joint: left_knee_joint
-    right_shoulder_pitch_joint: left_shoulder_pitch_joint
-    right_shoulder_roll_joint: left_shoulder_roll_joint
-    right_shoulder_yaw_joint: left_shoulder_yaw_joint
-    right_wrist_pitch_joint: left_wrist_pitch_joint
-    right_wrist_roll_joint: left_wrist_roll_joint
-    right_wrist_yaw_joint: left_wrist_yaw_joint
-    waist_pitch_joint: waist_pitch_joint
-    waist_roll_joint: waist_roll_joint
-    waist_yaw_joint: waist_yaw_joint
+    AAHead_yaw: AAHead_yaw
+    Head_pitch: Head_pitch
+    Left_Ankle_Pitch: Right_Ankle_Pitch
+    Left_Ankle_Roll: Right_Ankle_Roll
+    Left_Elbow_Pitch: Right_Elbow_Pitch
+    Left_Elbow_Yaw: Right_Elbow_Yaw
+    Left_Hand_Roll: Right_Hand_Roll
+    Left_Hip_Pitch: Right_Hip_Pitch
+    Left_Hip_Roll: Right_Hip_Roll
+    Left_Hip_Yaw: Right_Hip_Yaw
+    Left_Knee_Pitch: Right_Knee_Pitch
+    Left_Shoulder_Pitch: Right_Shoulder_Pitch
+    Left_Shoulder_Roll: Right_Shoulder_Roll
+    Left_Wrist_Pitch: Right_Wrist_Pitch
+    Left_Wrist_Yaw: Right_Wrist_Yaw
+    Right_Ankle_Pitch: Left_Ankle_Pitch
+    Right_Ankle_Roll: Left_Ankle_Roll
+    Right_Elbow_Pitch: Left_Elbow_Pitch
+    Right_Elbow_Yaw: Left_Elbow_Yaw
+    Right_Hand_Roll: Left_Hand_Roll
+    Right_Hip_Pitch: Left_Hip_Pitch
+    Right_Hip_Roll: Left_Hip_Roll
+    Right_Hip_Yaw: Left_Hip_Yaw
+    Right_Knee_Pitch: Left_Knee_Pitch
+    Right_Shoulder_Pitch: Left_Shoulder_Pitch
+    Right_Shoulder_Roll: Left_Shoulder_Roll
+    Right_Wrist_Pitch: Left_Wrist_Pitch
+    Right_Wrist_Yaw: Left_Wrist_Yaw
+    Waist: Waist
   terminate_after_contacts_on:
-  - pelvis
-  - shoulder
-  - hip
+  - Waist
+  - Shoulder
+  - Hip
+  - Trunk
+  - Head
   termination_close_to_dof_pos_limit: 0.98
-  torso_name: torso_link
+  torso_name: Trunk
   upper_dof_names:
-  - waist_yaw_joint
-  - waist_roll_joint
-  - waist_pitch_joint
-  - left_shoulder_pitch_joint
-  - left_shoulder_roll_joint
-  - left_shoulder_yaw_joint
-  - left_elbow_joint
-  - left_wrist_roll_joint
-  - left_wrist_pitch_joint
-  - left_wrist_yaw_joint
-  - right_shoulder_pitch_joint
-  - right_shoulder_roll_joint
-  - right_shoulder_yaw_joint
-  - right_elbow_joint
-  - right_wrist_roll_joint
-  - right_wrist_pitch_joint
-  - right_wrist_yaw_joint
+  - AAHead_yaw
+  - Head_pitch
+  - Left_Shoulder_Pitch
+  - Left_Shoulder_Roll
+  - Left_Elbow_Pitch
+  - Left_Elbow_Yaw
+  - Left_Wrist_Pitch
+  - Left_Wrist_Yaw
+  - Left_Hand_Roll
+  - Right_Shoulder_Pitch
+  - Right_Shoulder_Roll
+  - Right_Elbow_Pitch
+  - Right_Elbow_Yaw
+  - Right_Wrist_Pitch
+  - Right_Wrist_Yaw
+  - Right_Hand_Roll
   upper_left_arm_dof_names:
-  - left_shoulder_pitch_joint
-  - left_shoulder_roll_joint
-  - left_shoulder_yaw_joint
-  - left_elbow_joint
-  - left_wrist_roll_joint
-  - left_wrist_pitch_joint
-  - left_wrist_yaw_joint
+  - Left_Shoulder_Pitch
+  - Left_Shoulder_Roll
+  - Left_Elbow_Pitch
+  - Left_Elbow_Yaw
+  - Left_Wrist_Pitch
+  - Left_Wrist_Yaw
+  - Left_Hand_Roll
   upper_right_arm_dof_names:
-  - right_shoulder_pitch_joint
-  - right_shoulder_roll_joint
-  - right_shoulder_yaw_joint
-  - right_elbow_joint
-  - right_wrist_roll_joint
-  - right_wrist_pitch_joint
-  - right_wrist_yaw_joint
+  - Right_Shoulder_Pitch
+  - Right_Shoulder_Roll
+  - Right_Elbow_Pitch
+  - Right_Elbow_Yaw
+  - Right_Wrist_Pitch
+  - Right_Wrist_Yaw
+  - Right_Hand_Roll
   waist_dof_names:
-  - waist_yaw_joint
-  - waist_roll_joint
-  - waist_pitch_joint
-  waist_pitch_dof_name: waist_pitch_joint
-  waist_roll_dof_name: waist_roll_joint
-  waist_yaw_dof_name: waist_yaw_joint
+  - Waist
+  waist_pitch_dof_name: null
+  waist_roll_dof_name: null
+  waist_yaw_dof_name: Waist
 scene:
   asset_root: null
   env_spacing: 20.0
@@ -1121,7 +1125,7 @@ scene:
 sensor: {}
 simulator:
   _recursive_: false
-  _target_: holosoma.simulator.isaacgym.isaacgym.IsaacGym
+  _target_: holosoma.simulator.isaacsim.isaacsim.IsaacSim
   config:
     bridge:
       dds_config: null
@@ -1143,7 +1147,7 @@ simulator:
     mujoco_warp:
       nconmax_per_env: 96
       njmax_per_env: null
-    name: isaacgym
+    name: isaacsim
     reset_manager:
       events: []
     robot_mjcf_filter:
@@ -1166,7 +1170,7 @@ simulator:
         num_threads: 4
         num_velocity_iterations: 4
         solver_type: 1
-      render_interval: 1
+      render_interval: 4
       render_mode: human
       substeps: 1
     viewer:
@@ -1248,9 +1252,9 @@ training:
   headless: true
   max_eval_steps: null
   multigpu: false
-  name: g1_29dof_manager
+  name: t1_29dof_manager
   num_envs: 4096
-  project: hv-g1-manager
+  project: hv-t1-manager
   seed: 42
   teacher_checkpoint: null
   torch_deterministic: false

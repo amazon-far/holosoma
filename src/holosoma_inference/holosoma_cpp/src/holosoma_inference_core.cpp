@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include "holosoma_cpp/robot_config.hpp"
 #include "holosoma_cpp/urdf_kinematics.hpp"
 
 namespace holosoma::live {
@@ -356,28 +357,38 @@ bool WbtPolicy::ParseMetadata(std::string &error) {
       }
     }
 
-    stage = "parsing default_joint_angles";
-    try {
-      const json &defaults = experiment.at("robot").at("init_state").at("default_joint_angles");
-      if (!defaults.is_object() || defaults.empty()) {
-        error = "experiment_config default_joint_angles is missing or empty";
-        return false;
+    action_clip_min_ = -action_clip_;
+    action_clip_max_ = action_clip_;
+    stage = "parsing the joint action term clip";
+    if (experiment.contains("action") && !experiment.at("action").is_null()) {
+      const auto &terms = experiment.at("action").at("terms");
+      const json *joint_term = nullptr;
+      for (const auto &entry : terms.items()) {
+        const auto func = entry.value().value("func", "");
+        if (func.find("JointPositionActionTerm") == std::string::npos) continue;
+        if (joint_term) throw std::invalid_argument("Multiple joint action terms are unsupported");
+        joint_term = &entry.value();
       }
-      for (int i = 0; i < kActionDim; ++i) {
-        if (!defaults.contains(joint_names_[i])) {
-          error = "experiment_config default_joint_angles is missing \"" + joint_names_[i] + "\"";
-          return false;
+      if (joint_term && !robot.contains("control")) {
+        const auto clip = joint_term->value("clip", json());
+        if (!clip.is_null()) {
+          if (!clip.is_array() || clip.size() != 2 || !clip[0].is_number() || !clip[1].is_number())
+            throw std::invalid_argument("Joint action clip must contain two finite bounds");
+          const float low = clip[0].get<float>(), high = clip[1].get<float>();
+          if (!std::isfinite(low) || !std::isfinite(high) || low > high || high < -kWbtActionCeiling ||
+              low > kWbtActionCeiling)
+            throw std::invalid_argument("Joint action clip is invalid or outside the runtime ceiling");
+          action_clip_min_ = std::max(low, -kWbtActionCeiling);
+          action_clip_max_ = std::min(high, kWbtActionCeiling);
+          action_clip_ = std::max(std::abs(action_clip_min_), std::abs(action_clip_max_));
+          action_clip_source_ = "checkpoint joint action term";
         }
-        default_dof_pos_[i] = defaults.at(joint_names_[i]).get<float>();
       }
-    } catch (const std::exception &e) {
-      error = std::string("cannot parse default_joint_angles: ") + e.what();
-      return false;
     }
-    if (!IsFinite(default_dof_pos_.data(), default_dof_pos_.size())) {
-      error = "experiment_config default_joint_angles contains a non-finite value";
-      return false;
-    }
+
+    stage = "resolving default joint positions";
+    const auto defaults = holosoma::ResolveDefaultDofPositions(robot, joint_names_);
+    std::copy(defaults.begin(), defaults.end(), default_dof_pos_.begin());
 
     stage = "parsing motion_config.body_name_ref";
     try {
@@ -827,7 +838,7 @@ bool WbtPolicy::ComputeAction(const RobotObservation &obs, const WbtReferenceSeq
     }
     for (int i = 0; i < kActionDim; ++i) {
       last_raw_action_[i] = raw[i];
-      last_action_[i] = holosoma::clip_policy_action(raw[i], action_clip_);
+      last_action_[i] = std::clamp(raw[i], action_clip_min_, action_clip_max_);
       action_out[i] = last_action_[i] * action_scale_[i];
     }
   } catch (const std::exception &e) {

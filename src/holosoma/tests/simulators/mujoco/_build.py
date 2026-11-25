@@ -21,6 +21,7 @@ import torch
 import holosoma.config_values.robot as robot_values
 import holosoma.config_values.run_sim as run_sim_values
 from holosoma.config_types.experiment import TrainingConfig
+from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import BridgeConfig, MujocoBackend, VirtualGantryCfg
@@ -50,14 +51,19 @@ def _finish_build(sim, num_envs, env_origins, base_init):
     return sim
 
 
-def _robot_base_init():
-    """The g1 robot's flattened initial root state ``[pos, rot, lin_vel, ang_vel]`` tensor."""
-    init = robot_values.g1_29dof.init_state
-    return torch.tensor(list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel))
+def _robot_base_init(robot: RobotConfig):
+    """The robot's flattened initial root state ``[pos, rot, lin_vel, ang_vel]`` tensor."""
+    return torch.tensor(robot.init_state.root_state_list())
 
 
 def build_classic_sim(
-    scene: SceneConfig | None = None, *, plugin=None, kinematic_playback: bool = False, native=None, simulator=None
+    scene: SceneConfig | None = None,
+    *,
+    plugin=None,
+    kinematic_playback: bool = False,
+    native=None,
+    simulator=None,
+    robot: RobotConfig | None = None,
 ):
     """Build a ClassicBackend MuJoCo sim (CPU, single env) for ``scene`` (default: empty).
 
@@ -67,6 +73,7 @@ def build_classic_sim(
     """
     from tests.simulators._sim_harness import launch_simulator
 
+    robot = robot or robot_values.g1_29dof
     sim_cfg = _bridge_gantry_off(simulator or run_sim_values.mujoco)
     if native is not None:
         sim_cfg = dataclasses.replace(
@@ -81,11 +88,11 @@ def build_classic_sim(
             ),
         )
     config = dataclasses.replace(
-        RunSimConfig(simulator=sim_cfg, robot=robot_values.g1_29dof, scene=scene or SceneConfig(), plugin=plugin or {}),
+        RunSimConfig(simulator=sim_cfg, robot=robot, scene=scene or SceneConfig(), plugin=plugin or {}),
         device="cpu",
     )
     sim, device, _ = launch_simulator(config, device="cpu")
-    return _finish_build(sim, 1, torch.zeros(1, 3, device=device), _robot_base_init())
+    return _finish_build(sim, 1, torch.zeros(1, 3, device=device), _robot_base_init(robot))
 
 
 def build_warp_sim(

@@ -81,7 +81,7 @@ def _check_frames(task, config, check, failures: list[str], result_file: str | N
     camera = next(iter(config.sensor))
     env_ids = torch.arange(1, device=device)
     init = config.robot.init_state
-    home = sim.env_origins + torch.tensor(list(init.pos), device=device)
+    home = sim.env_origins + torch.tensor(list(init.position), device=device)
     spawn_dof = sim.dof_pos.clone()
 
     def write_pose(offset_y: float) -> None:
@@ -92,7 +92,7 @@ def _check_frames(task, config, check, failures: list[str], result_file: str | N
         """
         states = sim.get_actor_states(["robot"], env_ids).clone()
         states[:, :3] = home + torch.tensor([0.0, offset_y, 0.0], device=device)
-        states[:, 3:7] = torch.tensor(list(init.rot), device=device)
+        states[:, 3:7] = torch.tensor(list(init.orientation_xyzw), device=device)
         states[:, 7:] = 0.0
         sim.set_actor_states(["robot"], env_ids, states)
         sim.dof_pos[env_ids] = spawn_dof
