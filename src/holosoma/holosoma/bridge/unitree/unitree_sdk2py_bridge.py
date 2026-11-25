@@ -12,6 +12,10 @@ from holosoma.bridge.base.basic_sdk2py_bridge import BasicSdk2Bridge
 class UnitreeSdk2Bridge(BasicSdk2Bridge):
     """Unitree SDK bridge implementation using unitree_interface C++ bindings."""
 
+    def requires_explicit_dof_order(self) -> bool:
+        """Whether the transport requires an explicit DOF list in hardware motor order."""
+        return True
+
     SUPPORTED_ROBOT_TYPES = {"g1_29dof", "h1", "h1-2", "go2_12dof"}
 
     # robot_type -> SDK enum member NAME (resolved to the real enum via getattr where the binding is

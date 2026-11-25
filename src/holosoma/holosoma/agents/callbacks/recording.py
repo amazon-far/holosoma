@@ -82,12 +82,12 @@ class EvalRecordingCallback(RLEvalCallback):
         if hasattr(sim, "body_names"):
             self._metadata["body_names"] = list(sim.body_names)
 
-        # Static robot properties
+        # Read resolved limits so recordings include asset defaults when config overrides are absent.
         robot_cfg = env.robot_config
-        self._metadata["effort_limits"] = list(robot_cfg.dof_effort_limit_list)
-        self._metadata["dof_pos_lower_limits"] = list(robot_cfg.dof_pos_lower_limit_list)
-        self._metadata["dof_pos_upper_limits"] = list(robot_cfg.dof_pos_upper_limit_list)
-        self._metadata["velocity_limits"] = list(robot_cfg.dof_vel_limit_list)
+        self._metadata["effort_limits"] = env.torque_limits.tolist()
+        self._metadata["dof_pos_lower_limits"] = env.dof_pos_limits[:, 0].tolist()
+        self._metadata["dof_pos_upper_limits"] = env.dof_pos_limits[:, 1].tolist()
+        self._metadata["velocity_limits"] = env.dof_vel_limits.tolist()
         asset_cfg = robot_cfg.asset
         self._metadata["urdf_path"] = resolve_asset_path(asset_cfg.urdf_file, asset_cfg.asset_root)
 

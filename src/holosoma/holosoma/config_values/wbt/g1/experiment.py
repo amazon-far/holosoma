@@ -1,5 +1,6 @@
 from dataclasses import replace
 
+from holosoma.config_types.action import replace_action_term
 from holosoma.config_types.experiment import ExperimentConfig, NightlyConfig, TrainingConfig
 from holosoma.config_values import (
     action,
@@ -14,6 +15,17 @@ from holosoma.config_values import (
     simulator,
     termination,
     terrain,
+)
+
+_joint_control_term = action.g1_29dof_joint_pos.terms["joint_control"]
+assert _joint_control_term.controller is not None
+g1_wbt_joint_pos = replace_action_term(
+    action.g1_29dof_joint_pos,
+    "joint_control",
+    controller=replace(
+        _joint_control_term.controller,
+        action_scales_by_effort_limit_over_p_gain=True,
+    ),
 )
 
 g1_29dof_wbt = ExperimentConfig(
@@ -53,17 +65,12 @@ g1_29dof_wbt = ExperimentConfig(
     ),
     robot=replace(
         robot.g1_29dof,
-        control=replace(
-            robot.g1_29dof.control,
-            action_scale=0.25,
-            action_scales_by_effort_limit_over_p_gain=True,
-        ),
         asset=replace(robot.g1_29dof.asset, enable_self_collisions=True),
-        init_state=replace(robot.g1_29dof.init_state, pos=[0.0, 0.0, 0.76]),
+        init_state=replace(robot.g1_29dof.init_state, position=[0.0, 0.0, 0.76]),
     ),
     terrain=terrain.terrain_locomotion_plane,
     observation=observation.g1_29dof_wbt_observation,
-    action=action.g1_29dof_joint_pos,
+    action=g1_wbt_joint_pos,
     termination=termination.g1_29dof_wbt_termination,
     randomization=randomization.g1_29dof_wbt_randomization,
     command=command.g1_29dof_wbt_command,
@@ -118,17 +125,12 @@ g1_29dof_wbt_fast_sac = ExperimentConfig(
     ),
     robot=replace(
         robot.g1_29dof,
-        control=replace(
-            robot.g1_29dof.control,
-            action_scale=0.25,
-            action_scales_by_effort_limit_over_p_gain=True,
-        ),
         asset=replace(robot.g1_29dof.asset, enable_self_collisions=True),
-        init_state=replace(robot.g1_29dof.init_state, pos=[0.0, 0.0, 0.76]),
+        init_state=replace(robot.g1_29dof.init_state, position=[0.0, 0.0, 0.76]),
     ),
     terrain=terrain.terrain_locomotion_plane,
     observation=observation.g1_29dof_wbt_observation,
-    action=action.g1_29dof_joint_pos,
+    action=g1_wbt_joint_pos,
     termination=termination.g1_29dof_wbt_termination,
     randomization=randomization.g1_29dof_wbt_randomization,
     command=command.g1_29dof_wbt_command,
@@ -156,7 +158,7 @@ g1_29dof_wbt_w_object = replace(
             robot.g1_29dof_w_object.asset,
             enable_self_collisions=True,
         ),
-        init_state=replace(robot.g1_29dof_w_object.init_state, pos=[0.0, 0.0, 0.76]),
+        init_state=replace(robot.g1_29dof_w_object.init_state, position=[0.0, 0.0, 0.76]),
     ),
     randomization=randomization.g1_29dof_wbt_randomization_w_object,
     observation=observation.g1_29dof_wbt_observation_w_object,
@@ -170,7 +172,7 @@ g1_29dof_wbt_fast_sac_w_object = replace(
     robot=replace(
         robot.g1_29dof_w_object,
         asset=replace(robot.g1_29dof_w_object.asset, enable_self_collisions=True),
-        init_state=replace(robot.g1_29dof_w_object.init_state, pos=[0.0, 0.0, 0.76]),
+        init_state=replace(robot.g1_29dof_w_object.init_state, position=[0.0, 0.0, 0.76]),
     ),
     randomization=randomization.g1_29dof_wbt_randomization_w_object,
     observation=observation.g1_29dof_wbt_observation_w_object,

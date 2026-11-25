@@ -92,7 +92,7 @@ def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.Mon
     config = SimpleNamespace(
         simulator=simulator_config,
         terrain=object(),
-        robot=SimpleNamespace(),
+        robot=SimpleNamespace(dof_names=["j0"], body_names=["base"], body_tags={}, joint_tags={}),
         training=SimpleNamespace(num_envs=1, seed=0, headless=False, torch_deterministic=False),
         logger=object(),
         scene=object(),

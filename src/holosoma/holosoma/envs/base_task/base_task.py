@@ -21,12 +21,17 @@ from holosoma.utils.common import seeding
 from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
 from holosoma.utils.helpers import get_class
 from holosoma.utils.rate import RateLimiter
+from holosoma.utils.robot_name_resolver import RobotNameResolver
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.torch_utils import to_torch
 
 
 # Base class for manager-based simulation tasks.
 class BaseTask:
+    p_gains: torch.Tensor
+    d_gains: torch.Tensor
+    action_scales: torch.Tensor
+
     def __init__(self, tyro_config: EnvConfig) -> None:
         self._closed = False
         try:
@@ -110,6 +115,7 @@ class BaseTask:
 
         self.num_envs = training_config.num_envs
         self.device = resolve_simulation_device(tyro_config, get_local_rank())
+        self.robot_names = RobotNameResolver(robot_config, self.device)
 
         # Episodes each environment has started, incremented on reset before the reset DR runs. With
         # dr_base_seed it keys every DR draw as f(seed, term, env, episode), so async per-env resets
@@ -136,7 +142,6 @@ class BaseTask:
 
         self._create_envs()
         self.dof_pos_limits, self.dof_vel_limits, self.torque_limits = self.simulator.get_dof_limits_properties()
-        self._setup_robot_body_indices()
         self.simulator.prepare_sim()
 
         # if running with a viewer, set up keyboard shortcuts and camera
@@ -198,10 +203,7 @@ class BaseTask:
         self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
         self.time_out_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
 
-        default_joint_angles = self.robot_config.init_state.default_joint_angles
-        missing = [name for name in self.dof_names if name not in default_joint_angles]
-        if missing:
-            raise ValueError(f"Missing default joint angles for DOFs {missing} in robot configuration.")
+        default_joint_angles = self.robot_config.default_dof_positions()
         self.default_dof_pos_base = torch.tensor(
             [[float(default_joint_angles[name]) for name in self.dof_names]], dtype=torch.float, device=self.device
         )
@@ -300,31 +302,20 @@ class BaseTask:
             self.simulator.body_names,
         )
 
+        assert self.num_dof == len(self.robot_config.dof_names), (
+            f"Simulator reports {self.num_dof} DOFs but robot_config.dof_names has {len(self.robot_config.dof_names)}"
+        )
+        self.dim_actions = self.num_dof
         # other properties
         self.num_bodies = len(self.body_names)
         self.num_dofs = len(self.dof_names)
-        base_init_state_list = (
-            self.robot_config.init_state.pos
-            + self.robot_config.init_state.rot
-            + self.robot_config.init_state.lin_vel
-            + self.robot_config.init_state.ang_vel
+        self.base_init_state = to_torch(
+            self.robot_config.init_state.root_state_list(), device=self.device, requires_grad=False
         )
-        self.base_init_state = to_torch(base_init_state_list, device=self.device, requires_grad=False)
 
     def _create_envs(self) -> None:
         """Create the environments at their origins with the robot's base initial state."""
         self.simulator.create_envs(self.num_envs, self._get_env_origins(), self.base_init_state)  # type: ignore[call-arg]
-
-    def _setup_robot_body_indices(self) -> None:
-        """Cache body indices; specializations extend it with their own."""
-        termination_contact_names = [
-            body for name in self.robot_config.terminate_after_contacts_on for body in self.body_names if name in body
-        ]
-        self.termination_contact_indices = torch.tensor(
-            [self.simulator.find_rigid_body_indice(name) for name in termination_contact_names],
-            dtype=torch.long,
-            device=self.device,
-        )
 
     # ------------------------------------------------------------------
     # Hooks for subclasses

@@ -58,10 +58,9 @@ def _fresh_isaacsim(sim):
 def _fresh_mujoco(sim):
     import torch
 
-    from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend
     from holosoma.utils.rotations import quat_rotate
 
-    if isinstance(sim.backend, WarpBackend):
+    if hasattr(sim.backend, "qpos_t"):
         qpos, qvel = sim.backend.qpos_t, sim.backend.qvel_t
     else:
         qpos, qvel = torch.from_numpy(sim.root_data.qpos)[None], torch.from_numpy(sim.root_data.qvel)[None]
@@ -105,9 +104,7 @@ def _reference_bodies_mujoco(sim):
     import numpy as np
     import torch
 
-    from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend
-
-    if isinstance(sim.backend, WarpBackend):
+    if hasattr(sim.backend, "qpos_t"):
         torch.cuda.synchronize()
         qpos, qvel = sim.backend.qpos_t[0].double().cpu().numpy(), sim.backend.qvel_t[0].double().cpu().numpy()
     else:

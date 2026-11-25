@@ -368,13 +368,11 @@ def _export_ready_algo(
     urdf.write_text("<robot name='g1'/>")
     algo.env = SimpleNamespace(
         command_manager=None,
+        p_gains=torch.tensor([100.0, 100.0, 200.0]),
+        d_gains=torch.tensor([2.0, 2.0, 5.0]),
+        action_scales=torch.full((3,), 0.25),
         robot_config=SimpleNamespace(
             dof_names=["left_hip_pitch_joint", "right_hip_pitch_joint", "waist_yaw_joint"],
-            control=SimpleNamespace(
-                stiffness={"hip_pitch": 100.0, "waist_yaw": 200.0},
-                damping={"hip_pitch": 2.0, "waist_yaw": 5.0},
-                action_scale=0.25,
-            ),
             asset=SimpleNamespace(urdf_file=urdf.name, asset_root=str(tmp_path)),
         ),
     )
@@ -411,7 +409,7 @@ def test_export_writes_a_depth_backbone_and_student_pair(
     metadata = student.get_modelmeta().custom_metadata_map
     assert json.loads(metadata["joint_names"]) == algo.env.robot_config.dof_names
     assert json.loads(metadata["kp"]) == [100.0, 100.0, 200.0]
-    assert json.loads(metadata["action_scale"]) == 0.25
+    assert json.loads(metadata["action_scale"]) == [0.25] * 3
 
     # The composed pair reproduces the student's deterministic action.
     depth = torch.rand(1, 58, 87) - 0.5
@@ -469,7 +467,7 @@ class _FakeEnv:
 
     def __init__(self, depth_group: tuple[str, str] | None = None) -> None:
         self.depth_group = depth_group
-        self.robot_config = SimpleNamespace(actions_dim=2)
+        self.robot_config = SimpleNamespace(dof_names=["joint_a", "joint_b"])
         self.command_manager = SimpleNamespace(get_state=lambda _name: None)
         self.observation_manager = _FakeObservationManager(self._obs())
 

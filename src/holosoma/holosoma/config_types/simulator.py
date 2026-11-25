@@ -187,10 +187,8 @@ class VirtualGantryCfg:
     enabled: bool = False
     """Whether to enable the virtual gantry system."""
 
-    attachment_body_names: list[str] = field(
-        default_factory=lambda: ["Trunk", "torso_link", "torso", "base_link", "pelvis", "base"]
-    )
-    """List of body names to try for attachment (in preference order)."""
+    attachment_body_names: list[str] = field(default_factory=lambda: ["#base"])
+    """Exact body names or single-body tags to try for attachment, in preference order."""
 
     stiffness: float = 200.0
     """Spring stiffness coefficient for elastic band force calculation."""

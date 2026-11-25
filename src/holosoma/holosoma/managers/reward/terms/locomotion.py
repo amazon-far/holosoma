@@ -7,7 +7,8 @@ compatible with the reward manager system.
 from __future__ import annotations
 
 import functools
-import weakref
+import numbers
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
 from holosoma.managers.observation.terms.common import (
@@ -20,7 +21,6 @@ from holosoma.managers.observation.terms.common import (
 
 # Re-exported so configs naming these terms under this module keep resolving.
 from holosoma.managers.reward.terms.common import limits_dof_pos, penalty_action_rate  # noqa: F401
-from holosoma.managers.utils import body_indices
 from holosoma.utils.rotations import (
     quat_apply,
     quat_rotate_inverse,
@@ -30,26 +30,6 @@ from holosoma.utils.safe_torch_import import torch
 if TYPE_CHECKING:
     from holosoma.envs.policy_task import PolicyTask
     from holosoma.managers.command.terms.locomotion import LocomotionGait
-
-
-_FEET_INDICES: weakref.WeakKeyDictionary[PolicyTask, torch.Tensor] = weakref.WeakKeyDictionary()
-
-
-def _feet_indices(env: PolicyTask) -> torch.Tensor:
-    """Indices of the robot bodies named by ``robot_config.foot_body_name``, looked up once per task."""
-    if env not in _FEET_INDICES:
-        _FEET_INDICES[env] = body_indices(env, env.robot_config.foot_body_name)
-    return _FEET_INDICES[env]
-
-
-_FEET_INDEX_LISTS: weakref.WeakKeyDictionary[PolicyTask, list[int]] = weakref.WeakKeyDictionary()
-
-
-def _feet_index_list(env: PolicyTask) -> list[int]:
-    """``_feet_indices`` as Python ints; indexing with a 0-dim device tensor reads it back to the host."""
-    if env not in _FEET_INDEX_LISTS:
-        _FEET_INDEX_LISTS[env] = _feet_indices(env).tolist()
-    return _FEET_INDEX_LISTS[env]
 
 
 @functools.cache
@@ -106,25 +86,36 @@ def penalty_orientation(env: PolicyTask) -> torch.Tensor:
     return torch.sum(torch.square(projected[:, :2]), dim=1)
 
 
-def penalty_feet_ori(env: PolicyTask) -> torch.Tensor:
+def _is_axis_index(value: object) -> bool:
+    return isinstance(value, numbers.Integral) and not isinstance(value, bool)
+
+
+def penalty_feet_ori(
+    env: PolicyTask, feet: Sequence[str] = ("#feet",), sole_axes: Sequence[int] = (0, 1)
+) -> torch.Tensor:
     """Penalize feet orientation deviation from flat.
 
     Args:
         env: The environment instance
+        feet: Foot bodies (exact names or ``#tag`` references); the per-foot penalty is summed over them
+        sole_axes: The two foot-frame axes spanning the sole plane; gravity projected onto them is the tilt.
+            ``(0, 1)`` for a z-up foot frame, ``(0, 2)`` for a foot link whose x-z plane is the sole.
 
     Returns:
         Reward tensor [num_envs]
     """
-    feet = _feet_index_list(env)
-    left_quat = env.simulator._rigid_body_rot[:, feet[0]]
-    gravity = gravity_vector(env)
-    left_gravity = quat_rotate_inverse(left_quat, gravity, w_last=True)
-    right_quat = env.simulator._rigid_body_rot[:, feet[1]]
-    right_gravity = quat_rotate_inverse(right_quat, gravity, w_last=True)
-    return (
-        torch.sum(torch.square(left_gravity[:, :2]), dim=1) ** 0.5
-        + torch.sum(torch.square(right_gravity[:, :2]), dim=1) ** 0.5
-    )
+    axes = [int(a) for a in sole_axes] if all(_is_axis_index(a) for a in sole_axes) else []
+    if len(axes) != 2 or len(set(axes)) != 2 or not all(0 <= a <= 2 for a in axes):
+        raise ValueError(
+            f"penalty_feet_ori: sole_axes must be two distinct integer axes in 0..2, got {list(sole_axes)}"
+        )
+    idx = env.robot_names.resolve_body_indices(feet)
+    quats = env.simulator._rigid_body_rot[:, idx]  # [N, F, 4]
+    num_envs, num_feet = quats.shape[:2]
+    gravity = gravity_vector(env).unsqueeze(1).expand(-1, num_feet, -1).reshape(-1, 3)
+    foot_gravity = quat_rotate_inverse(quats.reshape(-1, 4), gravity, w_last=True).reshape(num_envs, num_feet, 3)
+    tilt = foot_gravity[..., axes]
+    return torch.sum(torch.sum(torch.square(tilt), dim=-1) ** 0.5, dim=1)
 
 
 # ================================================================================================
@@ -180,19 +171,27 @@ def penalty_ang_vel_xy(env: PolicyTask) -> torch.Tensor:
     return torch.sum(torch.square(ang_vel[:, :2]), dim=1)
 
 
-def penalty_close_feet_xy(env: PolicyTask, close_feet_threshold: float = 0.05) -> torch.Tensor:
+def penalty_close_feet_xy(
+    env: PolicyTask, close_feet_threshold: float = 0.05, feet: Sequence[str] = ("#feet",)
+) -> torch.Tensor:
     """Penalize when feet are too close together in xy plane.
 
     Args:
         env: The environment instance
         close_feet_threshold: Minimum distance threshold between feet
+        feet: The left/right foot pair (exact names or ``#tag`` references); must resolve to exactly 2 bodies
 
     Returns:
         Reward tensor [num_envs]
     """
-    feet = _feet_index_list(env)
-    left_foot_xy = env.simulator._rigid_body_pos[:, feet[0], :2]
-    right_foot_xy = env.simulator._rigid_body_pos[:, feet[1], :2]
+    idx = env.robot_names.resolve_body_indices(feet)
+    if idx.numel() != 2:
+        raise ValueError(
+            f"penalty_close_feet_xy is a lateral left/right pair term: feet={list(feet)!r} resolved to "
+            f"{idx.numel()} bodies ({env.robot_names.resolve_body_names(feet)}), expected exactly 2."
+        )
+    feet_xy = env.simulator._rigid_body_pos[:, idx, :2]  # [N, 2, 2]
+    left_foot_xy, right_foot_xy = feet_xy[:, 0], feet_xy[:, 1]
 
     # Get base orientation
     base_forward = quat_apply(env.simulator.base_quat, base_forward_vector(env), w_last=True)
@@ -259,22 +258,20 @@ def feet_phase(env: PolicyTask, swing_height: float = 0.08, tracking_sigma: floa
     Returns:
         Reward tensor [num_envs]
     """
-    # Get foot heights (relative to terrain)
-    foot_z_left = env.terrain_manager.get_state("locomotion_terrain").feet_heights[:, 0]
-    foot_z_right = env.terrain_manager.get_state("locomotion_terrain").feet_heights[:, 1]
-
-    # Calculate expected foot heights based on phase
+    # Foot heights relative to the terrain, one column per foot: [N, F]
+    feet_heights = env.terrain_manager.get_state("locomotion_terrain").feet_heights
     gait_state = cast("LocomotionGait", env.command_manager.get_state("locomotion_gait"))
-    phase = cast("torch.Tensor", gait_state.phase)
-    rz_left = _expected_foot_height(phase[:, 0], swing_height)
-    rz_right = _expected_foot_height(phase[:, 1], swing_height)
+    phase = cast("torch.Tensor", gait_state.phase)  # [N, F]
+    if feet_heights.ndim != 2 or feet_heights.shape[1] != phase.shape[1]:
+        raise ValueError(
+            f"feet_phase needs one terrain foot height per gait phase column: feet_heights has shape "
+            f"{tuple(feet_heights.shape)}, phase has {phase.shape[1]} columns. Declare the robot's 'feet_height' "
+            "body tag (or set TerrainTermCfg.feet_height_bodies) so the terrain term raycasts one height per foot."
+        )
 
-    # Calculate height tracking errors
-    error_left = torch.square(foot_z_left - rz_left)
-    error_right = torch.square(foot_z_right - rz_right)
-
-    # Combine errors and apply exponential reward
-    total_error = error_left + error_right
+    # Expected foot height from the phase, per foot; squared error summed over feet
+    expected_heights = _expected_foot_height(phase, swing_height)
+    total_error = torch.sum(torch.square(feet_heights - expected_heights), dim=1)
 
     return torch.exp(-total_error / tracking_sigma)
 
@@ -309,17 +306,22 @@ def pose(
     return torch.sum(weighted_error, dim=1)
 
 
-def penalty_stumble(env: PolicyTask) -> torch.Tensor:
+def penalty_stumble(env: PolicyTask, feet: Sequence[str] = ("#feet",)) -> torch.Tensor:
     """Penalize feet hitting vertical surfaces.
 
     Args:
         env: The environment instance
+        feet: Foot bodies (exact names or ``#tag`` references)
 
     Returns:
         Reward tensor [num_envs]
     """
-    feet_forces = env.simulator.contact_forces[:, _feet_indices(env)]
-    return torch.any(torch.norm(feet_forces[..., :2], dim=2) > 4 * torch.abs(feet_forces[..., 2]), dim=1)
+    idx = env.robot_names.resolve_body_indices(feet)
+    return torch.any(
+        torch.norm(env.simulator.contact_forces[:, idx, :2], dim=2)
+        > 4 * torch.abs(env.simulator.contact_forces[:, idx, 2]),
+        dim=1,
+    )
 
 
 def alive(env: PolicyTask) -> torch.Tensor:

@@ -48,6 +48,10 @@ class NoiseToInitialPoseConfig:
     dof_pos: float = 0.0
     """Noise scale for the initial dof position."""
 
+    soft_dof_pos_limit: float = 0.95
+    """Fraction of each DOF's hard position range (contracted toward its midpoint) the noisy initial
+    dof positions are clipped to."""
+
     root_pos: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     """noise scale for root position x, y, z."""
 
@@ -129,3 +133,12 @@ class MotionConfig:
 
     # noise related
     noise_to_initial_pose: NoiseToInitialPoseConfig = field(default_factory=NoiseToInitialPoseConfig)
+
+    root_body: str | None = None
+    """Physical articulation root. ``None`` discovers it from the loaded articulation; an explicit name/tag
+    must resolve to that same body.
+
+    Its recorded pose and body velocities drive resets; its x/y and yaw anchor default-pose transitions.
+    Independent of ``body_name_ref``. Missing or ambiguous selections fail during setup. The selected body
+    must be the articulation root: choosing another body does not convert that body's pose into a root pose.
+    """

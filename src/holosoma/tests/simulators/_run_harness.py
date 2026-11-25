@@ -136,9 +136,8 @@ def run_harness(
             [sys.executable, str(harness), *args],
             capture_output=True,
             text=True,
-            # Decode harness output as UTF-8 (it prints non-ASCII chars like ✓/—); otherwise text=True
-            # uses the locale codec, which is ASCII in the hsgym Py3.8 container and crashes on 0xe2.
-            # errors="replace" so stray bytes can never mask a real result.
+            # Decode Unicode harness output as UTF-8 regardless of the host locale.
+            # Replace invalid bytes so decoding cannot hide the test result.
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
