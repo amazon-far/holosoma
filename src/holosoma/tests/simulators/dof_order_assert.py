@@ -79,7 +79,6 @@ def _build(simulator: str, num_envs: int):
     base_init = torch.tensor(init.root_state_list(), device=device)
     s.create_envs(num_envs, origins, base_init)
     s.prepare_sim()
-    s.install_plugins()
     return s, config.robot
 
 

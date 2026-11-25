@@ -136,7 +136,6 @@ def main() -> int:
     base_init = torch.tensor(init.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
 
     # Pin the robot upright at the origin so the camera aligns with the panel ahead.
     robot_states = sim.get_actor_states(["robot"], torch.arange(n, device=device)).clone()

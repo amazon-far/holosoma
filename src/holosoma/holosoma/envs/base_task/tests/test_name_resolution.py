@@ -70,6 +70,9 @@ class _ConstructorSimulator(_Simulator):
     def prepare_sim(self) -> None:
         pass
 
+    def render_sensors(self, env_ids: object = None, num_renders: object = None) -> None:
+        pass
+
     def install_plugins(self) -> None:
         pass
 
@@ -84,7 +87,7 @@ def _constructor_config(robot_dof_names: list[str]) -> Any:
         simulator=SimpleNamespace(
             _target_="test.Simulator",
             config=SimpleNamespace(
-                name="mujoco", sim=SimpleNamespace(control_decimation_steps=4, max_episode_length_s=20.0)
+                name="mujoco", sim=SimpleNamespace(fps=200, control_decimation_steps=4, max_episode_length_s=20.0)
             ),
         ),
         terrain=object(),

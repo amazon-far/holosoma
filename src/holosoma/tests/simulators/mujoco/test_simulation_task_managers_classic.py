@@ -15,7 +15,7 @@ from holosoma.config_types.randomization import RandomizationManagerCfg, Randomi
 from holosoma.config_types.run_sim import RunSimConfig  # noqa: E402
 from holosoma.config_types.simulator import BridgeConfig  # noqa: E402
 from holosoma.config_values import termination  # noqa: E402
-from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
+from holosoma.hooks import Phase  # noqa: E402
 
 EPISODE_S = 0.1
 

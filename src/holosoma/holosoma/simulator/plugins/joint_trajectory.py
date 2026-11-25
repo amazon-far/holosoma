@@ -6,13 +6,13 @@ from bisect import bisect_right
 from typing import TYPE_CHECKING
 
 from holosoma.config_types.plugin import validate_waypoint_times
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from holosoma.utils.name_tags import expand_joint_value_map, expand_name_spec
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import JointTrajectoryPluginConfig
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.envs.base_task.base_task import BaseTask
 
 
 class JointTrajectoryPlugin:
@@ -22,10 +22,10 @@ class JointTrajectoryPlugin:
     execution buffers or hooks are installed, and each waypoint overrides the preceding pose.
     """
 
-    def __init__(self, cfg: JointTrajectoryPluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(self, cfg: JointTrajectoryPluginConfig, task: BaseTask) -> None:
         validate_waypoint_times(cfg.waypoints)
         self.cfg = cfg
-        self.simulator = simulator
+        self.simulator = simulator = task.simulator
         robot = simulator.robot_config
         names = expand_name_spec(cfg.joints, robot.joint_tags, robot.dof_names, kind="joint")
         self.dof_indices = [robot.dof_names.index(name) for name in names]
@@ -71,7 +71,7 @@ class JointTrajectoryPlugin:
         self.kd = torch.tensor([kd[i] for i in self.dof_indices], device=device)
         self.torque_limits = simulator.get_dof_limits_properties()[2][self.dof_indices]
         self._apply_indices = None if self.dof_indices == list(range(simulator.num_dof)) else self.dof_indices
-        simulator.hooks.add(Phase.PRE_STEP, self.apply, name="joint_trajectory.apply")
+        task.hooks.add(Phase.PRE_STEP, self.apply, name="joint_trajectory.apply")
 
     def target_at(self, elapsed: float) -> torch.Tensor:
         """Joint targets in the plugin's selected order, at seconds from installation."""

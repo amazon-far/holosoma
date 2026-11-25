@@ -91,7 +91,6 @@ def main() -> int:
     base_init = torch.tensor(init.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
     # Use the origins the simulator ACTUALLY placed the envs at: IsaacSim ignores the requested
     # env_origins and clones onto its own env_spacing grid, so pinning the robot relative to the
     # requested spread would land it away from its (grid-placed) panel. sim.env_origins is reconciled

@@ -14,12 +14,12 @@ import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.simulator import VirtualGantryCfg
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from holosoma.utils.name_tags import resolve_single_name_spec
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
-    from holosoma.simulator.base_simulator.hooks import HookRegistry
+    from holosoma.hooks import HookRegistry
 
 
 class GantryCommand(Enum):

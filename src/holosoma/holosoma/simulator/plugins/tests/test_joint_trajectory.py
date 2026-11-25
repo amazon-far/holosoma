@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, replace
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 import torch
@@ -13,8 +13,9 @@ from holosoma.config_types.action import JointControllerCfg
 from holosoma.config_types.plugin import JointTrajectoryPluginConfig, JointWaypoint
 from holosoma.config_types.robot import RobotBridgeConfig
 from holosoma.config_types.simulator import BridgeConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.joint_trajectory import JointTrajectoryPlugin
+from holosoma.simulator.plugins.tests._task import plugin_task
 from tests.simulators._robot_presets import test_arm_fixed
 
 pytestmark = pytest.mark.no_sim
@@ -63,7 +64,7 @@ def _plugin(
     cfg: JointTrajectoryPluginConfig = TRAJECTORY, sim: _Sim | None = None
 ) -> tuple[JointTrajectoryPlugin, _Sim]:
     sim = sim or _Sim()
-    return JointTrajectoryPlugin(cfg, cast("Any", sim)), sim
+    return JointTrajectoryPlugin(cfg, plugin_task(sim)), sim
 
 
 @pytest.mark.parametrize(

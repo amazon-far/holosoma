@@ -15,6 +15,7 @@ from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import LowCommand  # noqa:
 from holosoma.config_types.robot import RobotConfig  # noqa: E402
 from holosoma.config_types.simulator import BridgeConfig  # noqa: E402
 from holosoma.config_values.robot import g1_29dof  # noqa: E402
+from holosoma.hooks import Phase  # noqa: E402
 from tests.simulators.mujoco._build import build_classic_sim  # noqa: E402
 
 pytestmark = pytest.mark.mujoco_classic
@@ -138,4 +139,4 @@ def test_reordered_g1_keeps_sdk_state_and_physical_motor_order() -> None:
         expected_force[hip.dofadr[0]] = 1.0
         np.testing.assert_allclose(data.qfrc_actuator, expected_force, atol=1e-7)
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)

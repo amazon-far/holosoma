@@ -22,6 +22,7 @@ pytestmark = pytest.mark.mujoco_classic
 
 import holosoma.config_values.robot as robot_values  # noqa: E402
 from holosoma.config_types.robot import RobotConfig  # noqa: E402
+from holosoma.hooks import Phase  # noqa: E402
 from holosoma.utils.robot_properties import resolve_dof_properties  # noqa: E402
 from tests.simulators.mujoco._build import build_classic_sim  # noqa: E402
 
@@ -76,4 +77,4 @@ def test_limit_properties_are_cached_with_consistent_empty_shapes(zero_dof: bool
         assert first[1].shape == first[2].shape == (len(sim.dof_names),)
         sim.simulate_at_each_physics_step()
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)

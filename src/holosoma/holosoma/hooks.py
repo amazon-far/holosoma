@@ -15,6 +15,8 @@ from holosoma.config_types.frequency import DecimationLike, is_frequency_string,
 if TYPE_CHECKING:
     import torch
 
+    from holosoma.config_types.simulator import SimEngineConfig
+
 HookDependency = Union["HookHandle", "HookRef", "_OptionalTarget"]
 """What ``after``/``before`` accept: a :class:`HookHandle`, a :class:`HookRef`, or :func:`if_present`
 of either."""
@@ -52,7 +54,7 @@ class HookRef:
 
 
 class Phase(str, Enum):
-    """Lifecycle points emitted by the active simulator loop.
+    """Lifecycle points on the hook registry a task shares with its simulator.
 
     ``payload`` names the positional args ``emit`` forwards to callbacks. ``periodic`` marks phases
     that fire on a fixed clock (per-substep or per-frame ticks) — only these accept a frequency-string
@@ -61,9 +63,10 @@ class Phase(str, Enum):
     fires once and rejects any decimation.
 
     ``FRAME_*`` bracket the outer tick (once per frame); ``*_STEP`` bracket each physics substep. The
-    names are engine-agnostic — they don't assume what drives the outer tick (a policy, a bridge, ...).
-    Episode events fire once per batch of environments that end or start together, with their ids as
-    a long tensor.
+    simulator emits ``*_STEP`` around each physics step and the task emits the other phases; motion
+    playback also emits ``EPISODE_*`` at clip boundaries. The names are engine-agnostic — they don't
+    assume what drives the outer tick (a policy, a bridge, ...). Episode events fire once per batch of
+    environments that end or start together, with their ids as a long tensor.
     """
 
     payload: tuple[str, ...]
@@ -95,6 +98,22 @@ EpisodeCallback = Callable[["torch.Tensor"], Any]
 """Callback for an episode phase (``EPISODE_START``/``EPISODE_END``); receives the batch's ``env_ids``."""
 CloseCallback = Callable[[], Any]
 """Callback for ``CLOSE`` (zero payload, fires once at teardown)."""
+
+
+def frame_base_rates(sim_config: SimEngineConfig) -> dict[Phase, float]:
+    """Base tick rate (Hz) of each periodic phase, so hooks can request a rate via ``every="30Hz"``.
+
+    Per-substep phases tick at the physics rate ``sim_config.fps``; per-frame phases at the control
+    rate ``fps / control_decimation_steps``.
+    """
+    fps = float(sim_config.fps)
+    control_hz = fps / sim_config.control_decimation_steps
+    return {
+        Phase.PRE_STEP: fps,
+        Phase.POST_STEP: fps,
+        Phase.FRAME_BEGIN: control_hz,
+        Phase.FRAME_END: control_hz,
+    }
 
 
 class HookRegistryError(RuntimeError):
@@ -338,7 +357,7 @@ class HookRegistry:
     def installing(self, instance: str) -> Iterator[None]:
         """Scope registrations to the plugin slot being constructed, so its keys are published under it.
 
-        ``install_plugins`` wraps each plugin's construction in this. Publishing a key outside a scope
+        ``BaseTask`` wraps each plugin's construction in this. Publishing a key outside a scope
         has no instance to attach to and is rejected, so a plugin that wants to be referenced by
         :class:`HookRef` must register while it is being constructed.
         """

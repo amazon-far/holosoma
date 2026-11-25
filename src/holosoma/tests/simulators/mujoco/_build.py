@@ -47,7 +47,6 @@ def _finish_build(sim, num_envs, env_origins, base_init):
     sim.load_assets()
     sim.create_envs(num_envs, env_origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
     return sim
 
 
@@ -56,7 +55,7 @@ def _robot_base_init(robot: RobotConfig):
     return torch.tensor(robot.init_state.root_state_list())
 
 
-def build_classic_sim(
+def classic_run_sim_config(
     scene: SceneConfig | None = None,
     *,
     plugin=None,
@@ -64,16 +63,13 @@ def build_classic_sim(
     native=None,
     simulator=None,
     robot: RobotConfig | None = None,
-):
-    """Build a ClassicBackend MuJoCo sim (CPU, single env) for ``scene`` (default: empty).
+) -> RunSimConfig:
+    """Headless, unpaced ClassicBackend MuJoCo ``RunSimConfig`` (CPU, single env) for ``scene``.
 
-    ``plugin`` is an optional ``{key: PluginConfig}`` dict to install; ``kinematic_playback``
-    sets the corresponding ``sim`` flag. ``simulator`` can provide a saved preset with
-    its backend overridden to classic.
+    ``plugin`` is an optional ``{key: PluginConfig}`` dict, installed when a task is built from the
+    config; ``kinematic_playback`` sets the corresponding ``sim`` flag. ``simulator`` can provide a
+    saved preset with its backend overridden to classic. ``robot`` defaults to the 29-DoF G1.
     """
-    from tests.simulators._sim_harness import launch_simulator
-
-    robot = robot or robot_values.g1_29dof
     sim_cfg = _bridge_gantry_off(simulator or run_sim_values.mujoco)
     if native is not None:
         sim_cfg = dataclasses.replace(
@@ -87,12 +83,28 @@ def build_classic_sim(
                 sim_cfg.config, sim=dataclasses.replace(sim_cfg.config.sim, kinematic_playback=True)
             ),
         )
-    config = dataclasses.replace(
-        RunSimConfig(simulator=sim_cfg, robot=robot, scene=scene or SceneConfig(), plugin=plugin or {}),
+    return dataclasses.replace(
+        RunSimConfig(
+            simulator=sim_cfg, robot=robot or robot_values.g1_29dof, scene=scene or SceneConfig(), plugin=plugin or {}
+        ),
+        training=TrainingConfig(num_envs=1, headless=True),
         device="cpu",
+        time_scale=0.0,
     )
+
+
+def build_classic_sim(
+    scene: SceneConfig | None = None, *, native=None, simulator=None, robot: RobotConfig | None = None
+):
+    """Build a ClassicBackend MuJoCo sim (CPU, single env) for ``scene`` (default: empty).
+
+    ``native``, ``simulator`` and ``robot`` are as for :func:`classic_run_sim_config`.
+    """
+    from tests.simulators._sim_harness import launch_simulator
+
+    config = classic_run_sim_config(scene, native=native, simulator=simulator, robot=robot)
     sim, device, _ = launch_simulator(config, device="cpu")
-    return _finish_build(sim, 1, torch.zeros(1, 3, device=device), _robot_base_init(robot))
+    return _finish_build(sim, 1, torch.zeros(1, 3, device=device), _robot_base_init(config.robot))
 
 
 def build_warp_sim(

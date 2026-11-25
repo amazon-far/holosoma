@@ -31,6 +31,7 @@ import argparse
 import dataclasses
 import math
 import sys
+from types import SimpleNamespace
 from typing import Any
 
 if sys.path and sys.path[0].endswith("tests/simulators"):
@@ -39,7 +40,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 from holosoma.config_types.simulator import BridgeConfig
 from holosoma.config_types.video import FixedCameraConfig
 from holosoma.config_values.plugin import yam_trajectory
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from holosoma.utils.path import resolve_asset_path
 from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit
 
@@ -136,7 +137,8 @@ def _build(simulator: str, record_dir: str | None = None) -> tuple[Any, Any]:
     base_init = torch.tensor(config.robot.init_state.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(1, origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
+    motion = config.plugin["motion"]
+    motion.get_cls()(motion, SimpleNamespace(simulator=sim, hooks=sim.hooks, num_envs=1))
     return sim, config
 
 
@@ -152,9 +154,7 @@ def _run_until(sim: Any, t_end: float) -> None:
         sim.refresh_sim_tensors()
         if step % decimation == 0:
             sim.hooks.emit(Phase.FRAME_BEGIN)
-        sim.hooks.emit(Phase.PRE_STEP)
         sim.simulate_at_each_physics_step()
-        sim.hooks.emit(Phase.POST_STEP)
         if step % decimation == decimation - 1:
             sim.refresh_sim_tensors()
             sim.hooks.emit(Phase.FRAME_END)

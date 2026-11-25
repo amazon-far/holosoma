@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from tests.simulators.yam_trajectory_assert import _run_until
 
 pytestmark = pytest.mark.no_sim
@@ -37,8 +37,10 @@ class _Sim:
         self.events.append("refresh")
 
     def simulate_at_each_physics_step(self) -> None:
+        self.hooks.emit(Phase.PRE_STEP)
         self.events.append("simulate")
         self.now += self.sim_dt
+        self.hooks.emit(Phase.POST_STEP)
 
 
 def test_frame_end_follows_the_last_substep_and_a_refresh() -> None:

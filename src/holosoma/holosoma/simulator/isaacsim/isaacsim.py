@@ -35,7 +35,7 @@ from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.shared.root_states import robot_rows
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim import light_setup, sensor_setup
@@ -72,8 +72,8 @@ from holosoma.simulator.types import ActorNames, ActorIndices, EnvIds, ActorStat
 
 
 class IsaacSim(BaseSimulator):
-    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
-        super().__init__(tyro_config, terrain_manager, device)
+    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str, hooks: HookRegistry):
+        super().__init__(tyro_config, terrain_manager, device, hooks)
 
         # Public interface attribute read across backends (video_recorder, virtual_gantry,
         # simulator_bridge). For IsaacSim it always equals self.sim_device; internal tensor

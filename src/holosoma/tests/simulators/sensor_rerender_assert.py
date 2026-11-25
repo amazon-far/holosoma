@@ -26,7 +26,7 @@ from holosoma.config_types.sensor import (
     LidarSensorConfig,
     SensorMountConfig,
 )
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
 
 _RAISE = 0.3
@@ -81,12 +81,9 @@ def main() -> int:
     env_ids = torch.arange(n, device=device)
     env_origins = torch.zeros(n, 3, device=device)
     init = config.robot.init_state
-    base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
-    )
+    base_init = torch.tensor(init.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
     step(sim, 2)
     sim.render_sensors()
 

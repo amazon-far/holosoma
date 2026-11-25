@@ -12,6 +12,7 @@ torch = pytest.importorskip("torch")
 mujoco = pytest.importorskip("mujoco")
 
 from holosoma.config_types.robot import RobotConfig, RobotInitState  # noqa: E402
+from holosoma.hooks import Phase  # noqa: E402
 from tests.simulators._robot_presets import test_arm_fixed as arm_preset  # noqa: E402
 from tests.simulators.mujoco._build import build_classic_sim  # noqa: E402
 
@@ -86,4 +87,4 @@ def test_classic_feedback_and_limits_distinguish_selected_motor_from_combined_ef
             assert data.qvel[qvel_id] < 0.0
             assert data.qpos[qpos_id] < 0.5
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
