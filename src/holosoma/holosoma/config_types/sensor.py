@@ -1,11 +1,10 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-"""Mounted camera and LiDAR configuration types.
+"""Camera, LiDAR, and contact sensor configuration types.
 
-A sensor is a read-only producer mounted onto an existing body (a robot link or a
-spawned scene actor) that it follows.
-
-Every mounted sensor uses the OpenGL/USD/MuJoCo optical frame: ``-Z`` forward and ``+Y`` up.
+Cameras and LiDARs follow their configured body or world mount.
+Their optical frame uses ``-Z`` forward and ``+Y`` up.
+Contact sensors select collision bodies and report forces in world coordinates.
 """
 
 from __future__ import annotations
@@ -701,7 +700,104 @@ class LidarSensorConfig:
         return self
 
 
-SensorConfig = CameraSensorConfig | LidarSensorConfig
+@dataclass(frozen=True, config=_FORBID_EXTRA)
+class ContactTargetConfig:
+    """Select a group of collision bodies through the Holosoma namespace.
+
+    ``robot`` selects the whole robot. ``robot_link`` selects one link's native rigid body.
+    Fixed links follow their owning rigid body after import or compilation.
+    ``actor`` selects a registered scene actor and its descendants.
+    ``terrain`` selects the terrain collider and is valid only as a counterpart.
+    """
+
+    target_kind: Literal["robot", "robot_link", "actor", "terrain"] = "robot"
+    target: str = ""
+    """Unprefixed link name or registered actor name. Empty for ``robot`` and ``terrain``."""
+
+    @property
+    def label(self) -> str:
+        return f"{self.target_kind}:{self.target}" if self.target else self.target_kind
+
+    @model_validator(mode="after")
+    def validate_target(self) -> ContactTargetConfig:
+        if self.target_kind in ("robot", "terrain"):
+            if self.target:
+                raise ValueError(f"ContactTargetConfig.target must be empty for target_kind='{self.target_kind}'.")
+        elif not self.target or self.target != self.target.strip():
+            raise ValueError("Contact targets need a non-empty name without surrounding whitespace.")
+        if self.target_kind == "actor" and self.target == "robot":
+            raise ValueError("Select the robot with target_kind='robot' or 'robot_link'.")
+        return self
+
+
+@dataclass(frozen=True, config=_FORBID_EXTRA)
+class IsaacSimContactConfig:
+    """Native Isaac Sim contact storage and visualization controls."""
+
+    max_contact_data_count_per_prim: int = 64
+    """Capacity per source body and environment for native contact data."""
+
+    debug_vis: bool = False
+
+    @model_validator(mode="after")
+    def validate_capacity(self) -> IsaacSimContactConfig:
+        if self.max_contact_data_count_per_prim < 1:
+            raise ValueError("IsaacSimContactConfig.max_contact_data_count_per_prim must be positive.")
+        return self
+
+
+@dataclass(frozen=True, config=_FORBID_EXTRA)
+class ContactSensorConfig:
+    """One named contact sensor with backend-independent body selection.
+
+    Each source selector produces one output row. Forces on all bodies in that selector are summed.
+    Each explicit counterpart selector produces one force column. Counterpart groups must be disjoint.
+    An empty counterpart list selects all contacts, including robot self-contact.
+    Forces act ON the sources and use world coordinates, Newtons, and float32.
+    """
+
+    sources: list[ContactTargetConfig] = field(default_factory=lambda: [ContactTargetConfig()])
+    """Ordered source groups. Use individual ``robot_link`` entries for per-link measurements."""
+
+    counterparts: list[ContactTargetConfig] = field(default_factory=list)
+    """Ordered groups of other bodies. Empty selects all contacts in one column."""
+
+    force_mode: Literal["normal", "total"] = "normal"
+    """``normal`` excludes friction. ``total`` adds tangential friction and requires explicit counterparts.
+    Neither mode includes contact torque, joint forces, or externally applied forces."""
+
+    force_threshold: float = 1.0
+    """``in_contact`` is true when any counterpart column's resultant force norm exceeds this value."""
+
+    update_decimation: DecimationLike = 1
+    """Update after every N completed physics steps, or at a frequency such as ``"100Hz"``.
+    The first update occurs after one full interval. Frequency strings use the physics rate."""
+
+    record_substeps: bool = False
+    """Retain every physics sample of the current control frame as ``substep_forces``.
+    Recording runs at the physics rate, independently of the output update cadence."""
+
+    isaacsim: IsaacSimContactConfig = field(default_factory=IsaacSimContactConfig)
+
+    @model_validator(mode="after")
+    def validate_contact(self) -> ContactSensorConfig:
+        if not self.sources:
+            raise ValueError("ContactSensorConfig.sources must not be empty.")
+        if any(source.target_kind == "terrain" for source in self.sources):
+            raise ValueError("Terrain is a contact counterpart. Select the body receiving its force as the source.")
+        for name, groups in (("sources", self.sources), ("counterparts", self.counterparts)):
+            labels = [group.label for group in groups]
+            if len(set(labels)) != len(labels):
+                raise ValueError(f"ContactSensorConfig.{name} must not contain duplicate selectors.")
+        if self.force_mode == "total" and not self.counterparts:
+            raise ValueError("ContactSensorConfig.force_mode='total' requires explicit counterparts on every backend.")
+        if not math.isfinite(self.force_threshold) or self.force_threshold < 0:
+            raise ValueError("ContactSensorConfig.force_threshold must be finite and non-negative.")
+        validate_decimation_like(self.update_decimation, field="ContactSensorConfig update_decimation")
+        return self
+
+
+SensorConfig = CameraSensorConfig | LidarSensorConfig | ContactSensorConfig
 
 
 def is_isaacsim_raycast_camera(config: object) -> TypeGuard[CameraSensorConfig]:

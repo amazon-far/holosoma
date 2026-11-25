@@ -195,7 +195,7 @@ def main() -> int:
     _pin_robot()
     step(sim, 2)
 
-    names = sim.get_sensor_names()
+    names = sim.sensor_manager.camera_names
     if not names:
         print(f"[{args.simulator}] FAIL: no sensors created")
         return 1

@@ -172,7 +172,7 @@ def main() -> int:
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
 
-    names = set(sim.get_sensor_names())
+    names = set(sim.sensor_manager.camera_names)
     fails: list[str] = []
     if names != {_PINHOLE, _FISHEYE}:
         fails.append(f"{args.simulator}: expected pinhole+fisheye cameras, got {sorted(names)}")

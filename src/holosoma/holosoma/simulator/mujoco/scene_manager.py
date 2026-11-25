@@ -69,7 +69,7 @@ class MujocoSceneManager:
 
         Parameters
         ----------
-        simulator_config : SimulatorConfig
+        simulator_config : SimulatorInitConfig
             Simulator configuration containing physics and rendering parameters.
         """
         self.world_spec = mujoco.MjSpec()
@@ -87,13 +87,14 @@ class MujocoSceneManager:
         # Robot element inventory captured from its isolated spec pre-attach.
         # Single source of truth for robot element membership; see ActorSpecMeta.
         self.robot_spec_meta: ActorSpecMeta | None = None  # Set when adding robot
+        self.terrain_geom_name: str | None = None
 
     def _setup_world_options(self, simulator_config: SimulatorInitConfig) -> None:
         """Configure world specification options from simulator config.
 
         Parameters
         ----------
-        simulator_config : SimulatorConfig
+        simulator_config : SimulatorInitConfig
             Simulator configuration containing physics parameters.
         """
         # TODO: expose to Mujoco-specific config
@@ -184,6 +185,7 @@ class MujocoSceneManager:
             raise ValueError("Terrain mesh type not recognised. Allowed types are [None, plane, heightfield, trimesh]")
 
         if geom is not None:
+            self.terrain_geom_name = geom.name
             # Monkey-patch Mujoco geom into our terrain manager for convenience
             terrain_state.geom = geom  # type: ignore[attr-defined]
 

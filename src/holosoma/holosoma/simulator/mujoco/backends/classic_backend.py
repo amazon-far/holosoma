@@ -15,6 +15,7 @@ import numpy.typing as npt
 import torch
 from loguru import logger
 
+from holosoma.simulator.mujoco.contact_forces import ContactPairForces
 from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 from .base import IMujocoBackend, apply_sensor_scene_flags, holosoma_to_mj_quat, mj_to_holosoma_quat
@@ -316,6 +317,21 @@ class ClassicBackend(IMujocoBackend):
         self._force_tensor[0].copy_(self._body_contact_forces_t)
 
         return self._force_tensor
+
+    def contact_pairs(self) -> ContactPairForces:
+        """Snapshot the optimized native extraction for every managed contact reader."""
+        body_forces = self.compute_contact_forces().clone()
+        count = self.data.ncon
+        geoms = np.asarray(self.data.contact.geom)[:count]
+        rigid = (geoms >= 0).all(axis=1)
+        frames = np.asarray(self.data.contact.frame)[:count].reshape(-1, 3, 3)
+        normal = frames[rigid, 0] * self._contact_frame_forces_64[:count][rigid, :1]
+        return ContactPairForces(
+            geoms=geoms[rigid].astype(np.int32),
+            normal=normal.astype(np.float32),
+            total=self._contact_world_forces_32[:count][rigid].copy(),
+            body_forces=body_forces,
+        )
 
     def get_applied_forces_view(self) -> npt.NDArray[Any]:
         """Get writable view for external applied forces.

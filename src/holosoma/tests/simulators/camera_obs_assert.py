@@ -95,8 +95,8 @@ def main() -> int:
     sim.set_actor_states(["robot"], torch.arange(n, device=device), robot_states)
     step(sim, max(2, steps_for_seconds(sim, 0.05)))
 
-    if set(sim.get_sensor_names()) != {"fast_cam", "slow_cam"}:
-        print(f"[{args.simulator}] FAIL: expected fast_cam+slow_cam, got {sim.get_sensor_names()}")
+    if set(sim.sensor_manager.camera_names) != {"fast_cam", "slow_cam"}:
+        print(f"[{args.simulator}] FAIL: expected fast_cam+slow_cam, got {sim.sensor_manager.camera_names}")
         return 1
 
     _first_cam = cast("CameraSensorConfig", next(iter(config.sensor.values())))

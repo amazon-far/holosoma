@@ -311,7 +311,7 @@ def _check_contact_sensor_config() -> None:
     assert cfg.debug_vis is False
     assert build_contact_sensor_cfg(debug_vis=True).debug_vis is True
 
-    # net_forces_w is the only ContactSensorData field Holosoma reads. It remains available when
+    # The default robot sensor needs net_forces_w. It remains available when
     # duration tracking is disabled; only the unused air/contact-time values stay unallocated.
     data = ContactSensorData()
     assert hasattr(data, "net_forces_w")

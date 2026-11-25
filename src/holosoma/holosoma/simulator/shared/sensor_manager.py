@@ -1,4 +1,4 @@
-"""Backend-neutral mounted-sensor registry, cadence, and output buffering."""
+"""Backend-neutral sensor registry, cadence, and output buffering."""
 
 from __future__ import annotations
 
@@ -7,8 +7,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from holosoma.config_types.frequency import resolve_decimation
-from holosoma.config_types.sensor import CameraSensorConfig
+from holosoma.config_types.sensor import CameraSensorConfig, ContactSensorConfig
 from holosoma.config_types.value_types import UNIT_QUATERNION_NORM_TOLERANCE
+from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.lidar_sensor import (
     LidarPatternProvider,
     ResolvedRayPattern,
@@ -18,13 +19,14 @@ from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarSensorConfig, SensorConfig
+    from holosoma.simulator.base_simulator.hooks import HookRegistry
 
 SensorRecordT = TypeVar("SensorRecordT", bound="SensorRecord")
 
 
 @dataclass
 class SensorRecord:
-    """Bookkeeping shared by every mounted sensor type."""
+    """Bookkeeping shared by every sensor type."""
 
     name: str
     config: SensorConfig
@@ -113,27 +115,91 @@ class LidarRecord(SensorRecord):
         return self.pattern_provider.pattern_at(sim_time)
 
 
+@dataclass
+class ContactRecord(SensorRecord):
+    """A contact measurement with stable source and counterpart axes."""
+
+    config: ContactSensorConfig
+    step_counter: int = 0
+    """Completed physics steps. Decimated contacts first update after a full interval."""
+    capture: Callable[[], torch.Tensor] | None = None
+    """Return world-frame forces ``[N, sources, counterparts or 1, 3]``."""
+    recorder: ContactSubstepRecorder | None = None
+    legacy_capture: Callable[[], torch.Tensor] | None = None
+    legacy_recorder: ContactSubstepRecorder | None = None
+    _current_matrix: torch.Tensor | None = None
+
+    @property
+    def source_names(self) -> list[str]:
+        return [source.label for source in self.config.sources]
+
+    @property
+    def counterpart_names(self) -> list[str]:
+        return [target.label for target in self.config.counterparts] or ["all"]
+
+    def read_matrix(self) -> torch.Tensor:
+        """Read once per physics step, sharing the sample with publication and history."""
+        if self._current_matrix is None:
+            if self.capture is None:
+                raise RuntimeError(f"Contact sensor '{self.name}' has no backend reader.")
+            matrix = self.capture()
+            buffer = self.buffers["force_matrix"]
+            expected = tuple(buffer.shape)
+            if matrix.shape != expected:
+                raise RuntimeError(
+                    f"Contact sensor '{self.name}' expected forces {expected}, got {tuple(matrix.shape)}."
+                )
+            self._current_matrix = matrix.to(device=buffer.device, dtype=torch.float32).clone()
+        return self._current_matrix
+
+    def read_legacy_forces(self) -> torch.Tensor:
+        """Preserve the default robot API's native force convention."""
+        if self.legacy_capture is None:
+            raise RuntimeError(f"Contact sensor '{self.name}' has no legacy robot force reader.")
+        return self.legacy_capture()
+
+    def publish(self, matrix: torch.Tensor) -> None:
+        """Expose an owned sample without changing the sampling or history clocks."""
+        self.set_buffer("force_matrix", matrix)
+        self.set_buffer("forces", matrix.sum(dim=2))
+        self.set_buffer(
+            "in_contact", (torch.linalg.vector_norm(matrix, dim=-1) > self.config.force_threshold).any(dim=2)
+        )
+
+
 class SensorManager:
     """Cross-backend sensor registry and runtime mounts, available even without configured sensors."""
 
-    def __init__(self, device: str, control_hz: float, *, num_envs: int = 1) -> None:
+    def __init__(
+        self,
+        device: str,
+        control_hz: float,
+        *,
+        num_envs: int = 1,
+        physics_hz: float | None = None,
+        hooks: HookRegistry | None = None,
+    ) -> None:
         self.device = device
         self.control_hz = control_hz
+        self.physics_hz = physics_hz if physics_hz is not None else control_hz
+        self.hooks = hooks
         self.num_envs = num_envs
         self._cameras: dict[str, CameraRecord] = {}
         self._lidars: dict[str, LidarRecord] = {}
+        self._contacts: dict[str, ContactRecord] = {}
         self._order: list[str] = []
         self._last_camera_due: set[str] = set()
         self._last_lidar_due: set[str] = set()
+        self._last_contact_due: set[str] = set()
 
-    def _initial_mount_poses(self, config: SensorConfig) -> torch.Tensor:
+    def _initial_mount_poses(self, config: CameraSensorConfig | LidarSensorConfig) -> torch.Tensor:
         mount = config.mount
         w, x, y, z = mount.orientation
         pose = torch.tensor([*mount.position, x, y, z, w], dtype=torch.float32, device=self.device)
         return pose.repeat(self.num_envs, 1)
 
     def _assert_name_available(self, name: str) -> None:
-        if name in self._cameras or name in self._lidars:
+        if name in self._order:
             raise ValueError(f"Sensor '{name}' already registered.")
 
     def register_camera(self, name: str, config: CameraSensorConfig) -> CameraRecord:
@@ -149,6 +215,59 @@ class SensorManager:
         )
         self._cameras[name] = record
         self._order.append(name)
+        return record
+
+    def register_contact(
+        self,
+        name: str,
+        config: ContactSensorConfig,
+        capture: Callable[[], torch.Tensor],
+        *,
+        legacy_capture: Callable[[], torch.Tensor] | None = None,
+    ) -> ContactRecord:
+        self._assert_name_available(name)
+        effective = resolve_decimation(
+            config.update_decimation,
+            self.physics_hz,
+            field=f"contact '{name}' update_decimation",
+        )
+        if (config.record_substeps or legacy_capture is not None) and self.hooks is None:
+            raise ValueError("Contact substep recording requires the simulator's hook registry.")
+        if legacy_capture is not None and name != "contact_sensor":
+            raise ValueError("The legacy robot contact reader belongs to 'contact_sensor'.")
+        record = ContactRecord(
+            name=name, config=config, effective_decimation=effective, capture=capture, legacy_capture=legacy_capture
+        )
+        record.publish(
+            torch.zeros(
+                self.num_envs,
+                len(config.sources),
+                len(config.counterparts) or 1,
+                3,
+                device=self.device,
+                dtype=torch.float32,
+            ),
+        )
+        self._contacts[name] = record
+        self._order.append(name)
+        substeps = max(1, round(self.physics_hz / self.control_hz))
+        if config.record_substeps:
+            assert self.hooks is not None
+            record.recorder = ContactSubstepRecorder(
+                self.hooks,
+                lambda: record.read_matrix().sum(dim=2),
+                self.num_envs,
+                substeps,
+                len(config.sources),
+                self.device,
+                hook_prefix=f"sensors.contact.{name}",
+                record_on_post_step=False,
+            )
+        if legacy_capture is not None:
+            assert self.hooks is not None
+            record.legacy_recorder = ContactSubstepRecorder(
+                self.hooks, record.read_legacy_forces, self.num_envs, substeps, len(config.sources), self.device
+            )
         return record
 
     def register_lidar(self, name: str, config: LidarSensorConfig) -> LidarRecord:
@@ -179,6 +298,14 @@ class SensorManager:
     def has_lidar(self, name: str) -> bool:
         return name in self._lidars
 
+    def has_contact(self, name: str) -> bool:
+        return name in self._contacts
+
+    def get_contact(self, name: str) -> ContactRecord:
+        if name not in self._contacts:
+            raise KeyError(f"No contact sensor named '{name}'. Registered contact sensors: {sorted(self._contacts)}.")
+        return self._contacts[name]
+
     def get(self, name: str) -> CameraRecord:
         if name not in self._cameras:
             raise KeyError(f"No camera named '{name}'. Registered cameras: {sorted(self._cameras)}.")
@@ -194,6 +321,8 @@ class SensorManager:
             return self._cameras[name]
         if name in self._lidars:
             return self._lidars[name]
+        if name in self._contacts:
+            return self._contacts[name]
         raise KeyError(f"No sensor named '{name}'. Registered sensors: {self._order}.")
 
     def _mount_env_ids(self, env_ids: torch.Tensor | None) -> torch.Tensor:
@@ -261,12 +390,20 @@ class SensorManager:
         return list(self._lidars)
 
     @property
+    def contact_names(self) -> list[str]:
+        return list(self._contacts)
+
+    @property
     def cameras(self) -> list[CameraRecord]:
         return list(self._cameras.values())
 
     @property
     def lidars(self) -> list[LidarRecord]:
         return list(self._lidars.values())
+
+    @property
+    def contacts(self) -> list[ContactRecord]:
+        return list(self._contacts.values())
 
     @staticmethod
     def _collect_due(records: Sequence[SensorRecordT]) -> list[SensorRecordT]:
@@ -288,6 +425,35 @@ class SensorManager:
         self._last_lidar_due = {record.name for record in due}
         return due
 
+    def reset_contacts(self, env_ids: torch.Tensor) -> None:
+        """Clear selected environments until a scheduled publication after a physics step."""
+        if not self._contacts:
+            return
+        ids = self._mount_env_ids(env_ids)
+        if ids.numel() == 0:
+            return
+        for record in self.contacts:
+            record._current_matrix = None
+            for output, buffer in list(record.buffers.items()):
+                record.set_buffer_rows(output, ids, torch.zeros_like(buffer[ids]))
+            if record.recorder is not None:
+                record.recorder.buffer[ids] = 0
+
+    def contact_step_completed(self) -> None:
+        """Update contacts after completed physics intervals and retain optional full-rate history."""
+        records = self.contacts
+        if not records:
+            return
+        for record in records:
+            record._current_matrix = None
+        due = self._collect_due(records)
+        self._last_contact_due = {record.name for record in due}
+        for record in due:
+            record.publish(record.read_matrix())
+        for record in records:
+            if record.recorder is not None:
+                record.recorder.record(record.read_matrix().sum(dim=2))
+
     @property
     def last_due(self) -> set[str]:
         """Camera names rendered by the latest camera collection."""
@@ -297,12 +463,12 @@ class SensorManager:
     def last_lidar_due(self) -> set[str]:
         return self._last_lidar_due
 
+    @property
+    def last_contact_due(self) -> set[str]:
+        return self._last_contact_due
+
     def frames_produced(self, name: str) -> int:
-        record: SensorRecord
-        if name in self._cameras:
-            record = self._cameras[name]
-        elif name in self._lidars:
-            record = self._lidars[name]
-        else:
-            raise KeyError(f"No sensor named '{name}'. Registered sensors: {self._order}.")
+        record = self.get_sensor(name)
+        if isinstance(record, ContactRecord):
+            return record.step_counter // record.effective_decimation
         return record.step_counter // record.effective_decimation + 1

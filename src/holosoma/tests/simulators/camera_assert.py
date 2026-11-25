@@ -137,7 +137,7 @@ def main() -> int:
 
     from holosoma.hooks import Phase
 
-    names = sim.get_sensor_names()
+    names = sim.sensor_manager.camera_names
     print(f"[{args.simulator}] sensors created: {names}")
     if not names:
         print(f"[{args.simulator}] FAIL: no sensors created from preset '{args.sensors}'")

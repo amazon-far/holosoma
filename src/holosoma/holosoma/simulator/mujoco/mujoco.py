@@ -25,6 +25,7 @@ from holosoma.simulator.base_simulator.state import Columns
 from holosoma.simulator.mujoco import light_setup
 from holosoma.simulator.mujoco.backends import WARP_AVAILABLE, ClassicBackend, IMujocoBackend, WarpBackend
 from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags, mj_to_holosoma_quat
+from holosoma.simulator.mujoco.contact_setup import ContactPairForces, prepare_contact_targets
 from holosoma.simulator.mujoco.fields import prepare_fields, prepare_manager_fields
 from holosoma.simulator.mujoco.model_debug import print_mujoco_model_tree
 from holosoma.simulator.mujoco.robot_addressing import (
@@ -118,6 +119,7 @@ class MuJoCo(BaseSimulator):
         self.dof_pos = torch.zeros(0, device=device)
         self.dof_vel = torch.zeros(0, device=device)
         self.contact_forces = torch.zeros(0, device=device)
+        self.contact_pairs: ContactPairForces | None = None
 
         # Viewer
         self.viewer: mujoco.viewer.Handle | None = None
@@ -324,8 +326,7 @@ class MuJoCo(BaseSimulator):
         # Initialize bridge system using base class helper
         self._init_bridge()
 
-        # Create mounted camera sensors (cameras were added to the spec pre-compile in
-        # _setup_scene; this resolves their compiled ids and renderers). No-op if none.
+        # Register sensors after native body and geometry indices are available.
         self._create_sensors()
 
         if self.video_config.enabled:
@@ -393,6 +394,7 @@ class MuJoCo(BaseSimulator):
         lidars = {name: config for name, config in self.sensor_config.items() if isinstance(config, LidarSensorConfig)}
         self.scene_manager.add_cameras(cameras)
         self.scene_manager.add_lidar_sites(lidars)
+        self.contact_target_map = prepare_contact_targets(self.scene_manager, self.sensor_config)
 
     def _set_robot_properties(self) -> None:
         """Set robot properties including DOF names, body names, and index mappings.
@@ -648,15 +650,6 @@ class MuJoCo(BaseSimulator):
         # This matches the interface expected by holosoma (IsaacSim pattern)
         self.contact_forces = torch.zeros(self.num_envs, self.num_bodies, 3, device=self.sim_device)
 
-        self.contact_recorder = ContactSubstepRecorder(
-            self.hooks,
-            lambda: self.contact_forces,
-            self.num_envs,
-            self.simulator_config.sim.control_decimation_steps,
-            self.num_bodies,
-            self.sim_device,
-        )
-
         # Initialize command system (Phase 1)
         # Command tensor format: [vx, vy, vz, yaw_rate, walk_stand, waist_yaw, ..., height, ...]
         self.commands = torch.zeros(self.num_envs, 9, device=self.sim_device, dtype=torch.float32)
@@ -702,6 +695,7 @@ class MuJoCo(BaseSimulator):
         Resets simulation data, sets initial robot state, configures the object registry,
         and creates tensor views for efficient state access during simulation.
         """
+        self.contact_pairs = None
         # Reset simulation data
         assert self.root_data
         mujoco.mj_resetData(self.root_model, self.root_data)
@@ -833,7 +827,7 @@ class MuJoCo(BaseSimulator):
             qvel_addr = self.object_addrs["robot"]["qvel_addr"]
             state.register("base_linear_acc", Columns(qacc, range(qvel_addr, qvel_addr + 3)))
         if b > 0:
-            state.register("contact_forces", lambda: self.backend.compute_contact_forces()[:, self._body_ids_t])
+            state.register("contact_forces", self.sensor_manager.get_contact("contact_sensor").read_legacy_forces)
 
         env_ids = torch.arange(n, device=device)
         if self.robot_config.asset.fix_base_link:
@@ -902,6 +896,7 @@ class MuJoCo(BaseSimulator):
 
     def _advance_substep(self) -> None:
         """Advance simulation by one physics step."""
+        self.contact_pairs = None
         with self.state.mutation():
             if self.kinematic_playback:
                 self._forward_kinematics()

@@ -24,6 +24,7 @@ from holosoma.config_types.sensor import (  # noqa: E402
     SensorMountConfig,
 )
 from holosoma.config_values.simulator import mujoco as mujoco_config  # noqa: E402
+from holosoma.simulator.base_simulator.hooks import HookRegistry  # noqa: E402
 from holosoma.simulator.mujoco.backends.classic_backend import ClassicBackend  # noqa: E402
 from holosoma.simulator.mujoco.mujoco import MuJoCo  # noqa: E402
 from holosoma.simulator.mujoco.scene_manager import ActorSpecMeta, MujocoSceneManager  # noqa: E402
@@ -50,8 +51,14 @@ def _make_sim(model: Any, sensors: dict[str, SensorConfig], origins: torch.Tenso
     instance.simulator_config = mujoco_config.config
     instance.sensor_config = sensors
     instance.kinematic_playback = False
+    root_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "unit_root")
+    # Camera-only scenes use the world row for default contact bookkeeping.
+    instance.body_names = ["root" if root_id >= 0 else "world"]
+    instance.body_ids = [max(root_id, 0)]
     cfg = instance.simulator_config.sim
-    instance.sensor_manager = SensorManager("cpu", cfg.fps / cfg.control_decimation_steps)
+    instance.sensor_manager = SensorManager(
+        "cpu", cfg.fps / cfg.control_decimation_steps, physics_hz=cfg.fps, hooks=HookRegistry()
+    )
     create_sensors(instance)
     initialize_camera_mounts(instance)
     return instance
@@ -114,7 +121,7 @@ def _check_plane_returns(sim: MuJoCo, expected: float) -> None:
 def _check_native_mount_frame(sim: MuJoCo, pose: torch.Tensor, angle: float) -> None:
     """Check all position axes and optical axes against the independently authored mount frame."""
     assert sim.root_model is not None and sim.root_data is not None
-    world = sim.sensor_config["camera"].mount.target_kind == "world"
+    world = sim.sensor_manager.get("camera").config.mount.target_kind == "world"
     expected_position = (
         pose[:3].numpy() + np.array([5.0, 0.0, 0.25])
         if world
@@ -135,7 +142,7 @@ def _check_native_mount_frame(sim: MuJoCo, pose: torch.Tensor, angle: float) -> 
 
 def test_mount_update_changes_native_outputs_without_advancing_physics(sim: MuJoCo) -> None:
     initial = sim.sensor_manager.get_mount_pose("camera")
-    initial_height = 2.25 if sim.sensor_config["camera"].mount.target_kind == "world" else 2.3
+    initial_height = 2.25 if sim.sensor_manager.get("camera").config.mount.target_kind == "world" else 2.3
     # Check setup before any public pose write can hide an incorrect native initial pose.
     _check_native_mount_frame(sim, initial[0], 0.0)
     _check_plane_returns(sim, initial_height)
@@ -187,7 +194,7 @@ def test_sensor_keeps_following_its_parent_after_offset_changes(sim: MuJoCo) -> 
     assert sim.root_data is not None
     sim.root_data.qpos[2] += 0.5
     sim.backend.forward_kinematics()
-    world = sim.sensor_config["camera"].mount.target_kind == "world"
+    world = sim.sensor_manager.get("camera").config.mount.target_kind == "world"
     _check_plane_returns(sim, 2.65 if world else 3.2)
     # A pose update must also see qpos writes that have not yet had an FK refresh. Updating just
     # the camera avoids a second sensor writer accidentally supplying the missing body refresh.

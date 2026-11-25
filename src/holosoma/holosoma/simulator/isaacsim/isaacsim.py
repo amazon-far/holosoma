@@ -39,6 +39,7 @@ from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim import light_setup, sensor_setup
+from holosoma.simulator.isaacsim.contact_setup import IsaacContactReader
 from holosoma.simulator.isaacsim.viewer_input import ViewerInputController
 from holosoma.simulator.isaacsim.isaaclab_viewpoint_camera_controller import ViewportCameraController
 from holosoma.simulator.isaacsim.isaacsim_articulation_cfg import (
@@ -55,7 +56,6 @@ from holosoma.simulator.base_simulator.state import Columns
 from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
-from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
@@ -83,6 +83,7 @@ class IsaacSim(BaseSimulator):
         # Names (prefixed {file}_{body}) of scene-file bodies spawned static (kinematic),
         # populated by _load_scene_files; read in _collect_spawned_actors to classify.
         self.scene_file_static_names: set[str] = set()
+        self.contact_readers: dict[str, IsaacContactReader] = {}
 
         sim_config: SimulationCfg = SimulationCfg(
             dt=1.0 / self.simulator_config.sim.fps,
@@ -534,15 +535,6 @@ class IsaacSim(BaseSimulator):
         # get/set_actor_states_by_index, which delegate to the state adapter.
         self.all_root_states = UnifiedRootStatesView(self)
 
-        self.contact_recorder = ContactSubstepRecorder(
-            self.hooks,
-            lambda: self.contact_forces,
-            self.num_envs,
-            self.simulator_config.sim.control_decimation_steps,
-            self.num_bodies,
-            self.sim_device,
-        )
-
         # Initialize virtual gantry system after object registry setup
         # Initialize virtual gantry using config
         gantry_cfg = self.simulator_config.virtual_gantry
@@ -613,7 +605,7 @@ class IsaacSim(BaseSimulator):
                 out[rows], joint_ids=self.dof_ids, env_ids=rows
             ),
         )
-        self.state.register("contact_forces", self._robot_contact_forces)
+        self.state.register("contact_forces", self.sensor_manager.get_contact("contact_sensor").read_legacy_forces)
         body_sources = {
             "_rigid_body_pos": lambda: data.body_pos_w,
             # Isaac Lab stores wxyz; holosoma uses xyzw.
