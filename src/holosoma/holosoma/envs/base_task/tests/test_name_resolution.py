@@ -84,7 +84,7 @@ def _constructor_config(robot_dof_names: list[str]) -> Any:
         simulator=SimpleNamespace(
             _target_="test.Simulator",
             config=SimpleNamespace(
-                name="mujoco", sim=SimpleNamespace(control_decimation_steps=4, max_episode_length_s=20.0)
+                name="mujoco", sim=SimpleNamespace(fps=200, control_decimation_steps=4, max_episode_length_s=20.0)
             ),
         ),
         terrain=object(),
