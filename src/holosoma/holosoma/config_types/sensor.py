@@ -2,8 +2,10 @@
 
 """Camera, LiDAR, and contact sensor configuration types.
 
-Cameras and LiDARs follow their configured body or world mount.
-Their optical frame uses ``-Z`` forward and ``+Y`` up.
+A mounted sensor is a read-only producer mounted onto an existing body (a robot link or a
+spawned scene actor) that it follows.
+
+Every mounted sensor uses the OpenGL/USD/MuJoCo optical frame: ``-Z`` forward and ``+Y`` up.
 Contact sensors select collision bodies and report forces in world coordinates.
 """
 

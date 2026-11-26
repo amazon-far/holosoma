@@ -69,7 +69,7 @@ class MujocoSceneManager:
 
         Parameters
         ----------
-        simulator_config : SimulatorInitConfig
+        simulator_config : SimulatorConfig
             Simulator configuration containing physics and rendering parameters.
         """
         self.world_spec = mujoco.MjSpec()
@@ -94,7 +94,7 @@ class MujocoSceneManager:
 
         Parameters
         ----------
-        simulator_config : SimulatorInitConfig
+        simulator_config : SimulatorConfig
             Simulator configuration containing physics parameters.
         """
         # TODO: expose to Mujoco-specific config

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from holosoma.config_types.frequency import resolve_decimation
-from holosoma.config_types.sensor import CameraSensorConfig, ContactSensorConfig
+from holosoma.config_types.sensor import CameraSensorConfig, ContactSensorConfig, ContactTargetConfig
 from holosoma.config_types.value_types import UNIT_QUATERNION_NORM_TOLERANCE
 from holosoma.simulator.shared.lidar_sensor import (
     LidarPatternProvider,
@@ -20,6 +20,13 @@ if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarSensorConfig, SensorConfig
 
 SensorRecordT = TypeVar("SensorRecordT", bound="SensorRecord")
+
+
+def robot_body_contact_config(body_names: Sequence[str]) -> ContactSensorConfig:
+    """Default contact rows follow the robot's canonical body order."""
+    return ContactSensorConfig(
+        sources=[ContactTargetConfig(target_kind="robot_link", target=name) for name in body_names]
+    )
 
 
 @dataclass
@@ -123,13 +130,11 @@ class ContactRecord(SensorRecord):
     capture: Callable[[], torch.Tensor]
     """Return world-frame forces ``[N, sources, counterparts or 1, 3]``."""
 
-    @property
-    def source_names(self) -> list[str]:
-        return [source.label for source in self.config.sources]
-
-    @property
-    def counterpart_names(self) -> list[str]:
-        return [target.label for target in self.config.counterparts] or ["all"]
+    def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
+        """Keep per-source totals consistent with each published force matrix."""
+        super().set_buffer(output, tensor)
+        if output == "force_matrix":
+            super().set_buffer("forces", tensor.sum(dim=2))
 
     def update(self) -> None:
         """Publish an owned sample from the latest solved physics step."""
@@ -141,7 +146,6 @@ class ContactRecord(SensorRecord):
             )
         matrix = matrix.to(device=buffer.device, dtype=torch.float32).clone()
         self.set_buffer("force_matrix", matrix)
-        self.set_buffer("forces", matrix.sum(dim=2))
 
 
 class SensorManager:
@@ -165,7 +169,6 @@ class SensorManager:
         self._order: list[str] = []
         self._last_camera_due: set[str] = set()
         self._last_lidar_due: set[str] = set()
-        self._last_contact_due: set[str] = set()
 
     def _initial_mount_poses(self, config: CameraSensorConfig | LidarSensorConfig) -> torch.Tensor:
         mount = config.mount
@@ -214,7 +217,6 @@ class SensorManager:
             dtype=torch.float32,
         )
         record.set_buffer("force_matrix", matrix)
-        record.set_buffer("forces", matrix.sum(dim=2))
         self._contacts[name] = record
         self._order.append(name)
         return record
@@ -390,9 +392,7 @@ class SensorManager:
         records = self.contacts
         if not records:
             return
-        due = self._collect_due(records)
-        self._last_contact_due = {record.name for record in due}
-        for record in due:
+        for record in self._collect_due(records):
             record.update()
 
     @property
@@ -403,10 +403,6 @@ class SensorManager:
     @property
     def last_lidar_due(self) -> set[str]:
         return self._last_lidar_due
-
-    @property
-    def last_contact_due(self) -> set[str]:
-        return self._last_contact_due
 
     def frames_produced(self, name: str) -> int:
         record = self.get_sensor(name)

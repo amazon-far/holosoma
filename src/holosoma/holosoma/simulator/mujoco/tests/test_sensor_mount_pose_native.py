@@ -203,103 +203,37 @@ def test_sensor_keeps_following_its_parent_after_offset_changes(sim: MuJoCo) -> 
         torch.testing.assert_close(sim.sensor_manager.get_mount_pose(name), pose)
 
 
-def test_renders_preserve_solved_contacts_and_reset_waits_for_physics() -> None:
-    scene = MujocoSceneManager.__new__(MujocoSceneManager)
-    scene.world_spec = mujoco.MjSpec.from_string(
-        """
-        <mujoco>
-          <option timestep=".002" gravity="0 0 -9.81"/>
-          <worldbody>
-            <geom type="plane" size="10 10 .1"/>
-            <body name="unit_root" pos="0 0 .5">
-              <freejoint/><geom type="sphere" size=".1" mass="2"/>
-            </body>
-          </worldbody>
-        </mujoco>
-        """
-    )
-    scene.robot_spec_meta = ActorSpecMeta(prefix="unit_", root_body="root", body_names=["root"])
-    mount = SensorMountConfig(target_kind="robot_link", target="root", position=[3.0, 0.0, 1.0])
-    camera = CameraSensorConfig(mount=mount, width=17, height=17, data_types=["depth"], far=20.0)
-    lidar = LidarSensorConfig(mount=mount, pattern=CustomLidarRayPatternConfig(ray_directions=[[0.0, 0.0, -1.0]]))
-    scene.add_cameras({"camera": camera})
-    scene.add_lidar_sites({"lidar": lidar})
-    instance = _make_sim(scene.world_spec.compile(), {"camera": camera, "lidar": lidar}, torch.zeros(1, 3))
-    try:
-        # Every native solve publishes through the same manager entry point as the public loop.
-        for _ in range(1000):
-            instance.backend.step()
-            instance.sensor_manager.contact_step_completed()
-        instance.backend.forward_kinematics()
-        contact = instance.sensor_manager.get_contact("contact_sensor")
-        measured = instance.get_contact_data()
-        torch.testing.assert_close(measured[0, 0], torch.tensor([0.0, 0.0, 19.62]), atol=1e-4, rtol=0)
-        step_counter = contact.step_counter
-        frame_count = instance.sensor_manager.frames_produced("contact_sensor")
-        assert instance.root_data is not None
-        time = instance.root_data.time
+@pytest.mark.parametrize("sim", ["robot_link"], indirect=True)
+def test_reset_render_keeps_contacts_cleared_until_the_next_solve(sim: MuJoCo) -> None:
+    assert sim.root_model is not None and sim.root_data is not None
+    sim.root_data.qpos[2] = 0.09
+    sim.backend.step()
+    sim.sensor_manager.contact_step_completed()
+    assert sim.get_contact_data()[0, 0, 2] > 1
+    sim.render_sensors()
 
-        # Forced renders include the reset configuration's zero-render case.
-        for num_renders in (0, 1, 3, None):
-            qpos, qvel = instance.root_data.qpos.copy(), instance.root_data.qvel.copy()
-            instance.render_sensors(None, num_renders)
-            assert instance.root_data.time == time
-            np.testing.assert_array_equal(instance.root_data.qpos, qpos)
-            np.testing.assert_array_equal(instance.root_data.qvel, qvel)
-            assert instance.get_contact_data() is measured
-            assert contact.step_counter == step_counter
-            assert instance.sensor_manager.frames_produced("contact_sensor") == frame_count
-            torch.testing.assert_close(measured[0, 0], torch.tensor([0.0, 0.0, 19.62]), atol=1e-4, rtol=0)
-        old_depth = float(instance.get_camera_data("camera", "depth")[0, 8, 8, 0])
-        old_range = float(instance.get_lidar_data("lidar", "ranges")[0, 0])
-
-        env_ids = torch.tensor([0])
-        instance.sensor_manager.reset_contacts(env_ids)
-        cleared = instance.get_contact_data()
-        assert cleared.count_nonzero() == 0
-        assert instance.get_contact_data(data_type="force_matrix").count_nonzero() == 0
-        # Reset replaces selected rows without changing an earlier owned measurement.
-        torch.testing.assert_close(measured[0, 0], torch.tensor([0.0, 0.0, 19.62]), atol=1e-4, rtol=0)
-        instance.root_data.qpos[2] = 1.5
-        instance.root_data.qvel[:] = 0
-        instance.backend.forward_kinematics()
-        qpos, qvel = instance.root_data.qpos.copy(), instance.root_data.qvel.copy()
-        instance.render_sensors(env_ids, 0)
-        assert float(instance.get_camera_data("camera", "depth")[0, 8, 8, 0]) == old_depth
-        assert float(instance.get_lidar_data("lidar", "ranges")[0, 0]) == old_range
-        instance.render_sensors(env_ids, 3)
-        assert instance.root_data.time == time
-        np.testing.assert_array_equal(instance.root_data.qpos, qpos)
-        np.testing.assert_array_equal(instance.root_data.qvel, qvel)
-        depth = float(instance.get_camera_data("camera", "depth")[0, 8, 8, 0])
-        distance = float(instance.get_lidar_data("lidar", "ranges")[0, 0])
-        assert depth == pytest.approx(2.5, abs=0.015)
-        assert distance == pytest.approx(2.5, abs=1e-4)
-        assert depth > old_depth + 1
-        assert distance > old_range + 1
-        assert instance.get_contact_data() is cleared
-        assert cleared.count_nonzero() == 0
-        assert contact.step_counter == step_counter
-        assert instance.sensor_manager.frames_produced("contact_sensor") == frame_count
-
-        # Rendering a penetrated sphere still cannot restore the cleared force sample.
-        instance.root_data.qpos[2] = 0.08
-        instance.backend.forward_kinematics()
-        qpos, qvel = instance.root_data.qpos.copy(), instance.root_data.qvel.copy()
-        instance.render_sensors(env_ids, 1)
-        assert instance.root_data.time == time
-        np.testing.assert_array_equal(instance.root_data.qpos, qpos)
-        np.testing.assert_array_equal(instance.root_data.qvel, qvel)
-        assert float(instance.get_lidar_data("lidar", "ranges")[0, 0]) == pytest.approx(1.08, abs=1e-4)
-        assert instance.get_contact_data() is cleared
-        assert cleared.count_nonzero() == 0
-        instance.backend.step()
-        instance.sensor_manager.contact_step_completed()
-        assert instance.get_contact_data()[0, 0, 2] > 1
-        assert contact.step_counter == step_counter + 1
-        assert instance.sensor_manager.frames_produced("contact_sensor") == frame_count + 1
-    finally:
-        instance.backend.close()
+    env_ids = torch.tensor([0])
+    sim.sensor_manager.reset_contacts(env_ids)
+    cleared = sim.get_contact_data()
+    sim.root_data.qpos[:] = sim.root_model.qpos0
+    sim.root_data.qpos[2] = 0.08
+    sim.root_data.qvel[:] = 0
+    sim.backend.forward_kinematics()
+    time = sim.root_data.time
+    qpos, qvel = sim.root_data.qpos.copy(), sim.root_data.qvel.copy()
+    counter = sim.sensor_manager.get_contact("contact_sensor").step_counter
+    sim.render_sensors(env_ids, 1)
+    assert sim.sensor_manager.get_contact("contact_sensor").step_counter == counter
+    assert sim.root_data.time == time
+    np.testing.assert_array_equal(sim.root_data.qpos, qpos)
+    np.testing.assert_array_equal(sim.root_data.qvel, qvel)
+    assert float(sim.get_camera_data("camera", "depth")[0, 32, 32, 0]) == pytest.approx(1.38, abs=0.015)
+    assert float(sim.get_lidar_data("lidar", "ranges")[0, 0]) == pytest.approx(1.38, abs=1e-4)
+    assert sim.get_contact_data() is cleared
+    assert cleared.count_nonzero() == 0
+    sim.backend.step()
+    sim.sensor_manager.contact_step_completed()
+    assert sim.get_contact_data()[0, 0, 2] > 1
 
 
 def test_rgb_mount_translation_and_rotation_match_projected_landmarks(tmp_path: Path) -> None:

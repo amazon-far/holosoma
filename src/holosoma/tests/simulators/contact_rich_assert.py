@@ -30,7 +30,7 @@ _SOURCES = ("ball", "robot", "torso", "wrist", "incline", "stationary")
 _COUNTERPARTS = (*_SOURCES, "terrain")
 
 
-def _build(backend: str, num_envs: int, device: str | None, record_dir: str | None) -> Any:
+def _build(backend: str, num_envs: int, device: str | None) -> Any:
     import torch
 
     from holosoma.config_types.scene import (
@@ -42,7 +42,6 @@ def _build(backend: str, num_envs: int, device: str | None, record_dir: str | No
         SceneConfig,
     )
     from holosoma.config_types.sensor import ContactSensorConfig, ContactTargetConfig
-    from holosoma.config_types.video import CartesianCameraConfig
 
     def actor(name: str) -> ContactTargetConfig:
         return ContactTargetConfig(target_kind="actor", target=name)
@@ -113,9 +112,6 @@ def _build(backend: str, num_envs: int, device: str | None, record_dir: str | No
         "g1-29dof",
         "terrain_locomotion_plane",
         sensors=sensors,
-        record_dir=record_dir,
-        video_camera=CartesianCameraConfig(offset=[3.0, -4.0, 1.25], target_offset=[1.0, 0.0, -0.06], smoothing=0.0),
-        show_command_overlay=False,
     )
     config = dataclasses.replace(
         config,
@@ -157,7 +153,7 @@ def _build(backend: str, num_envs: int, device: str | None, record_dir: str | No
     return sim
 
 
-def _run(sim: Any, record: bool) -> dict[str, Any]:
+def _run(sim: Any) -> dict[str, Any]:
     import torch
 
     from holosoma.simulator.base_simulator.hooks import Phase
@@ -197,24 +193,15 @@ def _run(sim: Any, record: bool) -> dict[str, Any]:
 
     sim.hooks.add(Phase.PRE_STEP, support_robot, name="contact_rich.support")
     sim.hooks.add(Phase.POST_STEP, collect, name="contact_rich.collect", after=sim.sensor_contact_hook)
-    recorder = sim.video_recorder
-    if record:
-        assert recorder is not None
-        recorder.setup_recording()
-        recorder.on_episode_start(torch.tensor([recorder.config.record_env_id], device=sim.sim_device))
     decimation = sim.simulator_config.sim.control_decimation_steps
     frames = math.ceil(_DURATION / (sim.sim_dt * decimation))
-    try:
-        for _ in range(frames):
-            sim.hooks.emit(Phase.FRAME_BEGIN)
-            for _ in range(decimation):
-                sim.hooks.emit(Phase.PRE_STEP)
-                sim.simulate_at_each_physics_step()
-                sim.hooks.emit(Phase.POST_STEP)
-            sim.hooks.emit(Phase.FRAME_END)
-    finally:
-        if record and recorder is not None:
-            recorder.on_episode_end(torch.tensor([recorder.config.record_env_id], device=sim.sim_device))
+    for _ in range(frames):
+        sim.hooks.emit(Phase.FRAME_BEGIN)
+        for _ in range(decimation):
+            sim.hooks.emit(Phase.PRE_STEP)
+            sim.simulate_at_each_physics_step()
+            sim.hooks.emit(Phase.POST_STEP)
+        sim.hooks.emit(Phase.FRAME_END)
     return {
         "forces": {name: torch.stack(values).cpu() for name, values in samples.items()},
         "states": torch.stack(states).cpu(),
@@ -443,19 +430,11 @@ def main() -> int:
     parser.add_argument("--simulator", choices=["mujoco", "mjwarp", "isaacsim"], required=True)
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--device")
-    parser.add_argument("--record-dir", help="Save an optional video using the simulator's video recorder.")
     parser.add_argument("--result-file", type=Path, required=True)
     args = parser.parse_args()
-    sim = _build(args.simulator, args.num_envs, args.device, args.record_dir)
+    sim = _build(args.simulator, args.num_envs, args.device)
     try:
-        trace = _run(sim, args.record_dir is not None)
-        try:
-            reports = _assert_trace(trace)
-        except AssertionError:
-            import torch
-
-            torch.save(trace, args.result_file.with_suffix(".trace.pt"))
-            raise
+        reports = _assert_trace(_run(sim))
         print(f"Contact-rich phases ({args.simulator}): {reports}")
         args.result_file.write_text("OK\n")
         return 0

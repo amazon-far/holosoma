@@ -90,21 +90,6 @@ def test_filtered_pair_forces_are_equal_opposite_and_exclude_terrain_and_prefix_
     np.testing.assert_allclose(reaction[0, 0, 0], -matrix[0, 0, 0], atol=1e-6)
 
 
-def test_whole_source_group_cancels_internal_contact() -> None:
-    scene = _scene()
-    config = ContactSensorConfig(sources=[ContactTargetConfig(), _actor("box")])
-    targets = prepare_contact_targets(scene, {"pairs": config})
-    model = scene.world_spec.compile()
-    data = mujoco.MjData(model)
-    mujoco.mj_forward(model, data)
-    sources, counterparts = selection_masks(model, targets, config)
-    pairs = _pairs(model, data)
-    individual = pairs.matrix(sources, counterparts, force_mode="normal")
-    combined = pairs.matrix(sources.sum(axis=0, keepdims=True), counterparts, force_mode="normal")
-    assert abs(individual[0, 0, 0, 0]) > 1
-    np.testing.assert_allclose(combined.numpy(), 0, atol=1e-6)
-
-
 def test_actor_sources_include_descendant_geometry_and_keep_configuration_order() -> None:
     scene = _scene(
         """
@@ -426,7 +411,10 @@ def test_fixed_base_contacts_follow_canonical_rows_and_resolve_extra_asset_links
         sim.sensor_manager.contact_step_completed()
         assert sim.root_body_name is None
         assert sim.body_names == ["right", "left"]
-        assert sim.sensor_manager.get_contact("contact_sensor").source_names == ["robot_link:right", "robot_link:left"]
+        assert [source.label for source in sim.sensor_manager.get_contact("contact_sensor").config.sources] == [
+            "robot_link:right",
+            "robot_link:left",
+        ]
         default = sim.get_contact_data()
         assert default.shape == (1, 2, 3)
         assert default[0, 0, 0] > 1

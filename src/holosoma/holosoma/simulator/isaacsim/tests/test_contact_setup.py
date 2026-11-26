@@ -84,6 +84,8 @@ def _sim() -> SimpleNamespace:
     terrain = ContactTargetConfig(target_kind="terrain")
     existing = object()
     return SimpleNamespace(
+        contact_readers={},
+        contact_views={},
         sensor_config={
             "grouped": ContactSensorConfig(
                 sources=[ContactTargetConfig(), ContactTargetConfig(target_kind="robot_link", target="a")],

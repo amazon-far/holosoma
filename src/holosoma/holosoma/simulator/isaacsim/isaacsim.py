@@ -54,9 +54,9 @@ from holosoma.simulator.isaacsim.object_spawner import (
 from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures, register_terrain_mesh_cache
 from holosoma.simulator.base_simulator.state import Columns
 from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw
-from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
+from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
@@ -523,14 +523,6 @@ class IsaacSim(BaseSimulator):
         sensor_setup.initialize_sensors(self)
 
         self._register_state()
-        self.contact_recorder = ContactSubstepRecorder(
-            self.hooks,
-            lambda: self.contact_forces,
-            self.num_envs,
-            self.simulator_config.sim.control_decimation_steps,
-            self.num_bodies,
-            self.sim_device,
-        )
 
         # Create state adapter after object registry and robot state are set
         self._state_adapter = IsaacSimStateAdapter(
@@ -545,6 +537,15 @@ class IsaacSim(BaseSimulator):
         # Unified all-actors view: routes [indices] reads/writes through
         # get/set_actor_states_by_index, which delegate to the state adapter.
         self.all_root_states = UnifiedRootStatesView(self)
+
+        self.contact_recorder = ContactSubstepRecorder(
+            self.hooks,
+            lambda: self.contact_forces,
+            self.num_envs,
+            self.simulator_config.sim.control_decimation_steps,
+            self.num_bodies,
+            self.sim_device,
+        )
 
         # Initialize virtual gantry system after object registry setup
         # Initialize virtual gantry using config

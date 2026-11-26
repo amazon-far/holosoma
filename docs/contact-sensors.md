@@ -93,5 +93,6 @@ sim.hooks.add(
 Custom loops emit `POST_STEP` once after each physics step to publish contacts.
 
 The default `contact_sensor` provides one row per entry in `sim.body_names`.
+`get_sensor_names()` includes it. Use `sensor_manager.camera_names` or `lidar_names` to list one sensor type.
 Existing `sim.contact_forces`, `sim.contact_recorder`, and rewards keep their current behavior.
 The name `contact_sensor` is reserved.

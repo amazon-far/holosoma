@@ -17,6 +17,7 @@ from holosoma.simulator.isaacsim.prim_utils import (
     resolve_robot_link_rigid_body_prim_expression,
     set_instanceable,
 )
+from holosoma.simulator.shared.sensor_manager import robot_body_contact_config
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
@@ -116,8 +117,6 @@ class IsaacContactReader:
 
 def build_contacts(sim: IsaacSim) -> None:
     """Share one native single-body view across all named contact measurements."""
-    sim.contact_readers = {}
-    sim.contact_views = {}
     view_configs: dict[str, ContactSensorCfg] = {}
     selections: dict[str, tuple[list[list[str]], list[list[str]]]] = {}
     for name, config in sim.sensor_config.items():
@@ -196,9 +195,7 @@ def register_contacts(sim: IsaacSim) -> None:
                 f"{view.sensor_count} sensors, {sensor.num_bodies} bodies per environment, "
                 f"{view.filter_count} filters for {len(sensor.cfg.filter_prim_paths_expr)} patterns."
             )
-    default = ContactSensorConfig(
-        sources=[ContactTargetConfig(target_kind="robot_link", target=name) for name in sim.body_names]
-    )
+    default = robot_body_contact_config(sim.body_names)
     sim.sensor_manager.register_contact(
         "contact_sensor",
         default,

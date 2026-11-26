@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import mujoco
@@ -15,6 +14,7 @@ import numpy.typing as npt
 
 from holosoma.config_types.sensor import ContactSensorConfig, ContactTargetConfig, SensorConfig
 from holosoma.simulator.mujoco.backends import ClassicBackend, WarpBackend
+from holosoma.simulator.shared.sensor_manager import robot_body_contact_config
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
@@ -128,27 +128,19 @@ def selection_masks(
     return source_masks, counterpart_masks
 
 
-def _read_classic(
-    backend: ClassicBackend,
-    sources: npt.NDArray[np.int32],
-    counterparts: npt.NDArray[np.int32],
-    force_mode: str,
-) -> torch.Tensor:
-    return backend.contact_pairs().matrix(sources, counterparts, force_mode=force_mode)
-
-
 def _reader(
     sim: MuJoCo,
     sources: npt.NDArray[np.int32],
     counterparts: npt.NDArray[np.int32],
     config: ContactSensorConfig,
 ) -> Callable[[], torch.Tensor]:
-    if isinstance(sim.backend, WarpBackend):
+    backend = sim.backend
+    if isinstance(backend, WarpBackend):
         from holosoma.simulator.mujoco.contact_warp import WarpContactReader
 
-        return WarpContactReader(sim.backend, sources, counterparts, config.force_mode)
-    assert isinstance(sim.backend, ClassicBackend)
-    return partial(_read_classic, sim.backend, sources, counterparts, config.force_mode)
+        return WarpContactReader(backend, sources, counterparts, config.force_mode)
+    assert isinstance(backend, ClassicBackend)
+    return lambda: backend.contact_pairs().matrix(sources, counterparts, force_mode=config.force_mode)
 
 
 def register_contacts(sim: MuJoCo) -> None:
@@ -158,9 +150,7 @@ def register_contacts(sim: MuJoCo) -> None:
     sources = np.zeros((len(sim.body_names), model.ngeom), dtype=np.int32)
     for index, body_id in enumerate(sim.body_ids):
         sources[index, model.geom_bodyid == body_id] = 1
-    default = ContactSensorConfig(
-        sources=[ContactTargetConfig(target_kind="robot_link", target=name) for name in sim.body_names]
-    )
+    default = robot_body_contact_config(sim.body_names)
     sim.sensor_manager.register_contact(
         "contact_sensor",
         default,

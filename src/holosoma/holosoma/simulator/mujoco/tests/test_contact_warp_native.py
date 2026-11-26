@@ -18,9 +18,20 @@ if not torch.cuda.is_available():
     pytest.skip("Native Warp contact stream tests require CUDA", allow_module_level=True)
 
 from holosoma.config_types.full_sim import FullSimConfig  # noqa: E402
+from holosoma.config_types.sensor import ContactSensorConfig  # noqa: E402
 from holosoma.config_values.simulator import mujoco as mujoco_config  # noqa: E402
 from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend  # noqa: E402
 from holosoma.simulator.mujoco.contact_warp import WarpContactReader  # noqa: E402
+from holosoma.simulator.shared.sensor_manager import SensorManager  # noqa: E402
+
+
+def test_publication_moves_cpu_backend_results_to_the_simulator_device() -> None:
+    manager = SensorManager("cuda:0", 50.0, physics_hz=50.0)
+    record = manager.register_contact("cpu_result", ContactSensorConfig(), lambda: torch.ones(1, 1, 1, 3))
+    manager.contact_step_completed()
+    for output in record.buffers.values():
+        assert output.device == torch.device("cuda:0")
+    assert record.buffers["forces"].tolist() == [[[1, 1, 1]]]
 
 
 def _backend(xml: str) -> WarpBackend:

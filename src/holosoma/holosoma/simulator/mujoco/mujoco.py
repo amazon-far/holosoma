@@ -650,6 +650,7 @@ class MuJoCo(BaseSimulator):
         # Initialize contact forces tensor with correct shape [num_envs, num_bodies, 3]
         # This matches the interface expected by holosoma (IsaacSim pattern)
         self.contact_forces = torch.zeros(self.num_envs, self.num_bodies, 3, device=self.sim_device)
+
         self.contact_recorder = ContactSubstepRecorder(
             self.hooks,
             lambda: self.contact_forces,

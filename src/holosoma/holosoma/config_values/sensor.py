@@ -1,8 +1,8 @@
 """Named sensor building blocks, selectable per key via the dynamic ``--sensor`` dict.
 
-Each preset is one camera, LiDAR, or contact sensor configuration. Give each sensor its own key,
+Each preset is one camera, LiDAR, or contact sensor config. Compose a rig by giving each sensor its own key,
 e.g. ``sensor.my_head:g1-head sensor.lidar:g1-pelvis-lidar``; the key becomes the name used by
-``get_camera_data``, ``get_lidar_data``, or ``get_contact_data``. Override fields per key, e.g.
+``get_camera_data``, ``get_lidar_data``, or ``get_contact_data``. Fields can be overridden per key, e.g.
 ``--sensor.my_head.width 224``.
 
 Combination presets (a head + two wrists, stereo + wrists, ...) are intentionally gone: the dynamic

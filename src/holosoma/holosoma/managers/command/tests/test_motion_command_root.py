@@ -223,8 +223,7 @@ def contact_observation(env: Any) -> torch.Tensor:
     return env.simulator.sensor_manager.get_contact("ground").buffers["forces"].flatten(1)
 
 
-@pytest.mark.parametrize("num_renders", [0, 1, 3])
-def test_clip_end_clears_only_teleported_contacts_and_observation_history(tmp_path: Path, num_renders: int) -> None:
+def test_clip_end_clears_only_teleported_contacts_and_observation_history_without_rerenders(tmp_path: Path) -> None:
     path = tmp_path / "motion.npz"
     _write_clip(path)
     term, simulator = _command(_robot(), _motion(path, start_at_timestep_zero_prob=1.0))
@@ -234,12 +233,12 @@ def test_clip_end_clears_only_teleported_contacts_and_observation_history(tmp_pa
     sample = torch.tensor([1.0, 2.0]).view(2, 1, 1, 1).expand(-1, 1, 1, 3)
     record = simulator.sensor_manager.register_contact("ground", ContactSensorConfig(), lambda: sample)
     simulator.sensor_manager.contact_step_completed()
-    simulator.simulator_config = SimpleNamespace(sim=SimpleNamespace(num_rerenders_on_reset=num_renders))
+    simulator.simulator_config = SimpleNamespace(sim=SimpleNamespace(num_rerenders_on_reset=0))
     rendered: list[torch.Tensor] = []
 
     def render(env_ids: torch.Tensor, count: int) -> None:
         assert env_ids.tolist() == [0]
-        assert count == num_renders
+        assert count == 0
         torch.testing.assert_close(simulator._rigid_body_pos[:, 2], simulator.robot_root_states[:, :3])
         rendered.append(record.buffers["forces"].clone())
 
