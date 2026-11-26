@@ -1,4 +1,4 @@
-"""Isaac Sim mounted camera and LiDAR sensor setup.
+"""Isaac Sim camera, LiDAR, and contact sensor setup.
 
 RTX cameras are ``TiledCamera`` sensors created before ``clone_environments`` as children of their
 mount bodies, so the USD transform hierarchy makes them follow those bodies across cloned envs.
@@ -31,12 +31,14 @@ from isaaclab.utils.math import quat_apply
 from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
+    ContactSensorConfig,
     IsaacSimLidarConfig,
     LidarBodyFilterConfig,
     LidarSensorConfig,
     is_isaacsim_raycast_camera,
 )
 from holosoma.simulator.isaacsim.camera_projection import camera_spawn_cfg_for
+from holosoma.simulator.isaacsim.contact_setup import build_contacts, register_contacts
 from holosoma.simulator.isaacsim.raycast_targets import (
     TERRAIN_PRIM_PATH,
     RobotMeshPoses,
@@ -722,6 +724,7 @@ def render_lidars(sim: IsaacSim, due: list[LidarRecord], env_ids: torch.Tensor |
 def build_sensors(sim: IsaacSim) -> None:
     """Build native sensors before environment cloning."""
     has_lidar = any(isinstance(config, LidarSensorConfig) for config in sim.sensor_config.values())
+    has_contact = any(isinstance(config, ContactSensorConfig) for config in sim.sensor_config.values())
     has_raycast_camera = any(is_isaacsim_raycast_camera(config) for config in sim.sensor_config.values())
     has_rtx_camera_on_robot = any(
         isinstance(config, CameraSensorConfig)
@@ -729,11 +732,12 @@ def build_sensors(sim: IsaacSim) -> None:
         and config.mount.target_kind == "robot_link"
         for config in sim.sensor_config.values()
     )
-    if has_lidar or has_raycast_camera or has_rtx_camera_on_robot:
+    if has_lidar or has_raycast_camera or has_rtx_camera_on_robot or has_contact:
         # IsaacLab cannot author children or resolve exact targets through instance proxies.
         set_instanceable(get_current_stage(), "/World/envs/env_0/Robot", False)
     build_cameras(sim)
     build_lidars(sim)
+    build_contacts(sim)
 
 
 def create_sensors(sim: IsaacSim) -> None:
@@ -749,6 +753,7 @@ def initialize_sensors(sim: IsaacSim) -> None:
     """Bind depth renderers once scene assets, body indices and native sensors are initialized."""
     for camera in sim.raycast_cameras.values():
         camera.initialize()
+    register_contacts(sim)
 
 
 def render_sensors(sim: IsaacSim, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:

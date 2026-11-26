@@ -1,8 +1,8 @@
-"""Named mounted-sensor building blocks, selectable per key via the dynamic ``--sensor`` dict.
+"""Named sensor building blocks, selectable per key via the dynamic ``--sensor`` dict.
 
-Each preset is one camera or LiDAR config. Compose a rig by giving each sensor its own key,
+Each preset is one camera, LiDAR, or contact sensor config. Compose a rig by giving each sensor its own key,
 e.g. ``sensor.my_head:g1-head sensor.lidar:g1-pelvis-lidar``; the key becomes the name used by
-``get_camera_data`` or ``get_lidar_data``. Fields can be overridden per key, e.g.
+``get_camera_data``, ``get_lidar_data``, or ``get_contact_data``. Fields can be overridden per key, e.g.
 ``--sensor.my_head.width 224``.
 
 Combination presets (a head + two wrists, stereo + wrists, ...) are intentionally gone: the dynamic
@@ -14,6 +14,8 @@ point). ``CAMERA_REGISTRY`` remains as a compatibility alias.
 
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
+    ContactSensorConfig,
+    ContactTargetConfig,
     CustomLidarRayPatternConfig,
     GridLidarRayPatternConfig,
     LidarSensorConfig,
@@ -31,7 +33,9 @@ from holosoma.config_values.wbt.g1.sensor import (
 )
 from holosoma.utils.config_registry import ConfigRegistry
 
-SENSOR_REGISTRY = ConfigRegistry((CameraSensorConfig, LidarSensorConfig), group="holosoma.config.sensor")
+SENSOR_REGISTRY = ConfigRegistry(
+    (CameraSensorConfig, LidarSensorConfig, ContactSensorConfig), group="holosoma.config.sensor"
+)
 # Compatibility alias for extensions written before the registry became heterogeneous.
 CAMERA_REGISTRY = SENSOR_REGISTRY
 
@@ -87,3 +91,8 @@ CAMERA_REGISTRY.add("overview", overview_camera)
 SENSOR_REGISTRY.add("g1-pelvis-lidar", g1_pelvis_lidar)
 # Explicit optical-frame directions, intended for per-key overrides.
 SENSOR_REGISTRY.add("custom-lidar", custom_lidar)
+SENSOR_REGISTRY.add("robot-contacts", ContactSensorConfig())
+SENSOR_REGISTRY.add(
+    "robot-terrain-contacts",
+    ContactSensorConfig(counterparts=[ContactTargetConfig(target_kind="terrain")]),
+)

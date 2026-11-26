@@ -1,0 +1,21 @@
+#usda 1.0
+(
+    defaultPrim = "contact_ramp"
+    metersPerUnit = 1.0
+    upAxis = "Z"
+)
+def Xform "contact_ramp" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+)
+{
+    float physics:mass = 1
+    def Cube "geom" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1
+        double3 xformOp:scale = (1.05, 0.65, 0.10)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.1, 0.3, 0.8)]
+    }
+}

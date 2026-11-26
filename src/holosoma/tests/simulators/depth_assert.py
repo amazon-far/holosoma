@@ -145,7 +145,7 @@ def main() -> int:
     sim.set_actor_states(["robot"], torch.arange(n, device=device), robot_states)
     step(sim, 2)
 
-    if not sim.get_sensor_names():
+    if not sim.sensor_manager.camera_names:
         print(f"[{args.simulator}] FAIL: no sensors created")
         return 1
 

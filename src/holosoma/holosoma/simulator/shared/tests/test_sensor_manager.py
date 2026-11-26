@@ -47,7 +47,7 @@ def _drive(manager: SensorManager, steps: int) -> dict[str, list[bool]]:
 
 
 def test_decimation_one_renders_every_step() -> None:
-    sm = SensorManager(device="cpu", control_hz=200.0)
+    sm = SensorManager(device="cpu", control_hz=200.0, physics_hz=200.0)
     sm.register_camera("c", _cam(update_decimation=1))
     assert _drive(sm, 4)["c"] == [True, True, True, True]
 
@@ -55,14 +55,14 @@ def test_decimation_one_renders_every_step() -> None:
 def test_decimation_two_renders_on_first_step_then_every_other() -> None:
     # A dec>1 camera renders on its FIRST step (counter -1 -> 0), not skipping until step `dec`.
     # So the sequence is [True, False, True, False, ...].
-    sm = SensorManager(device="cpu", control_hz=200.0)
+    sm = SensorManager(device="cpu", control_hz=200.0, physics_hz=200.0)
     sm.register_camera("c", _cam(update_decimation=2))
     assert _drive(sm, 5)["c"] == [True, False, True, False, True]
 
 
 def test_frequency_string_resolves_and_gates() -> None:
     # "50Hz" against a 200Hz control rate floors to decimation 4: render on step 0, then every 4th.
-    sm = SensorManager(device="cpu", control_hz=200.0)
+    sm = SensorManager(device="cpu", control_hz=200.0, physics_hz=200.0)
     sm.register_camera("c", _cam(update_decimation="50Hz"))
     assert sm.get("c").effective_decimation == 4
     assert _drive(sm, 9)["c"] == [True, False, False, False, True, False, False, False, True]
@@ -71,7 +71,7 @@ def test_frequency_string_resolves_and_gates() -> None:
 def test_frames_produced_dec3_holds_within_window() -> None:
     # The realistic slow-camera case: dec=3 over 7 steps. frames_produced must stay flat across the
     # two non-due steps of each window and increment exactly on the due step.
-    sm = SensorManager(device="cpu", control_hz=200.0)
+    sm = SensorManager(device="cpu", control_hz=200.0, physics_hz=200.0)
     sm.register_camera("c", _cam(update_decimation=3))
     counts = []
     for _ in range(7):
@@ -81,7 +81,7 @@ def test_frames_produced_dec3_holds_within_window() -> None:
 
 
 def test_mixed_decimation_cameras_independent() -> None:
-    sm = SensorManager(device="cpu", control_hz=200.0)
+    sm = SensorManager(device="cpu", control_hz=200.0, physics_hz=200.0)
     sm.register_camera("fast", _cam(update_decimation=1))
     sm.register_camera("slow", _cam(update_decimation=3))
     seq = _drive(sm, 4)
@@ -99,7 +99,7 @@ def test_unimplemented_modality_rejected_at_config_construction(bad: CameraDataT
 
 
 def test_duplicate_name_rejected() -> None:
-    sm = SensorManager(device="cpu", control_hz=200.0)
+    sm = SensorManager(device="cpu", control_hz=200.0, physics_hz=200.0)
     sm.register_camera("c", _cam())
     with pytest.raises(ValueError, match="already registered"):
         sm.register_camera("c", _cam())
@@ -117,7 +117,7 @@ def test_camera_depth_uses_the_shared_range_clipping_policy(
     behavior: DepthClippingBehavior,
     expected: list[float],
 ) -> None:
-    manager = SensorManager(device="cpu", control_hz=200.0)
+    manager = SensorManager(device="cpu", control_hz=200.0, physics_hz=200.0)
     record = manager.register_camera(
         "depth",
         CameraSensorConfig(
@@ -140,7 +140,7 @@ def test_camera_depth_uses_the_shared_range_clipping_policy(
 
 
 def test_camera_and_lidar_cadence_are_independent() -> None:
-    sm = SensorManager(device="cpu", control_hz=100.0)
+    sm = SensorManager(device="cpu", control_hz=100.0, physics_hz=100.0)
     sm.register_camera("camera", _cam(update_decimation=2))
     sm.register_lidar("lidar", LidarSensorConfig(mount=_MOUNT, update_decimation=3))
 
@@ -173,7 +173,7 @@ def test_sensor_manager_uses_selected_static_pattern_provider(
     pattern: LidarRayPatternConfig,
     expected_directions: torch.Tensor,
 ) -> None:
-    manager = SensorManager(device="cpu", control_hz=100.0)
+    manager = SensorManager(device="cpu", control_hz=100.0, physics_hz=100.0)
     record = manager.register_lidar("lidar", LidarSensorConfig(mount=_MOUNT, pattern=pattern))
 
     assert type(record.pattern_provider) is pattern.get_provider_cls()
@@ -202,7 +202,7 @@ def test_sensor_manager_delegates_provider_selection_to_pattern_config(monkeypat
 
     pattern = GridLidarRayPatternConfig(horizontal_angles=[0.0])
     monkeypatch.setattr(GridLidarRayPatternConfig, "get_provider_cls", lambda _: SelectedProvider)
-    record = SensorManager(device="cpu", control_hz=100.0).register_lidar(
+    record = SensorManager(device="cpu", control_hz=100.0, physics_hz=100.0).register_lidar(
         "lidar",
         LidarSensorConfig(mount=_MOUNT, pattern=pattern, update_decimation=2),
     )
@@ -212,7 +212,7 @@ def test_sensor_manager_delegates_provider_selection_to_pattern_config(monkeypat
 
 
 def test_sensor_names_must_be_unique_across_types() -> None:
-    sm = SensorManager(device="cpu", control_hz=100.0)
+    sm = SensorManager(device="cpu", control_hz=100.0, physics_hz=100.0)
     sm.register_camera("sensor", _cam())
     with pytest.raises(ValueError, match="already registered"):
         sm.register_lidar("sensor", LidarSensorConfig(mount=_MOUNT))

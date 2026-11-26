@@ -8,6 +8,7 @@ from holosoma.config_types.plugin import ROS2PointCloudPluginConfig
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
+    ContactSensorConfig,
     CustomLidarRayPatternConfig,
     GridLidarRayPatternConfig,
     LidarSensorConfig,
@@ -22,6 +23,7 @@ def test_sensor_registry_contains_camera_and_lidar_presets() -> None:
     assert isinstance(SENSOR_REGISTRY["g1-head"], CameraSensorConfig)
     assert isinstance(SENSOR_REGISTRY["g1-pelvis-lidar"], LidarSensorConfig)
     assert isinstance(SENSOR_REGISTRY["custom-lidar"].pattern, CustomLidarRayPatternConfig)
+    assert isinstance(SENSOR_REGISTRY["robot-contacts"], ContactSensorConfig)
 
 
 def test_cli_composes_camera_lidar_and_pointcloud_route() -> None:
@@ -79,3 +81,29 @@ def test_cli_switches_the_raycast_preset_to_rtx_with_one_override() -> None:
     camera = config.sensor["depth"]
     assert isinstance(camera, CameraSensorConfig)
     assert camera.isaacsim.renderer == "rtx"
+
+
+def test_cli_composes_contact_sensors_with_source_and_counterpart_overrides() -> None:
+    config = parse_config(
+        RunSimConfig,
+        args=[
+            "simulator:mujoco",
+            "sensor.ground:robot-terrain-contacts",
+            "sensor.hand:robot-terrain-contacts",
+            "--sensor.hand.sources.0.target-kind=robot_link",
+            "--sensor.hand.sources.0.target=left_wrist_yaw_link",
+            "--sensor.hand.counterparts.0.target-kind=actor",
+            "--sensor.hand.counterparts.0.target=box",
+            "--sensor.hand.force-mode=total",
+            "--sensor.hand.update-decimation=25Hz",
+        ],
+    )
+    ground = config.sensor["ground"]
+    hand = config.sensor["hand"]
+    assert isinstance(ground, ContactSensorConfig)
+    assert isinstance(hand, ContactSensorConfig)
+    assert ground.counterparts[0].label == "terrain"
+    assert hand.sources[0].label == "robot_link:left_wrist_yaw_link"
+    assert hand.counterparts[0].label == "actor:box"
+    assert hand.force_mode == "total"
+    assert hand.update_decimation == "25Hz"

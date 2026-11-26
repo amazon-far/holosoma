@@ -45,7 +45,7 @@ def main() -> int:
         assert isinstance(sim, IsaacSim)
         assert carb.settings.get_settings().get("/physics/fabricEnabled"), "reset coverage requires Fabric rendering"
         manager = sim.sensor_manager
-        offsets = {name: manager.get_mount_pose(name) for name in sim.get_sensor_names()}
+        offsets = {name: manager.get_mount_pose(name) for name in [*manager.camera_names, *manager.lidar_names]}
         angle = math.radians(30.0)
         for name, pose in offsets.items():
             pose[0, 2] += 0.4

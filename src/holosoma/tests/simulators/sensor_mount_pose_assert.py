@@ -134,7 +134,7 @@ def main() -> int:
     sim.create_envs(args.num_envs, origins, base_init)
     sim.prepare_sim()
     assert sim.sensor_manager is manager, "native setup replaced the public registry"
-    initial = {name: sim.sensor_manager.get_mount_pose(name) for name in sim.get_sensor_names()}
+    initial = {name: manager.get_mount_pose(name) for name in [*manager.camera_names, *manager.lidar_names]}
     offsets = {name: pose.clone() for name, pose in initial.items()}
     root_states = sim.get_actor_states(["robot"], ids).clone()
     joints = sim.dof_pos.clone()

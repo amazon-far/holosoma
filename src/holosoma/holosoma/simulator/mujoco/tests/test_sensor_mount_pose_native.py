@@ -19,12 +19,14 @@ mujoco = pytest.importorskip("mujoco")
 from holosoma.config_types.full_sim import FullSimConfig  # noqa: E402
 from holosoma.config_types.sensor import (  # noqa: E402
     CameraSensorConfig,
+    ContactSensorConfig,
     CustomLidarRayPatternConfig,
     LidarSensorConfig,
     SensorMountConfig,
 )
 from holosoma.config_values.simulator import mujoco as mujoco_config  # noqa: E402
 from holosoma.simulator.mujoco.backends.classic_backend import ClassicBackend  # noqa: E402
+from holosoma.simulator.mujoco.contact_setup import ContactTargetMap, prepare_contact_targets  # noqa: E402
 from holosoma.simulator.mujoco.mujoco import MuJoCo  # noqa: E402
 from holosoma.simulator.mujoco.scene_manager import ActorSpecMeta, MujocoSceneManager  # noqa: E402
 from holosoma.simulator.mujoco.sensor_setup import create_sensors, initialize_camera_mounts  # noqa: E402
@@ -37,7 +39,9 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.mujoco_classic
 
 
-def _make_sim(model: Any, sensors: dict[str, SensorConfig], origins: torch.Tensor) -> MuJoCo:
+def _make_sim(
+    model: Any, sensors: dict[str, SensorConfig], origins: torch.Tensor, targets: ContactTargetMap | None = None
+) -> MuJoCo:
     """Run the real sensor pipeline on a small native scene, without an unrelated robot lifecycle."""
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
@@ -49,9 +53,10 @@ def _make_sim(model: Any, sensors: dict[str, SensorConfig], origins: torch.Tenso
     instance.env_origins = origins
     instance.simulator_config = mujoco_config.config
     instance.sensor_config = sensors
+    instance.contact_target_map = targets or ContactTargetMap()
     instance.kinematic_playback = False
     cfg = instance.simulator_config.sim
-    instance.sensor_manager = SensorManager("cpu", cfg.fps / cfg.control_decimation_steps)
+    instance.sensor_manager = SensorManager("cpu", cfg.fps / cfg.control_decimation_steps, physics_hz=cfg.fps)
     create_sensors(instance)
     initialize_camera_mounts(instance)
     return instance
@@ -91,9 +96,14 @@ def sim(request: pytest.FixtureRequest) -> Iterator[MuJoCo]:
     lidar = LidarSensorConfig(mount=mount, pattern=CustomLidarRayPatternConfig(ray_directions=[[0.0, 0.0, -1.0]]))
     scene.add_cameras({"camera": camera})
     scene.add_lidar_sites({"lidar": lidar})
+    sensors: dict[str, SensorConfig] = {"camera": camera, "lidar": lidar}
+    if request.param == "robot_link_contact":
+        sensors["contacts"] = ContactSensorConfig()
+    targets = prepare_contact_targets(scene, sensors)
     model = scene.world_spec.compile()
     origins = torch.tensor([[5.0, 0.0, 0.25]]) if request.param == "world" else torch.zeros(1, 3)
-    instance = _make_sim(model, {"camera": camera, "lidar": lidar}, origins)
+    instance = _make_sim(model, sensors, origins, targets)
+    assert instance.sensor_manager.contact_names == (["contacts"] if request.param == "robot_link_contact" else [])
     try:
         yield instance
     finally:
@@ -114,7 +124,7 @@ def _check_plane_returns(sim: MuJoCo, expected: float) -> None:
 def _check_native_mount_frame(sim: MuJoCo, pose: torch.Tensor, angle: float) -> None:
     """Check all position axes and optical axes against the independently authored mount frame."""
     assert sim.root_model is not None and sim.root_data is not None
-    world = sim.sensor_config["camera"].mount.target_kind == "world"
+    world = sim.sensor_manager.get("camera").config.mount.target_kind == "world"
     expected_position = (
         pose[:3].numpy() + np.array([5.0, 0.0, 0.25])
         if world
@@ -135,7 +145,7 @@ def _check_native_mount_frame(sim: MuJoCo, pose: torch.Tensor, angle: float) -> 
 
 def test_mount_update_changes_native_outputs_without_advancing_physics(sim: MuJoCo) -> None:
     initial = sim.sensor_manager.get_mount_pose("camera")
-    initial_height = 2.25 if sim.sensor_config["camera"].mount.target_kind == "world" else 2.3
+    initial_height = 2.25 if sim.sensor_manager.get("camera").config.mount.target_kind == "world" else 2.3
     # Check setup before any public pose write can hide an incorrect native initial pose.
     _check_native_mount_frame(sim, initial[0], 0.0)
     _check_plane_returns(sim, initial_height)
@@ -187,7 +197,7 @@ def test_sensor_keeps_following_its_parent_after_offset_changes(sim: MuJoCo) -> 
     assert sim.root_data is not None
     sim.root_data.qpos[2] += 0.5
     sim.backend.forward_kinematics()
-    world = sim.sensor_config["camera"].mount.target_kind == "world"
+    world = sim.sensor_manager.get("camera").config.mount.target_kind == "world"
     _check_plane_returns(sim, 2.65 if world else 3.2)
     # A pose update must also see qpos writes that have not yet had an FK refresh. Updating just
     # the camera avoids a second sensor writer accidentally supplying the missing body refresh.
@@ -196,6 +206,39 @@ def test_sensor_keeps_following_its_parent_after_offset_changes(sim: MuJoCo) -> 
     _check_plane_returns(sim, 2.65 if world else 3.45)
     for name in ("camera", "lidar"):
         torch.testing.assert_close(sim.sensor_manager.get_mount_pose(name), pose)
+
+
+@pytest.mark.parametrize("sim", ["robot_link_contact"], indirect=True)
+def test_reset_render_keeps_contacts_cleared_until_the_next_solve(sim: MuJoCo) -> None:
+    assert sim.root_model is not None and sim.root_data is not None
+    sim.root_data.qpos[2] = 0.09
+    sim.backend.step()
+    sim.sensor_manager.contact_step_completed()
+    assert sim.get_contact_data("contacts")[0, 0, 2] > 1
+    sim.render_sensors()
+
+    env_ids = torch.tensor([0])
+    sim.sensor_manager.reset_contacts(env_ids)
+    cleared = sim.get_contact_data("contacts")
+    sim.root_data.qpos[:] = sim.root_model.qpos0
+    sim.root_data.qpos[2] = 0.08
+    sim.root_data.qvel[:] = 0
+    sim.backend.forward_kinematics()
+    time = sim.root_data.time
+    qpos, qvel = sim.root_data.qpos.copy(), sim.root_data.qvel.copy()
+    counter = sim.sensor_manager.get_contact("contacts").step_counter
+    sim.render_sensors(env_ids, 1)
+    assert sim.sensor_manager.get_contact("contacts").step_counter == counter
+    assert sim.root_data.time == time
+    np.testing.assert_array_equal(sim.root_data.qpos, qpos)
+    np.testing.assert_array_equal(sim.root_data.qvel, qvel)
+    assert float(sim.get_camera_data("camera", "depth")[0, 32, 32, 0]) == pytest.approx(1.38, abs=0.015)
+    assert float(sim.get_lidar_data("lidar", "ranges")[0, 0]) == pytest.approx(1.38, abs=1e-4)
+    assert sim.get_contact_data("contacts") is cleared
+    assert cleared.count_nonzero() == 0
+    sim.backend.step()
+    sim.sensor_manager.contact_step_completed()
+    assert sim.get_contact_data("contacts")[0, 0, 2] > 1
 
 
 def test_rgb_mount_translation_and_rotation_match_projected_landmarks(tmp_path: Path) -> None:

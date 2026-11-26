@@ -1,6 +1,6 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-"""MuJoCo mounted camera and LiDAR sensor setup."""
+"""MuJoCo camera, LiDAR, and contact sensor setup."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import torch
 
 from holosoma.config_types.sensor import DEFAULT_MUJOCO_LIDAR_GEOM_GROUPS, CameraSensorConfig, LidarSensorConfig
 from holosoma.simulator.mujoco.backends import WarpBackend
+from holosoma.simulator.mujoco.contact_setup import register_contacts
 from holosoma.simulator.mujoco.geom_groups import (
     ROBOT_COLLISION_GEOM_GROUP,
     ROBOT_VISUAL_GEOM_GROUP,
@@ -394,12 +395,11 @@ def render_lidars(sim: MuJoCo, due: list[LidarRecord], env_ids: torch.Tensor | N
 
 def create_sensors(sim: MuJoCo) -> None:
     """Register native sensors with the simulator's shared manager."""
-    if not sim.sensor_config:
-        return
     manager = sim.sensor_manager
     manager.num_envs = sim.num_envs
     register_cameras(sim, manager)
     register_lidars(sim, manager)
+    register_contacts(sim)
 
 
 def render_sensors(sim: MuJoCo, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:

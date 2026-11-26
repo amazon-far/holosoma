@@ -39,6 +39,7 @@ from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim import light_setup, sensor_setup
+from holosoma.simulator.isaacsim.contact_setup import IsaacContactReader
 from holosoma.simulator.isaacsim.viewer_input import ViewerInputController
 from holosoma.simulator.isaacsim.isaaclab_viewpoint_camera_controller import ViewportCameraController
 from holosoma.simulator.isaacsim.isaacsim_articulation_cfg import (
@@ -83,6 +84,8 @@ class IsaacSim(BaseSimulator):
         # Names (prefixed {file}_{body}) of scene-file bodies spawned static (kinematic),
         # populated by _load_scene_files; read in _collect_spawned_actors to classify.
         self.scene_file_static_names: set[str] = set()
+        self.contact_readers: dict[str, IsaacContactReader] = {}
+        self.contact_views: dict[str, ContactSensor] = {}
 
         sim_config: SimulationCfg = SimulationCfg(
             dt=1.0 / self.simulator_config.sim.fps,
@@ -400,7 +403,8 @@ class IsaacSim(BaseSimulator):
         configure_robot_names(self, list(self._robot.joint_names), list(self._robot.body_names))
 
         self._contact_to_robot_body_ids = torch.tensor(
-            [self.contact_sensor.body_names.index(body_name) for body_name in self.body_names],
+            [self.contact_sensor.body_names.index(self.body_name_map[body_name]) for body_name in self.body_names],
+            dtype=torch.long,
             device=self.sim_device,
         )
 
@@ -626,8 +630,7 @@ class IsaacSim(BaseSimulator):
             self.state.register(name, Columns(source, self.body_ids))
 
     def _robot_contact_forces(self) -> torch.Tensor:
-        """Sensor forces in robot body order, (num_envs, num_bodies, 3). The contact sensor's body
-        ordering differs from the robot's, so every reader must go through this gather."""
+        """Return legacy contact forces in canonical robot body order."""
         return self.contact_sensor.data.net_forces_w[:, self._contact_to_robot_body_ids]
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:

@@ -67,7 +67,7 @@ def main() -> int:
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
 
-    names = sim.get_sensor_names()
+    names = sim.sensor_manager.camera_names
     if names != ["panel_cam"]:
         print(f"[{args.simulator}] FAIL: actor-mount camera not created (got {names})")
         return 1

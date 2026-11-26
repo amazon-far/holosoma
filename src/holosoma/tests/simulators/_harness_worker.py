@@ -31,6 +31,7 @@ def _run(harness: str, args: list[str]) -> int:
     except SystemExit as exc:
         rc = exc.code
     except BaseException:
+        sys.stdout.flush()
         traceback.print_exc()
         rc = 1
     if rc is None:

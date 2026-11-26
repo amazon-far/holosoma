@@ -25,6 +25,7 @@ from holosoma.simulator.base_simulator.state import Columns
 from holosoma.simulator.mujoco import light_setup
 from holosoma.simulator.mujoco.backends import WARP_AVAILABLE, ClassicBackend, IMujocoBackend, WarpBackend
 from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags, mj_to_holosoma_quat
+from holosoma.simulator.mujoco.contact_setup import prepare_contact_targets
 from holosoma.simulator.mujoco.fields import prepare_fields, prepare_manager_fields
 from holosoma.simulator.mujoco.model_debug import print_mujoco_model_tree
 from holosoma.simulator.mujoco.robot_addressing import (
@@ -324,8 +325,7 @@ class MuJoCo(BaseSimulator):
         # Initialize bridge system using base class helper
         self._init_bridge()
 
-        # Create mounted camera sensors (cameras were added to the spec pre-compile in
-        # _setup_scene; this resolves their compiled ids and renderers). No-op if none.
+        # Register sensors after native body and geometry indices are available.
         self._create_sensors()
 
         if self.video_config.enabled:
@@ -393,6 +393,7 @@ class MuJoCo(BaseSimulator):
         lidars = {name: config for name, config in self.sensor_config.items() if isinstance(config, LidarSensorConfig)}
         self.scene_manager.add_cameras(cameras)
         self.scene_manager.add_lidar_sites(lidars)
+        self.contact_target_map = prepare_contact_targets(self.scene_manager, self.sensor_config)
 
     def _set_robot_properties(self) -> None:
         """Set robot properties including DOF names, body names, and index mappings.
@@ -544,6 +545,8 @@ class MuJoCo(BaseSimulator):
         """
         assert self.root_model and self.root_data
         if is_static:
+            if isinstance(self.backend, ClassicBackend):
+                self.backend.invalidate_contact_forces()
             mujoco.mj_forward(self.root_model, self.root_data)
             body_id = self.static_object_body_ids[actor_name]
             return list(self.root_data.xpos[body_id]), list(self.root_data.xquat[body_id])
@@ -702,6 +705,8 @@ class MuJoCo(BaseSimulator):
         Resets simulation data, sets initial robot state, configures the object registry,
         and creates tensor views for efficient state access during simulation.
         """
+        if isinstance(self.backend, ClassicBackend):
+            self.backend.invalidate_contact_forces()
         # Reset simulation data
         assert self.root_data
         mujoco.mj_resetData(self.root_model, self.root_data)
@@ -833,7 +838,7 @@ class MuJoCo(BaseSimulator):
             qvel_addr = self.object_addrs["robot"]["qvel_addr"]
             state.register("base_linear_acc", Columns(qacc, range(qvel_addr, qvel_addr + 3)))
         if b > 0:
-            state.register("contact_forces", lambda: self.backend.compute_contact_forces()[:, self._body_ids_t])
+            state.register("contact_forces", self._robot_contact_forces)
 
         env_ids = torch.arange(n, device=device)
         if self.robot_config.asset.fix_base_link:
@@ -909,6 +914,14 @@ class MuJoCo(BaseSimulator):
                 # Must run before backend.step() consumes xfrc_applied.
                 self.flush_external_wrench()
                 self.backend.step()
+
+    def _robot_contact_forces(self) -> torch.Tensor:
+        """Preserve the native total-force convention for the existing robot API."""
+        if isinstance(self.backend, ClassicBackend):
+            # Select on the owned CPU snapshot before transfer; the native GPU tensor is reusable.
+            forces = self.backend.contact_pairs().body_forces[:, self.body_ids]
+            return forces.to(self.sim_device)
+        return self.backend.compute_contact_forces()[:, self._body_ids_t]
 
     def _forward_kinematics(self) -> None:
         """Kinematics, COM position, camera/light and COM velocity stages; no collision or dynamics."""

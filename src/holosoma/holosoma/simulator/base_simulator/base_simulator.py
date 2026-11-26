@@ -12,6 +12,7 @@ from holosoma.config_types.experiment import TrainingConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
+from holosoma.config_types.sensor import ContactSensorConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.hooks import HookHandle, HookRegistry, Phase
 from holosoma.managers.terrain import TerrainManager
@@ -209,6 +210,10 @@ class BaseSimulator:
         self.simulator_config = tyro_config.simulator
         self.scene_config = tyro_config.scene
         self.sensor_config = tyro_config.sensors
+        if "contact_sensor" in self.sensor_config and not isinstance(
+            self.sensor_config["contact_sensor"], ContactSensorConfig
+        ):
+            raise ValueError("Camera and LiDAR name 'contact_sensor' conflicts with Isaac's native robot contact view.")
         self.robot_config = tyro_config.robot
         self.video_config = tyro_config.logger.video
         self.sim_device = device
@@ -252,7 +257,19 @@ class BaseSimulator:
         # The registry stays available even without sensors; native resources are created at setup.
         sim_cfg = self.simulator_config.sim
         self.sensor_manager = SensorManager(
-            device, sim_cfg.fps / sim_cfg.control_decimation_steps, num_envs=self.training_config.num_envs
+            device,
+            sim_cfg.fps / sim_cfg.control_decimation_steps,
+            num_envs=self.training_config.num_envs,
+            physics_hz=sim_cfg.fps,
+        )
+        self.sensor_contact_hook: HookHandle = self.hooks.add(
+            Phase.POST_STEP, self._publish_contact_sensors, name="sensors.contact"
+        )
+        self.hooks.add(
+            Phase.EPISODE_START,
+            self.sensor_manager.reset_contacts,
+            name="sensors.reset_contacts",
+            before=self.sensor_rerender_hook,
         )
 
         # To be overridden by subclasses
@@ -663,6 +680,11 @@ class BaseSimulator:
             self._kinematic_time += 1.0 / self.simulator_config.sim.fps
         self.hooks.emit(Phase.POST_STEP)
 
+    def _publish_contact_sensors(self) -> None:
+        """Publish solved contacts on POST_STEP; playback only updates poses."""
+        if not self.kinematic_playback:
+            self.sensor_manager.contact_step_completed()
+
     def _advance_substep(self) -> None:
         """Advance the simulation by one substep: one integration step, or one kinematics pass.
 
@@ -988,7 +1010,7 @@ class BaseSimulator:
         zeros = torch.zeros(poses.shape[0], 6, device=poses.device, dtype=poses.dtype)
         self.set_actor_states(list(names), env_ids, torch.cat([poses, zeros], dim=1))
 
-    # ----- Mounted sensor interface -----
+    # ----- Sensor interface -----
 
     def render_sensors(self, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
         """Capture all due mounted sensors at control frequency into their cached buffers.
@@ -1065,6 +1087,35 @@ class BaseSimulator:
     def get_sensor_names(self) -> list[str]:
         """Names of all created sensors, or ``[]`` if none."""
         return self.sensor_manager.names
+
+    def get_contact_data(
+        self,
+        name: str,
+        data_type: str = "forces",
+        env_ids: EnvIds | None = None,
+        device: torch.device | str | None = None,
+    ) -> torch.Tensor:
+        """Read a named contact sensor's latest force measurement.
+
+        ``forces`` is float32 ``[N, S, 3]`` in world coordinates and Newtons.
+        ``force_matrix`` is float32 ``[N, S, T, 3]``, with one column per counterpart group.
+        An unfiltered sensor has one column named ``all``.
+        S follows the configuration's source order. T follows its counterpart order.
+        Forces act on the source bodies. Returned tensors are shared and read-only.
+        Resets clear selected measurements until an update after a physics step.
+        """
+        if not self.sensor_manager.has_contact(name):
+            raise NotImplementedError(
+                f"{type(self).__name__} has no contact sensor '{name}'. "
+                f"Created contact sensors: {self.sensor_manager.contact_names}."
+            )
+        record = self.sensor_manager.get_contact(name)
+        if data_type not in record.buffers:
+            raise ValueError(
+                f"Contact sensor '{name}' has no '{data_type}' output. Available: {sorted(record.buffers)}."
+            )
+        buffer = record.buffer_on(data_type, device)
+        return buffer if env_ids is None else buffer[env_ids]
 
     def get_lidar_data(
         self,

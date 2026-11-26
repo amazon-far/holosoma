@@ -102,7 +102,7 @@ def main() -> int:
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
 
-    if not sim.get_sensor_names():
+    if not sim.sensor_manager.camera_names:
         print(f"[{args.simulator}] FAIL: no sensors created")
         return 1
 

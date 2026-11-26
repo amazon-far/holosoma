@@ -1,4 +1,4 @@
-"""Backend-neutral mounted-sensor registry, cadence, and output buffering."""
+"""Backend-neutral sensor registry, cadence, and output buffering."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from holosoma.config_types.frequency import resolve_decimation
-from holosoma.config_types.sensor import CameraSensorConfig
+from holosoma.config_types.sensor import CameraSensorConfig, ContactSensorConfig
 from holosoma.config_types.value_types import UNIT_QUATERNION_NORM_TOLERANCE
 from holosoma.simulator.shared.lidar_sensor import (
     LidarPatternProvider,
@@ -24,7 +24,7 @@ SensorRecordT = TypeVar("SensorRecordT", bound="SensorRecord")
 
 @dataclass
 class SensorRecord:
-    """Bookkeeping shared by every mounted sensor type."""
+    """Bookkeeping shared by every sensor type."""
 
     name: str
     config: SensorConfig
@@ -113,27 +113,65 @@ class LidarRecord(SensorRecord):
         return self.pattern_provider.pattern_at(sim_time)
 
 
+@dataclass(kw_only=True)
+class ContactRecord(SensorRecord):
+    """A contact measurement with stable source and counterpart axes."""
+
+    config: ContactSensorConfig
+    step_counter: int = 0
+    """Completed physics steps. Decimated contacts first update after a full interval."""
+    capture: Callable[[], torch.Tensor]
+    """Return world-frame forces ``[N, sources, counterparts or 1, 3]``."""
+
+    def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
+        """Keep per-source totals consistent with each published force matrix."""
+        super().set_buffer(output, tensor)
+        if output == "force_matrix":
+            super().set_buffer("forces", tensor.sum(dim=2))
+
+    def update(self) -> None:
+        """Publish an owned sample from the latest solved physics step."""
+        matrix = self.capture()
+        buffer = self.buffers["force_matrix"]
+        if matrix.shape != buffer.shape:
+            raise RuntimeError(
+                f"Contact sensor '{self.name}' expected forces {tuple(buffer.shape)}, got {tuple(matrix.shape)}."
+            )
+        matrix = matrix.to(device=buffer.device, dtype=torch.float32).clone()
+        self.set_buffer("force_matrix", matrix)
+
+
 class SensorManager:
     """Cross-backend sensor registry and runtime mounts, available even without configured sensors."""
 
-    def __init__(self, device: str, control_hz: float, *, num_envs: int = 1) -> None:
+    def __init__(
+        self,
+        device: str,
+        control_hz: float,
+        *,
+        physics_hz: float,
+        num_envs: int = 1,
+    ) -> None:
         self.device = device
         self.control_hz = control_hz
+        self.physics_hz = physics_hz
         self.num_envs = num_envs
         self._cameras: dict[str, CameraRecord] = {}
         self._lidars: dict[str, LidarRecord] = {}
+        self._contacts: dict[str, ContactRecord] = {}
+        self.contact_step_counter = 0
         self._order: list[str] = []
         self._last_camera_due: set[str] = set()
         self._last_lidar_due: set[str] = set()
 
-    def _initial_mount_poses(self, config: SensorConfig) -> torch.Tensor:
+    def _initial_mount_poses(self, config: CameraSensorConfig | LidarSensorConfig) -> torch.Tensor:
         mount = config.mount
         w, x, y, z = mount.orientation
         pose = torch.tensor([*mount.position, x, y, z, w], dtype=torch.float32, device=self.device)
         return pose.repeat(self.num_envs, 1)
 
     def _assert_name_available(self, name: str) -> None:
-        if name in self._cameras or name in self._lidars:
+        if name in self._order:
             raise ValueError(f"Sensor '{name}' already registered.")
 
     def register_camera(self, name: str, config: CameraSensorConfig) -> CameraRecord:
@@ -148,6 +186,32 @@ class SensorManager:
             mount_poses=self._initial_mount_poses(config),
         )
         self._cameras[name] = record
+        self._order.append(name)
+        return record
+
+    def register_contact(
+        self,
+        name: str,
+        config: ContactSensorConfig,
+        capture: Callable[[], torch.Tensor],
+    ) -> ContactRecord:
+        self._assert_name_available(name)
+        effective = resolve_decimation(
+            config.update_decimation,
+            self.physics_hz,
+            field=f"contact '{name}' update_decimation",
+        )
+        record = ContactRecord(name=name, config=config, effective_decimation=effective, capture=capture)
+        matrix = torch.zeros(
+            self.num_envs,
+            len(config.sources),
+            len(config.counterparts) or 1,
+            3,
+            device=self.device,
+            dtype=torch.float32,
+        )
+        record.set_buffer("force_matrix", matrix)
+        self._contacts[name] = record
         self._order.append(name)
         return record
 
@@ -179,6 +243,14 @@ class SensorManager:
     def has_lidar(self, name: str) -> bool:
         return name in self._lidars
 
+    def has_contact(self, name: str) -> bool:
+        return name in self._contacts
+
+    def get_contact(self, name: str) -> ContactRecord:
+        if name not in self._contacts:
+            raise KeyError(f"No contact sensor named '{name}'. Registered contact sensors: {sorted(self._contacts)}.")
+        return self._contacts[name]
+
     def get(self, name: str) -> CameraRecord:
         if name not in self._cameras:
             raise KeyError(f"No camera named '{name}'. Registered cameras: {sorted(self._cameras)}.")
@@ -194,6 +266,8 @@ class SensorManager:
             return self._cameras[name]
         if name in self._lidars:
             return self._lidars[name]
+        if name in self._contacts:
+            return self._contacts[name]
         raise KeyError(f"No sensor named '{name}'. Registered sensors: {self._order}.")
 
     def _mount_env_ids(self, env_ids: torch.Tensor | None) -> torch.Tensor:
@@ -261,12 +335,20 @@ class SensorManager:
         return list(self._lidars)
 
     @property
+    def contact_names(self) -> list[str]:
+        return list(self._contacts)
+
+    @property
     def cameras(self) -> list[CameraRecord]:
         return list(self._cameras.values())
 
     @property
     def lidars(self) -> list[LidarRecord]:
         return list(self._lidars.values())
+
+    @property
+    def contacts(self) -> list[ContactRecord]:
+        return list(self._contacts.values())
 
     @staticmethod
     def _collect_due(records: Sequence[SensorRecordT]) -> list[SensorRecordT]:
@@ -288,6 +370,26 @@ class SensorManager:
         self._last_lidar_due = {record.name for record in due}
         return due
 
+    def reset_contacts(self, env_ids: torch.Tensor) -> None:
+        """Clear selected environments until a scheduled publication after a physics step."""
+        if not self._contacts:
+            return
+        ids = self._mount_env_ids(env_ids)
+        if ids.numel() == 0:
+            return
+        for record in self.contacts:
+            for output, buffer in list(record.buffers.items()):
+                record.set_buffer_rows(output, ids, torch.zeros_like(buffer[ids]))
+
+    def contact_step_completed(self) -> None:
+        """Publish contacts after completed physics intervals."""
+        records = self.contacts
+        if not records:
+            return
+        self.contact_step_counter += 1
+        for record in self._collect_due(records):
+            record.update()
+
     @property
     def last_due(self) -> set[str]:
         """Camera names rendered by the latest camera collection."""
@@ -298,11 +400,7 @@ class SensorManager:
         return self._last_lidar_due
 
     def frames_produced(self, name: str) -> int:
-        record: SensorRecord
-        if name in self._cameras:
-            record = self._cameras[name]
-        elif name in self._lidars:
-            record = self._lidars[name]
-        else:
-            raise KeyError(f"No sensor named '{name}'. Registered sensors: {self._order}.")
+        record = self.get_sensor(name)
+        if isinstance(record, ContactRecord):
+            return record.step_counter // record.effective_decimation
         return record.step_counter // record.effective_decimation + 1

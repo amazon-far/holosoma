@@ -97,7 +97,7 @@ def main() -> int:
     # to the real placement on every backend.
     env_origins = sim.env_origins
 
-    if not sim.get_sensor_names():
+    if not sim.sensor_manager.camera_names:
         print(f"[{args.simulator}] FAIL: no sensors created")
         return 1
 

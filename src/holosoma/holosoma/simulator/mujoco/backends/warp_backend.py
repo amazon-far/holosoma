@@ -342,17 +342,16 @@ class WarpBackend(IMujocoBackend):
         # stable for both the physics and render graphs and reuse the native stream.
         self._camera_mount_arrays = (wp.to_torch(self.mjw_model.cam_pos), wp.to_torch(self.mjw_model.cam_quat))
         self._lidar_mount_arrays = (wp.to_torch(self.mjw_model.site_pos), wp.to_torch(self.mjw_model.site_quat))
-        self._sensor_mount_wp_stream = wp.get_stream(self.mjw_device)
-        self._sensor_mount_stream = torch.cuda.ExternalStream(
-            self._sensor_mount_wp_stream.cuda_stream, device=self.device
-        )
+        self.wp_stream = wp.get_stream(self.mjw_device)
+        self.torch_stream = wp.stream_to_torch(self.wp_stream)
+        self._last_torch_consumer = torch.cuda.current_stream(self.device)
 
         # Capture simulation step as CUDA graph for optimal performance
         # This eliminates per-kernel launch overhead (~20-30 kernels per step)
         # and enables GPU pipelining, providing 5-10x speedup
         logger.info("Capturing CUDA graph for simulation step...")
-        with wp.ScopedDevice(self.mjw_device):
-            with wp.ScopedCapture() as capture:
+        with wp.ScopedStream(self.wp_stream):
+            with wp.ScopedCapture(stream=self.wp_stream) as capture:
                 mjw.step(self.mjw_model, self.mjw_data)
                 self._body_contact_forces.zero_()
                 mjw.contact_force(
@@ -376,7 +375,7 @@ class WarpBackend(IMujocoBackend):
                 )
             self.step_graph = capture.graph
             # Captured after the model-field expansion above, for the same reason as the step graph.
-            with wp.ScopedCapture() as capture:
+            with wp.ScopedCapture(stream=self.wp_stream) as capture:
                 self._launch_forward_kinematics()
             self.fk_graph: Graph | None = capture.graph
         logger.info("CUDA graph captured successfully")
@@ -405,7 +404,8 @@ class WarpBackend(IMujocoBackend):
 
         logger.info("Syncing initial state from CPU to GPU...")
 
-        with wp.ScopedDevice(self.mjw_device):
+        consumer = self.wait_for_torch()
+        with wp.ScopedStream(self.wp_stream):
             # Copy qpos and qvel from CPU to GPU for all environments
             # Tile the state across all environments
             qpos_cpu = np.tile(data.qpos, (self.num_envs, 1))
@@ -420,6 +420,7 @@ class WarpBackend(IMujocoBackend):
             # (body positions, orientations, etc.)
             mjw.forward(self.mjw_model, self.mjw_data)
 
+        consumer.wait_stream(self.torch_stream)
         self._physics_time = float(data.time)
         logger.info("Initial state synced to GPU successfully")
 
@@ -435,11 +436,13 @@ class WarpBackend(IMujocoBackend):
         """
         import warp as wp
 
-        with wp.ScopedDevice(self.mjw_device):
+        consumer = self.wait_for_torch()
+        with wp.ScopedStream(self.wp_stream):
             if self.fk_graph is None:
                 self._launch_forward_kinematics()
             else:
-                wp.capture_launch(self.fk_graph)
+                wp.capture_launch(self.fk_graph, stream=self.wp_stream)
+        consumer.wait_stream(self.torch_stream)
         self._kinematics_pending = False
 
     def _launch_forward_kinematics(self) -> None:
@@ -448,6 +451,15 @@ class WarpBackend(IMujocoBackend):
         mjw.camlight(self.mjw_model, self.mjw_data)
         mjw.com_vel(self.mjw_model, self.mjw_data)
 
+    def wait_for_torch(self) -> torch.cuda.Stream:
+        """Order native writes after current inputs and the prior consumer's queued reads."""
+        consumer = torch.cuda.current_stream(self.device)
+        if self._last_torch_consumer != consumer:
+            self.torch_stream.wait_stream(self._last_torch_consumer)
+        self.torch_stream.wait_stream(consumer)
+        self._last_torch_consumer = consumer
+        return consumer
+
     def step(self) -> None:
         """Advance batched simulation by one timestep using CUDA graph.
 
@@ -455,15 +467,15 @@ class WarpBackend(IMujocoBackend):
         This eliminates per-kernel launch overhead (~20-30 kernels/step) and
         provides 5-10x speedup compared to individual kernel launches.
 
-        Note: No explicit synchronization here - allows CPU-GPU pipelining.
-        GPU work completes asynchronously while CPU prepares next frame.
-        Synchronization happens only when needed (e.g., in get_render_data()).
+        Device-side waits order Torch inputs and previous shared-buffer reads with the solve.
+        The host does not wait for GPU completion.
         """
         import warp as wp
 
-        with wp.ScopedDevice(self.mjw_device):
-            wp.capture_launch(self.step_graph)
-            # No wp.synchronize() - let GPU work in parallel with CPU
+        consumer = self.wait_for_torch()
+        with wp.ScopedStream(self.wp_stream):
+            wp.capture_launch(self.step_graph, stream=self.wp_stream)
+        consumer.wait_stream(self.torch_stream)
         self._physics_time += float(self.model.opt.timestep)
         self._kinematics_pending = True
 
@@ -732,6 +744,7 @@ class WarpBackend(IMujocoBackend):
         torch.Tensor
             Contact forces [num_envs, model.nbody, 3].
         """
+        self.wait_for_torch().wait_stream(self.torch_stream)
         return self._body_contact_forces_t
 
     def get_applied_forces_view(self) -> torch.Tensor:
@@ -875,10 +888,9 @@ class WarpBackend(IMujocoBackend):
         stream waits for the native pose update so immediate rendering sees it. This is a runtime
         update outside capture; shared validation performs host checks before reaching this writer.
         """
-        stream = self._sensor_mount_stream
-        consumer = torch.cuda.current_stream(self.device)
-        stream.wait_stream(consumer)
-        with torch.cuda.stream(stream), wp.ScopedStream(self._sensor_mount_wp_stream):
+        stream = self.torch_stream
+        consumer = self.wait_for_torch()
+        with torch.cuda.stream(stream), wp.ScopedStream(self.wp_stream):
             pos, quat = self._camera_mount_arrays if isinstance(record, CameraRecord) else self._lidar_mount_arrays
             pos[env_ids, native_id] = positions.to(pos)
             quat[env_ids, native_id] = orientations.to(quat)

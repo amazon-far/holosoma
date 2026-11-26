@@ -158,6 +158,7 @@ def _set_contacts(
         frame=np.tile(np.eye(3, dtype=np.float64).reshape(1, 9), (len(geom_pairs), 1)),
     )
     backend.data = cast("Any", SimpleNamespace(ncon=len(geom_pairs), contact=contact))
+    backend.invalidate_contact_forces()
 
     def contact_force(
         _model: Any,

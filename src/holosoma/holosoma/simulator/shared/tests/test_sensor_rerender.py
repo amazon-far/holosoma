@@ -29,7 +29,7 @@ def _depth_camera(manager: SensorManager, name: str) -> Any:
 
 
 def test_camera_buffer_rows_apply_depth_clipping_and_drop_device_copies() -> None:
-    manager = SensorManager(device="cpu", control_hz=50.0)
+    manager = SensorManager(device="cpu", control_hz=50.0, physics_hz=50.0)
     record = _depth_camera(manager, "cam")
     stale_copy = record.buffer_on("depth", "meta")
     rows = torch.tensor([float("inf"), 1.0, 0.05, 2.0]).view(1, 2, 2, 1)
@@ -42,7 +42,7 @@ def test_camera_buffer_rows_apply_depth_clipping_and_drop_device_copies() -> Non
 
 
 def test_buffer_rows_leave_previously_published_buffers_untouched() -> None:
-    manager = SensorManager(device="cpu", control_hz=50.0)
+    manager = SensorManager(device="cpu", control_hz=50.0, physics_hz=50.0)
     record = _depth_camera(manager, "cam")
     published = record.buffers["depth"]
 

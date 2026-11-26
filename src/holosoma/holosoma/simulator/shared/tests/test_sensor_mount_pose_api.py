@@ -17,7 +17,7 @@ pytestmark = pytest.mark.no_sim
 
 @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
 def test_empty_manager_is_usable_before_native_device_initialization(device: str) -> None:
-    manager = SensorManager(device, 50.0, num_envs=3)
+    manager = SensorManager(device, 50.0, physics_hz=50.0, num_envs=3)
     assert manager.names == []
     assert manager.collect_due() == []
     assert manager.collect_lidars_due() == []
@@ -30,7 +30,7 @@ def manager(request: pytest.FixtureRequest) -> SensorManager:
     mount = SensorMountConfig(
         target_kind="actor", target="fixture", position=[0.1, 0.2, 0.3], orientation=[0.0, 1.0, 0.0, 0.0]
     )
-    manager = SensorManager("cpu", 50.0, num_envs=3)
+    manager = SensorManager("cpu", 50.0, physics_hz=50.0, num_envs=3)
     record: SensorRecord
     if request.param == "camera":
         record = manager.register_camera("sensor", CameraSensorConfig(mount=mount, update_decimation=3))
@@ -61,6 +61,7 @@ def test_subset_order_broadcast_and_config_independence(manager: SensorManager) 
     written_ids, written_poses = writer.call_args.args
     torch.testing.assert_close(written_ids, ids)
     torch.testing.assert_close(written_poses, updates)
+    assert isinstance(record.config, (CameraSensorConfig, LidarSensorConfig))
     assert record.config.mount.position == [0.1, 0.2, 0.3]
     assert record.config.mount.orientation == [0.0, 1.0, 0.0, 0.0]
     updates.zero_()

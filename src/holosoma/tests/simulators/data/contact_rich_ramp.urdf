@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<robot name="contact_ramp">
+  <link name="ramp">
+    <inertial>
+      <mass value="1"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.0360417" ixy="0" ixz="0" iyy="0.0927083" iyz="0" izz="0.1270833"/>
+    </inertial>
+    <visual>
+      <geometry><box size="1.05 0.65 0.10"/></geometry>
+      <material name="blue"><color rgba="0.1 0.3 0.8 1"/></material>
+    </visual>
+    <collision><geometry><box size="1.05 0.65 0.10"/></geometry></collision>
+  </link>
+</robot>
