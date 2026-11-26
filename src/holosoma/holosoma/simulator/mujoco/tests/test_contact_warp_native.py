@@ -21,6 +21,7 @@ if not torch.cuda.is_available():
 from holosoma.config_types.full_sim import FullSimConfig  # noqa: E402
 from holosoma.config_types.sensor import ContactSensorConfig  # noqa: E402
 from holosoma.config_values.simulator import mujoco as mujoco_config  # noqa: E402
+from holosoma.hooks import Phase  # noqa: E402
 from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend  # noqa: E402
 from holosoma.simulator.mujoco.contact_warp import WarpContactReader  # noqa: E402
 from holosoma.simulator.shared.sensor_manager import SensorManager  # noqa: E402
@@ -96,7 +97,6 @@ def test_solve_and_fk_wait_for_delayed_nondefault_torch_inputs() -> None:
 
 
 def test_simulator_close_releases_queries_with_readers_and_samples_retained() -> None:
-    from holosoma.simulator.base_simulator.hooks import Phase
     from tests.simulators.contact_sensor_assert import _build
 
     sim = _build("mjwarp", 2)
@@ -114,7 +114,6 @@ def test_simulator_close_releases_queries_with_readers_and_samples_retained() ->
     completed = torch.cuda.Event()
     try:
         sim.simulate_at_each_physics_step()
-        sim.hooks.emit(Phase.POST_STEP)
         expected = sim.get_contact_data("robot_ground").clone()
         torch.cuda.synchronize(backend.device)
         live_before = wp.get_mempool_used_mem_current(backend.mjw_device)
@@ -125,13 +124,13 @@ def test_simulator_close_releases_queries_with_readers_and_samples_retained() ->
             completed.record()
         assert not completed.query()
 
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
         assert completed.query()
         assert all(reader.backend is None for reader in readers)
         assert all(resource() is None for resource in resources)
         live_after = wp.get_mempool_used_mem_current(backend.mjw_device)
         assert live_before - live_after >= query_bytes
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
         for reader in readers:
             reader.close()
         assert wp.get_mempool_used_mem_current(backend.mjw_device) == live_after
@@ -141,7 +140,7 @@ def test_simulator_close_releases_queries_with_readers_and_samples_retained() ->
         # CUDA allocators can retain free blocks. Reserved memory is not a count of live allocations.
         print(f"Torch allocated/reserved bytes: {torch.cuda.memory_allocated()} / {torch.cuda.memory_reserved()}")
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
 
 
 def test_reader_close_releases_selection_but_preserves_an_external_torch_alias() -> None:
@@ -183,6 +182,22 @@ def test_reader_close_releases_selection_but_preserves_an_external_torch_alias()
     finally:
         reader.close()
         backend.close()
+
+
+def test_warp_without_configured_contacts_keeps_legacy_history_without_readers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.simulators.contact_sensor_assert import _assert_legacy_only, _build
+
+    def unexpected_reader(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Unconfigured contacts must not allocate a Warp query graph or its arrays.")
+
+    monkeypatch.setattr(WarpContactReader, "__init__", unexpected_reader)
+    sim = _build("mjwarp", 2, configured_contacts=False)
+    try:
+        _assert_legacy_only(sim)
+    finally:
+        sim.hooks.emit(Phase.CLOSE)
 
 
 def test_captured_queries_keep_empty_opposite_and_delayed_previous_force_samples() -> None:

@@ -28,6 +28,7 @@ from holosoma.config_types.sensor import (
 from holosoma.hooks import HookCloseError, HookRegistry, Phase
 from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin, FramePacket, StreamKey
 from holosoma.simulator.plugins.tests._task import plugin_task
+from holosoma.tests._without_ros import without_ros
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.simulator_config import SimulatorType
 
@@ -285,6 +286,7 @@ def test_validation_rejects_out_of_range_env() -> None:
         FakeConsumer(None, sim, streams=[("head", "rgb", 5)])
 
 
+@without_ros
 def test_config_layer_imports_without_rclpy() -> None:
     # The optional-dependency guarantee: importing the config + config_values + plugins package must
     # not import rclpy (the deferred get_cls import is the only path that would). Guards against a

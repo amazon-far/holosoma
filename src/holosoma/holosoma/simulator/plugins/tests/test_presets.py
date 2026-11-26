@@ -32,6 +32,7 @@ from holosoma.config_values.wbt.g1 import sensor as g1_cameras
 from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.camera_consumer import CameraIntrinsics, FramePacket
 from holosoma.simulator.plugins.tests._task import plugin_task
+from holosoma.tests._without_ros import without_ros
 
 pytestmark = pytest.mark.no_sim
 
@@ -116,6 +117,7 @@ def test_waist_depth_color_preset_colorizes_depth_over_rgb_format() -> None:
     assert {r.camera for r in inst.routes.values()} <= set(_G1_WAIST_RIG)
 
 
+@without_ros
 def test_waist_depth_raw_and_color_preset_shares_one_snapshot_per_camera() -> None:
     # The combined preset publishes each waist camera BOTH ways (raw 32FC1 + colorized jpeg) from a
     # single node. The two routes per camera share the same (camera, "depth", env) stream key, so
@@ -136,6 +138,7 @@ def test_waist_depth_raw_and_color_preset_shares_one_snapshot_per_camera() -> No
     assert "rclpy" not in sys.modules
 
 
+@without_ros
 def test_real_egress_wanted_streams_and_sync_default() -> None:
     # Construct the REAL ROS2ImagePlugin (no start -> no ROS) and check its wiring: wanted_streams
     # from routes, and lossless synchronous publication by default.
@@ -146,6 +149,7 @@ def test_real_egress_wanted_streams_and_sync_default() -> None:
     assert "rclpy" not in sys.modules
 
 
+@without_ros
 def test_pointcloud_preset_matches_default_lidar_sensor_key() -> None:
     inst = PLUGIN_REGISTRY["ros2-pointcloud"]
     assert isinstance(inst, ROS2PointCloudPluginConfig)
@@ -201,6 +205,7 @@ def _depth_frame(camera: str, value: float = 2.0, h: int = 6, w: int = 6) -> Fra
     return FramePacket(camera=camera, modality="depth", env_id=0, array=arr, sim_time=0.0, intrinsics=intr)
 
 
+@without_ros
 def test_encode_threads_route_colormap_and_range_without_ros() -> None:
     # ROS2ImagePlugin._encode is ROS-free (never touches the node/simulator), so we can verify the
     # route's depth_colormap/depth_range actually reach encode_frame WITHOUT an rclpy env. Each knob

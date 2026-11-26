@@ -16,14 +16,11 @@ Live end-to-end publishing over DDS is validated manually on the cluster (see
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, cast
+
 import numpy as np
 import numpy.typing as npt
 import pytest
-
-pytest.importorskip("rclpy")
-pytest.importorskip("sensor_msgs")
-
-from typing import TYPE_CHECKING, Any, cast
 
 from holosoma.config_types.plugin import ROS2ImagePluginConfig, ROS2ImageRoute
 from holosoma.config_types.sensor import (
@@ -160,6 +157,8 @@ def fake_ros(monkeypatch: pytest.MonkeyPatch) -> dict[str, _FakeNode]:
     at call time, so we patch the source modules). Captures the constructed fake node on the
     returned holder so tests can inspect the publishers.
     """
+    pytest.importorskip("rclpy")
+    pytest.importorskip("sensor_msgs")
     import threading
 
     import rclpy.executors

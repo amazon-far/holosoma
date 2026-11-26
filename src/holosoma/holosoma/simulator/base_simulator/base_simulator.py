@@ -12,6 +12,7 @@ from holosoma.config_types.experiment import TrainingConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
+from holosoma.config_types.sensor import ContactSensorConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.hooks import HookHandle, HookRegistry, Phase
 from holosoma.managers.terrain import TerrainManager
@@ -209,9 +210,10 @@ class BaseSimulator:
         self.simulator_config = tyro_config.simulator
         self.scene_config = tyro_config.scene
         self.sensor_config = tyro_config.sensors
-        for name in self.sensor_config:
-            if name == "contact_sensor":
-                raise ValueError(f"Sensor name '{name}' is reserved for native contact sensors. Choose another name.")
+        if "contact_sensor" in self.sensor_config and not isinstance(
+            self.sensor_config["contact_sensor"], ContactSensorConfig
+        ):
+            raise ValueError("Camera and LiDAR name 'contact_sensor' conflicts with Isaac's native robot contact view.")
         self.robot_config = tyro_config.robot
         self.video_config = tyro_config.logger.video
         self.sim_device = device
@@ -676,12 +678,12 @@ class BaseSimulator:
         self._advance_substep()
         if self.kinematic_playback:
             self._kinematic_time += 1.0 / self.simulator_config.sim.fps
+        self.hooks.emit(Phase.POST_STEP)
 
     def _publish_contact_sensors(self) -> None:
         """Publish solved contacts on POST_STEP; playback only updates poses."""
         if not self.kinematic_playback:
             self.sensor_manager.contact_step_completed()
-        self.hooks.emit(Phase.POST_STEP)
 
     def _advance_substep(self) -> None:
         """Advance the simulation by one substep: one integration step, or one kinematics pass.
@@ -1088,7 +1090,7 @@ class BaseSimulator:
 
     def get_contact_data(
         self,
-        name: str = "contact_sensor",
+        name: str,
         data_type: str = "forces",
         env_ids: EnvIds | None = None,
         device: torch.device | str | None = None,

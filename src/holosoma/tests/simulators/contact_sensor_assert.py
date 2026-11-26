@@ -15,10 +15,11 @@ PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from holosoma.hooks import Phase  # noqa: E402
 from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit  # noqa: E402
 
 
-def _build(backend: str, num_envs: int, device: str | None = None):
+def _build(backend: str, num_envs: int, device: str | None = None, *, configured_contacts: bool = True):
     import torch
 
     from holosoma.config_types.scene import PhysicsConfig, RigidObjectConfig, SceneConfig
@@ -48,6 +49,12 @@ def _build(backend: str, num_envs: int, device: str | None = None):
             ],
             counterparts=[terrain],
         ),
+        "body_unfiltered": ContactSensorConfig(
+            sources=[
+                ContactTargetConfig(target_kind="robot_link", target="torso_link"),
+                ContactTargetConfig(target_kind="robot_link", target="left_ankle_roll_link"),
+            ]
+        ),
         "box_robot": ContactSensorConfig(sources=[actor("top")], counterparts=[ContactTargetConfig()]),
         "box_foot": ContactSensorConfig(
             sources=[actor("top")],
@@ -69,7 +76,9 @@ def _build(backend: str, num_envs: int, device: str | None = None):
             counterparts=[ContactTargetConfig(target_kind="robot_link", target="right_ankle_roll_link")],
         ),
     }
-    config = build_run_sim_config(backend, "empty", "g1-29dof", "terrain_locomotion_plane", sensors=sensors)
+    config = build_run_sim_config(
+        backend, "empty", "g1-29dof", "terrain_locomotion_plane", sensors=sensors if configured_contacts else {}
+    )
     asset = RigidObjectConfig(
         urdf_file="holosoma/data/scene_objects/boxes/small_box.urdf",
         usd_file="holosoma/data/scene_objects/boxes/small_box.usda",
@@ -105,19 +114,14 @@ def _build(backend: str, num_envs: int, device: str | None = None):
 
 
 def _control_step(sim):
-    from holosoma.simulator.base_simulator.hooks import Phase
-
     sim.hooks.emit(Phase.FRAME_BEGIN)
     for _ in range(sim.simulator_config.sim.control_decimation_steps):
         sim.simulate_at_each_physics_step()
-        sim.hooks.emit(Phase.POST_STEP)
     sim.hooks.emit(Phase.FRAME_END)
 
 
 def _settle_boxes(sim):
     import torch
-
-    from holosoma.simulator.base_simulator.hooks import Phase
 
     ids = torch.arange(sim.num_envs, device=sim.sim_device)
     heights = torch.tensor([0.4, 0.05], device=sim.sim_device).repeat_interleave(sim.num_envs)
@@ -130,7 +134,6 @@ def _settle_boxes(sim):
         sim.hooks.emit(Phase.FRAME_BEGIN)
         for _ in range(decimation):
             sim.simulate_at_each_physics_step()
-            sim.hooks.emit(Phase.POST_STEP)
             states = sim.get_actor_states(["top", "floor_box"], ids)
             settled = (
                 (torch.linalg.vector_norm(states[:, 7:10], dim=-1) < linear_limit).all()
@@ -155,7 +158,6 @@ def _settle_boxes(sim):
 def _assert_contract(sim):
     import torch
 
-    from holosoma.simulator.base_simulator.hooks import Phase
     from holosoma.utils.rotations import quat_apply
 
     _settle_boxes(sim)
@@ -177,17 +179,19 @@ def _assert_contract(sim):
     torch.testing.assert_close(sim.contact_recorder.latest_forces, sim.contact_forces)
     assert sim.get_contact_data("body_pair").shape == (sim.num_envs, 1, 3)
     assert torch.count_nonzero(sim.get_contact_data("body_pair")) == 0
-    assert sim.get_contact_data().shape == (sim.num_envs, sim.num_bodies, 3)
-    assert sim.get_contact_data().dtype == torch.float32
+    assert set(sim.sensor_manager.contact_names) == set(sim.sensor_config)
+    assert sim.contact_forces.shape == (sim.num_envs, sim.num_bodies, 3)
+    assert sim.contact_forces.dtype == torch.float32
     assert torch.count_nonzero(sim.get_contact_data("marker")) == 0
     assert torch.count_nonzero(sim.get_contact_data("to_marker")) == 0
     assert torch.count_nonzero(sim.get_contact_data("box_robot")) == 0
     robot_ground = sim.get_contact_data("robot_ground")[:, 0]
     assert torch.all(torch.linalg.vector_norm(robot_ground, dim=-1) > 1)
-    torch.testing.assert_close(robot_ground, sim.get_contact_data().sum(dim=1), atol=1.0, rtol=0.05)
-    selected = [sim.body_names.index(name) for name in ("torso_link", "left_ankle_roll_link")]
+    # On a horizontal plane, normal forces match the vertical component of legacy total forces.
+    torch.testing.assert_close(robot_ground[:, 2], sim.contact_forces[:].sum(dim=1)[:, 2], atol=1.0, rtol=0.05)
+    torch.testing.assert_close(robot_ground[:, :2], torch.zeros_like(robot_ground[:, :2]), atol=0.1, rtol=0)
     torch.testing.assert_close(
-        sim.get_contact_data("body_ground"), sim.get_contact_data()[:, selected], atol=0.1, rtol=0.05
+        sim.get_contact_data("body_ground"), sim.get_contact_data("body_unfiltered"), atol=0.1, rtol=0.05
     )
     # Tangential slip distinguishes total force from the normal-only measurement.
     ids = torch.arange(sim.num_envs, device=sim.sim_device)
@@ -195,7 +199,6 @@ def _assert_contract(sim):
     states[:, 7] = 1
     sim.set_actor_states(["floor_box"], ids, states)
     sim.simulate_at_each_physics_step()
-    sim.hooks.emit(Phase.POST_STEP)
     normal = sim.get_contact_data("pairs")[:, 1]
     total = sim.get_contact_data("floor_total")[:, 0]
     assert torch.all(normal[:, 2] > 1)
@@ -230,12 +233,29 @@ def _assert_contract(sim):
     states[:, 7:] = 0
     sim.set_actor_states(["top"], ids, states)
     sim.simulate_at_each_physics_step()
-    sim.hooks.emit(Phase.POST_STEP)
     sim.render_sensors()
     box_foot = sim.get_contact_data("box_foot")
     assert torch.all(torch.linalg.vector_norm(box_foot[:, 0], dim=-1) > 1), box_foot
     assert torch.all(torch.linalg.vector_norm(sim.get_contact_data("box_robot")[:, 0], dim=-1) > 1)
     torch.testing.assert_close(sim.get_contact_data("foot_box"), -box_foot, atol=0.1, rtol=0.02)
+
+
+def _assert_legacy_only(sim):
+    import torch
+
+    assert sim.sensor_manager.contact_names == []
+    assert sim.get_sensor_names() == []
+    _settle_boxes(sim)
+    sim.hooks.emit(Phase.FRAME_BEGIN)
+    for index in range(sim.simulator_config.sim.control_decimation_steps):
+        sim.simulate_at_each_physics_step()
+        forces = sim.contact_forces[:].clone()
+        assert forces.shape == (sim.num_envs, sim.num_bodies, 3)
+        assert torch.all(forces.norm(dim=-1).sum(dim=1) > 1)
+        torch.testing.assert_close(sim.contact_recorder.recorded_forces[:, index], forces)
+        torch.testing.assert_close(sim.contact_recorder.latest_forces, forces)
+    sim.hooks.emit(Phase.FRAME_END)
+    assert sim.sensor_manager.contact_names == []
 
 
 def _assert_isaac_setup_errors(sim):
@@ -279,18 +299,22 @@ def main() -> int:
     parser.add_argument("--simulator", choices=["mujoco", "mjwarp", "isaacsim"], required=True)
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--device")
+    parser.add_argument("--legacy-only", action="store_true")
     parser.add_argument("--result-file", type=Path, required=True)
     args = parser.parse_args()
-    sim = _build(args.simulator, args.num_envs, args.device)
+    sim = _build(args.simulator, args.num_envs, args.device, configured_contacts=not args.legacy_only)
     try:
-        _assert_contract(sim)
-        if args.simulator == "isaacsim":
+        if args.legacy_only:
+            _assert_legacy_only(sim)
+        else:
+            _assert_contract(sim)
+        if args.simulator == "isaacsim" and not args.legacy_only:
             _assert_isaac_setup_errors(sim)
         args.result_file.write_text("OK\n")
         print(f"Contact sensor contracts passed: {args.simulator}, {args.num_envs} environments.")
         return 0
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
 
 
 if __name__ == "__main__":

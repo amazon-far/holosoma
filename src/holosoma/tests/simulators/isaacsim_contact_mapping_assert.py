@@ -14,6 +14,7 @@ PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from holosoma.hooks import Phase  # noqa: E402
 from tests.simulators import _robot_presets  # noqa: E402
 from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit  # noqa: E402
 from tests.simulators.robot_name_mapping_assert import mapped_robot  # noqa: E402
@@ -73,7 +74,6 @@ def _build() -> Any:
 def _assert_mapping(sim: Any) -> None:
     import torch
 
-    from holosoma.simulator.base_simulator.hooks import Phase
     from holosoma.utils.rotations import quat_apply
 
     assert sim.robot_config.asset.fix_base_link
@@ -98,7 +98,6 @@ def _assert_mapping(sim: Any) -> None:
 
     sim.hooks.emit(Phase.FRAME_BEGIN)
     sim.simulate_at_each_physics_step()
-    sim.hooks.emit(Phase.POST_STEP)
     native = sim.contact_sensor.data.net_forces_w
     expected = torch.stack(
         [native[:, sim.contact_sensor.body_names.index(name)] for name in ("slider", "base_link", "link2")], dim=1
@@ -106,7 +105,7 @@ def _assert_mapping(sim: Any) -> None:
     # A nonzero base row makes reordered or omitted body mappings observable.
     assert torch.all(torch.linalg.vector_norm(expected[:, 1], dim=-1) > 1), expected
     torch.testing.assert_close(sim.contact_forces[:], expected)
-    torch.testing.assert_close(sim.get_contact_data(), expected)
+    assert set(sim.sensor_manager.contact_names) == set(sim.sensor_config)
     torch.testing.assert_close(sim.contact_recorder.recorded_forces[:, 0], expected)
     helper_id = sim.contact_sensor.body_names.index("link1")
     unfiltered_expected = torch.stack([native[:, helper_id], native.sum(dim=1), expected[:, 1]], dim=1)
@@ -126,18 +125,16 @@ def _assert_mapping(sim: Any) -> None:
     sim.hooks.emit(Phase.FRAME_END)
 
     # Episode reset clears owned measurements. Rendering preserves legacy forces without a solver step.
-    untouched = sim.get_contact_data()[1].clone()
+    untouched = unfiltered[1].clone()
     legacy = sim.contact_forces[:].clone()
     sim.hooks.emit(Phase.EPISODE_START, ids[:1])
     sim.render_sensors(ids[:1], 1)
-    assert sim.get_contact_data()[0].count_nonzero() == 0
-    torch.testing.assert_close(sim.get_contact_data()[1], untouched)
     torch.testing.assert_close(sim.contact_forces[:], legacy)
     assert sim.get_contact_data("unfiltered")[0].count_nonzero() == 0
+    torch.testing.assert_close(sim.get_contact_data("unfiltered")[1], untouched)
     torch.testing.assert_close(sim.get_contact_data("unfiltered")[1], unfiltered_expected[1])
     torch.testing.assert_close(unfiltered, unfiltered_expected)
     sim.simulate_at_each_physics_step()
-    sim.hooks.emit(Phase.POST_STEP)
     native = sim.contact_sensor.data.net_forces_w
     torch.testing.assert_close(sim.get_contact_data("unfiltered_slow")[:, 0], native[:, helper_id])
     torch.testing.assert_close(sim.get_contact_data("unfiltered")[:, 1], native.sum(dim=1))
@@ -154,7 +151,7 @@ def main() -> int:
         args.result_file.write_text("OK\n")
         return 0
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
 
 
 if __name__ == "__main__":

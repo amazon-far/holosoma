@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from holosoma.config_types.frequency import resolve_decimation
-from holosoma.config_types.sensor import CameraSensorConfig, ContactSensorConfig, ContactTargetConfig
+from holosoma.config_types.sensor import CameraSensorConfig, ContactSensorConfig
 from holosoma.config_types.value_types import UNIT_QUATERNION_NORM_TOLERANCE
 from holosoma.simulator.shared.lidar_sensor import (
     LidarPatternProvider,
@@ -20,13 +20,6 @@ if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarSensorConfig, SensorConfig
 
 SensorRecordT = TypeVar("SensorRecordT", bound="SensorRecord")
-
-
-def robot_body_contact_config(body_names: Sequence[str]) -> ContactSensorConfig:
-    """Default contact rows follow the robot's canonical body order."""
-    return ContactSensorConfig(
-        sources=[ContactTargetConfig(target_kind="robot_link", target=name) for name in body_names]
-    )
 
 
 @dataclass
@@ -166,6 +159,7 @@ class SensorManager:
         self._cameras: dict[str, CameraRecord] = {}
         self._lidars: dict[str, LidarRecord] = {}
         self._contacts: dict[str, ContactRecord] = {}
+        self.contact_step_counter = 0
         self._order: list[str] = []
         self._last_camera_due: set[str] = set()
         self._last_lidar_due: set[str] = set()
@@ -392,6 +386,7 @@ class SensorManager:
         records = self.contacts
         if not records:
             return
+        self.contact_step_counter += 1
         for record in self._collect_due(records):
             record.update()
 

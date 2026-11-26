@@ -13,9 +13,8 @@ import numpy as np
 import numpy.typing as npt
 
 from holosoma.config_types.sensor import ContactSensorConfig, ContactTargetConfig, SensorConfig
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from holosoma.simulator.mujoco.backends import ClassicBackend, WarpBackend
-from holosoma.simulator.shared.sensor_manager import robot_body_contact_config
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
@@ -149,18 +148,9 @@ def _reader(
 
 
 def register_contacts(sim: MuJoCo) -> None:
-    """Register the default per-robot-body sensor and every configured contact sensor."""
+    """Register configured contact sensors."""
     assert sim.root_model is not None
     model = sim.root_model
-    sources = np.zeros((len(sim.body_names), model.ngeom), dtype=np.int32)
-    for index, body_id in enumerate(sim.body_ids):
-        sources[index, model.geom_bodyid == body_id] = 1
-    default = robot_body_contact_config(sim.body_names)
-    sim.sensor_manager.register_contact(
-        "contact_sensor",
-        default,
-        _reader(sim, sources, np.ones((1, model.ngeom), dtype=np.int32), default, name="contact_sensor"),
-    )
     for name, config in sim.sensor_config.items():
         if isinstance(config, ContactSensorConfig):
             sources, counterparts = selection_masks(model, sim.contact_target_map, config)

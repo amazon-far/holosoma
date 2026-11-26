@@ -15,6 +15,7 @@ PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from holosoma.hooks import Phase  # noqa: E402
 from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit  # noqa: E402
 
 _DATA = Path(__file__).resolve().parent / "data"
@@ -156,8 +157,6 @@ def _build(backend: str, num_envs: int, device: str | None) -> Any:
 def _run(sim: Any) -> dict[str, Any]:
     import torch
 
-    from holosoma.simulator.base_simulator.hooks import Phase
-
     ids = torch.arange(sim.num_envs, device=sim.sim_device)
     targets = sim.dof_pos.clone()
     anchor = sim.env_origins.clone()
@@ -198,9 +197,7 @@ def _run(sim: Any) -> dict[str, Any]:
     for _ in range(frames):
         sim.hooks.emit(Phase.FRAME_BEGIN)
         for _ in range(decimation):
-            sim.hooks.emit(Phase.PRE_STEP)
             sim.simulate_at_each_physics_step()
-            sim.hooks.emit(Phase.POST_STEP)
         sim.hooks.emit(Phase.FRAME_END)
     return {
         "forces": {name: torch.stack(values).cpu() for name, values in samples.items()},
@@ -439,7 +436,7 @@ def main() -> int:
         args.result_file.write_text("OK\n")
         return 0
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
 
 
 if __name__ == "__main__":

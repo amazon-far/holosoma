@@ -16,7 +16,7 @@ from holosoma.config_types.robot import RobotConfig, RobotInitState  # noqa: E40
 from holosoma.config_types.sensor import ContactSensorConfig, ContactTargetConfig, SensorConfig  # noqa: E402
 from holosoma.config_values.robot import g1_29dof  # noqa: E402
 from holosoma.config_values.simulator import mujoco as mujoco_config  # noqa: E402
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase  # noqa: E402
+from holosoma.hooks import HookRegistry, Phase  # noqa: E402
 from holosoma.simulator.mujoco.backends import ClassicBackend  # noqa: E402
 from holosoma.simulator.mujoco.backends.classic_backend import ContactPairForces  # noqa: E402
 from holosoma.simulator.mujoco.contact_setup import (  # noqa: E402
@@ -381,10 +381,13 @@ def test_fixed_base_contacts_follow_canonical_rows_and_resolve_extra_asset_links
         actuator_names=["left_motor", "right_motor", "helper_motor"],
     )
     sensors: dict[str, SensorConfig] = {
+        "ordered": ContactSensorConfig(
+            sources=[ContactTargetConfig(target_kind="robot_link", target=name) for name in ("right", "left")]
+        ),
         "helper": ContactSensorConfig(
             sources=[ContactTargetConfig(target_kind="robot_link", target="helper")],
             counterparts=[_actor("box")],
-        )
+        ),
     }
     targets = prepare_contact_targets(scene, sensors)
     model = scene.world_spec.compile()
@@ -411,11 +414,11 @@ def test_fixed_base_contacts_follow_canonical_rows_and_resolve_extra_asset_links
         sim.sensor_manager.contact_step_completed()
         assert sim.root_body_name is None
         assert sim.body_names == ["right", "left"]
-        assert [source.label for source in sim.sensor_manager.get_contact("contact_sensor").config.sources] == [
+        assert [source.label for source in sim.sensor_manager.get_contact("ordered").config.sources] == [
             "robot_link:right",
             "robot_link:left",
         ]
-        default = sim.get_contact_data()
+        default = sim.get_contact_data("ordered")
         assert default.shape == (1, 2, 3)
         assert default[0, 0, 0] > 1
         assert default[0, 1, 0] < -1

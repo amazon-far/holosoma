@@ -78,7 +78,7 @@ Use the default decimation of one to retain brief contacts.
 Clone samples because returned tensors are shared and read-only.
 
 ```python
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 
 samples = []
 sim.hooks.add(Phase.FRAME_BEGIN, samples.clear, name="feet.begin")
@@ -90,9 +90,11 @@ sim.hooks.add(
 )
 ```
 
-Custom loops emit `POST_STEP` once after each physics step to publish contacts.
+`simulate_at_each_physics_step()` emits `POST_STEP` after the solve.
+Custom loops that advance the backend directly must emit `POST_STEP` once after each physics step.
 
-The default `contact_sensor` provides one row per entry in `sim.body_names`.
-`get_sensor_names()` includes it. Use `sensor_manager.camera_names` or `lidar_names` to list one sensor type.
-Existing `sim.contact_forces`, `sim.contact_recorder`, and rewards keep their current behavior.
-The name `contact_sensor` is reserved.
+Contact sensors exist in `SensorManager` only when explicitly configured.
+`get_contact_data` requires a sensor name.
+An explicit contact sensor can use the name `contact_sensor`.
+Cameras and LiDARs reserve that name for Isaac's legacy native contact view.
+Existing `sim.contact_forces`, `sim.contact_recorder`, rewards, and termination logic keep their current behavior.

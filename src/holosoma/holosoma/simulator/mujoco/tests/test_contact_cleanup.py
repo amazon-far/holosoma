@@ -14,8 +14,14 @@ from typing_extensions import Self
 mujoco = pytest.importorskip("mujoco")
 wp = pytest.importorskip("warp")
 
-from holosoma.config_types.sensor import ContactSensorConfig  # noqa: E402
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase  # noqa: E402
+from holosoma.config_types.sensor import (  # noqa: E402
+    CameraSensorConfig,
+    ContactSensorConfig,
+    CustomLidarRayPatternConfig,
+    LidarSensorConfig,
+    SensorMountConfig,
+)
+from holosoma.hooks import HookRegistry, Phase  # noqa: E402
 from holosoma.simulator.mujoco import contact_setup, contact_warp  # noqa: E402
 from holosoma.simulator.mujoco.mujoco import MuJoCo  # noqa: E402
 from holosoma.simulator.shared.sensor_manager import SensorManager  # noqa: E402
@@ -23,7 +29,10 @@ from holosoma.simulator.shared.sensor_manager import SensorManager  # noqa: E402
 pytestmark = pytest.mark.no_sim
 
 
-def test_close_releases_retained_readers_before_backend_close(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("kind", ["contacts", "empty", "camera", "lidar"])
+def test_close_releases_only_configured_readers_before_backend_close(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
     events: list[str] = []
 
     class Backend:
@@ -42,6 +51,7 @@ def test_close_releases_retained_readers_before_backend_close(monkeypatch: pytes
 
     class Capture:
         def __init__(self, **_kwargs: Any) -> None:
+            events.append("capture")
             self.graph = Graph()
 
         def __enter__(self) -> Self:
@@ -68,11 +78,31 @@ def test_close_releases_retained_readers_before_backend_close(monkeypatch: pytes
     )
     sim.robot_config = SimpleNamespace(body_names=["robot_body"])
     sim.body_ids = [1]
-    sim.sensor_config = {"whole": ContactSensorConfig()}
+    sim.sensor_config = {"contact_sensor": ContactSensorConfig(), "whole": ContactSensorConfig()}
+    if kind == "empty":
+        sim.sensor_config = {}
+    elif kind == "camera":
+        sim.sensor_config = {"camera": CameraSensorConfig(mount=SensorMountConfig(target_kind="world"))}
+    elif kind == "lidar":
+        sim.sensor_config = {
+            "lidar": LidarSensorConfig(
+                mount=SensorMountConfig(target_kind="world"),
+                pattern=CustomLidarRayPatternConfig(ray_directions=[[0, 0, -1]]),
+            )
+        }
     sim.contact_target_map = contact_setup.ContactTargetMap(geom_names={"robot": ["robot_geom"]})
     sim.sensor_manager = SensorManager("cpu", 50.0, physics_hz=200.0)
     with wp.ScopedDevice("cpu"):
         contact_setup.register_contacts(sim)
+    assert events == (["capture", "capture"] if kind == "contacts" else [])
+    events.clear()
+    if kind != "contacts":
+        assert sim.sensor_manager.contact_names == []
+        sim.sensor_manager.contact_step_completed()
+        sim.hooks.emit(Phase.CLOSE)
+        sim.hooks.emit(Phase.CLOSE)
+        assert events == ["backend"]
+        return
     readers = [
         cast("contact_warp.WarpContactReader", record.capture) for record in sim.sensor_manager._contacts.values()
     ]
@@ -84,6 +114,7 @@ def test_close_releases_retained_readers_before_backend_close(monkeypatch: pytes
 
     def synchronize(device: str) -> None:
         assert device == "cpu"
+        assert sum(reader.backend is not None for reader in readers) == len(readers) - events.count("sync")
         for reader in readers:
             if reader.backend is not None:
                 assert all(
@@ -93,11 +124,11 @@ def test_close_releases_retained_readers_before_backend_close(monkeypatch: pytes
         events.append("sync")
 
     monkeypatch.setattr(contact_warp.wp, "synchronize_device", synchronize)
-    sim.close()
+    sim.hooks.emit(Phase.CLOSE)
     assert all(resource() is None for resource in resources)
     assert all(reader.backend is None for reader in readers)
     assert events == ["sync", "sync", "backend"]
-    sim.close()
+    sim.hooks.emit(Phase.CLOSE)
     for reader in readers:
         reader.close()
         assert reader.backend is None

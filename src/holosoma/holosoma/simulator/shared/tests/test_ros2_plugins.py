@@ -24,6 +24,7 @@ from holosoma.config_types.plugin import (
 )
 from holosoma.hooks import HookRegistry, Phase, frame_base_rates
 from holosoma.simulator.plugins.tests._task import plugin_task
+from holosoma.tests._without_ros import without_ros
 
 if TYPE_CHECKING:
     from holosoma.config_types.simulator import SimEngineConfig
@@ -36,6 +37,7 @@ def _build_plugin(sim: Any, cfg: PluginConfig) -> Any:
     return cfg.get_cls()(cfg, plugin_task(sim))
 
 
+@without_ros
 def test_configs_and_impl_import_without_rclpy() -> None:
     # The optional-dep guarantee: configs import and get_cls() resolves the impl module
     # without pulling rclpy (it is deferred into the plugin __init__/methods).

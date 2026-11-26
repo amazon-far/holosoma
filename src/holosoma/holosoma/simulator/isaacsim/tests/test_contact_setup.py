@@ -11,7 +11,15 @@ from typing import Any
 import pytest
 import torch
 
-from holosoma.config_types.sensor import ContactSensorConfig, ContactTargetConfig, IsaacSimContactConfig
+from holosoma.config_types.sensor import (
+    CameraSensorConfig,
+    ContactSensorConfig,
+    ContactTargetConfig,
+    CustomLidarRayPatternConfig,
+    IsaacSimContactConfig,
+    LidarSensorConfig,
+    SensorMountConfig,
+)
 from holosoma.simulator.shared.sensor_manager import SensorManager
 
 pytestmark = pytest.mark.no_sim
@@ -221,7 +229,7 @@ def test_unfiltered_robot_sources_reuse_one_read_and_include_omitted_and_fixed_b
     native = sim.contact_sensor._data.net_forces_w.clone()
     sim.sensor_manager.contact_step_completed()
     assert sim.contact_sensor.data_reads == 1
-    torch.testing.assert_close(sim.sensor_manager.get_contact("contact_sensor").buffers["forces"], native[:, 1:2])
+    assert set(sim.sensor_manager.contact_names) == set(sim.sensor_config)
     whole = sim.sensor_manager.get_contact("whole").buffers["forces"]
     torch.testing.assert_close(whole, native.sum(dim=1, keepdim=True))
     torch.testing.assert_close(sim.sensor_manager.get_contact("links").buffers["forces"], native[:, [0, 1, 0]])
@@ -243,6 +251,7 @@ def test_unfiltered_robot_sources_reuse_one_read_and_include_omitted_and_fixed_b
     assert sim.sensor_manager.get_contact("slow").buffers["forces"][0].count_nonzero() == 0
     sim.sensor_manager.contact_step_completed()
     torch.testing.assert_close(sim.sensor_manager.get_contact("slow").buffers["forces"], 3 * whole)
+    assert sim.contact_sensor.data_reads == 4
 
 
 def test_mixed_unfiltered_actor_and_robot_sources_keep_filtered_views_separate(adapter: Any) -> None:
@@ -281,6 +290,46 @@ def test_unfiltered_source_missing_from_native_robot_view_fails_registration(ada
     adapter.build_contacts(sim)
     with pytest.raises(ValueError, match="absent from the robot contact view"):
         adapter.register_contacts(sim)
+
+
+@pytest.mark.parametrize("kind", ["empty", "camera", "lidar"])
+def test_optical_or_empty_configuration_does_not_register_or_read_contacts(adapter: Any, kind: str) -> None:
+    sim = _sim()
+    sim.sensor_config = {}
+    if kind == "camera":
+        sim.sensor_config["camera"] = CameraSensorConfig(mount=SensorMountConfig(target_kind="world"))
+    elif kind == "lidar":
+        sim.sensor_config["lidar"] = LidarSensorConfig(
+            mount=SensorMountConfig(target_kind="world"),
+            pattern=CustomLidarRayPatternConfig(ray_directions=[[0, 0, -1]]),
+        )
+    native = sim.contact_sensor
+    adapter.build_contacts(sim)
+    adapter.register_contacts(sim)
+    for _ in range(3):
+        sim.sensor_manager.contact_step_completed()
+    assert sim.sensor_manager.contact_names == []
+    assert sim.contact_readers == {} and sim.contact_views == {}
+    assert sim.scene.sensors["contact_sensor"] is native
+    assert native.data_reads == 0
+
+
+def test_only_decimated_robot_sensors_read_once_when_due_without_a_default(adapter: Any) -> None:
+    sim = _sim()
+    sim.sensor_config = {
+        "contact_sensor": ContactSensorConfig(update_decimation=2),
+        "slower": ContactSensorConfig(update_decimation=4),
+    }
+    adapter.build_contacts(sim)
+    adapter.register_contacts(sim)
+    for reads in (0, 1, 1, 2):
+        sim.sensor_manager.contact_step_completed()
+        assert sim.contact_sensor.data_reads == reads
+    assert set(sim.sensor_manager.contact_names) == set(sim.sensor_config)
+    torch.testing.assert_close(
+        sim.sensor_manager.get_contact("contact_sensor").buffers["forces"],
+        sim.sensor_manager.get_contact("slower").buffers["forces"],
+    )
 
 
 @pytest.mark.parametrize("field,value", [("filter_count", 2), ("sensor_count", 1), ("num_bodies", 2)])

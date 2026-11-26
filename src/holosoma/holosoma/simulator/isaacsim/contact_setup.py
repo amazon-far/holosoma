@@ -18,12 +18,10 @@ from holosoma.simulator.isaacsim.prim_utils import (
     resolve_robot_link_rigid_body_prim_expression,
     set_instanceable,
 )
-from holosoma.simulator.shared.sensor_manager import robot_body_contact_config
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
-    from holosoma.simulator.shared.sensor_manager import ContactRecord
 
 _ENV_PATH = "/World/envs/env_0"
 _ENV_EXPRESSION = "/World/envs/env_.*"
@@ -197,7 +195,9 @@ def build_contacts(sim: IsaacSim) -> None:
 
 
 def register_contacts(sim: IsaacSim) -> None:
-    """Expose the existing robot sensor and configured contact views through the shared manager."""
+    """Register configured measurements and reuse the legacy robot view."""
+    if not sim.contact_readers:
+        return
     for body, sensor in sim.contact_views.items():
         view = sensor.contact_physx_view
         if (
@@ -214,11 +214,11 @@ def register_contacts(sim: IsaacSim) -> None:
     sampled_step = -1
 
     def robot_forces() -> torch.Tensor:
-        # The default record's physics counter shares one native read across due robot measurements.
+        # Due robot measurements share one native read on the manager's physics clock.
         nonlocal sample, sampled_step
-        if sampled_step != default.step_counter:
+        if sampled_step != sim.sensor_manager.contact_step_counter:
             sample = sim.contact_sensor.data.net_forces_w
-            sampled_step = default.step_counter
+            sampled_step = sim.sensor_manager.contact_step_counter
         assert sample is not None
         return sample
 
@@ -228,11 +228,6 @@ def register_contacts(sim: IsaacSim) -> None:
             sim.contact_sensor.contact_physx_view.sensor_paths[: sim.contact_sensor.num_bodies]
         )
     }
-    default: ContactRecord = sim.sensor_manager.register_contact(
-        "contact_sensor",
-        robot_body_contact_config(sim.body_names),
-        lambda: robot_forces()[:, sim._contact_to_robot_body_ids].unsqueeze(2),
-    )
     for name, reader in sim.contact_readers.items():
         if not reader.config.counterparts:
             for index, (source, bodies) in enumerate(zip(reader.config.sources, reader.source_bodies, strict=True)):

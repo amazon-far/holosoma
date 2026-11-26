@@ -12,7 +12,8 @@ _HARNESS = Path(__file__).resolve().parents[1] / "contact_sensor_assert.py"
 
 
 @pytest.mark.mujoco_classic
-def test_named_contacts_classic(tmp_path: Path) -> None:
+@pytest.mark.parametrize("legacy_only", [False, True], ids=["configured", "legacy-only"])
+def test_named_contacts_classic(tmp_path: Path, legacy_only: bool) -> None:
     result_file = tmp_path / "result.txt"
     run_harness(
         _HARNESS,
@@ -20,6 +21,7 @@ def test_named_contacts_classic(tmp_path: Path) -> None:
         "mujoco",
         "--result-file",
         str(result_file),
+        *(["--legacy-only"] if legacy_only else []),
         label="mujoco/named-contacts",
         timeout=300,
         reuse_process=True,
@@ -29,7 +31,8 @@ def test_named_contacts_classic(tmp_path: Path) -> None:
 
 @pytest.mark.mujoco_warp
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="MuJoCo Warp requires a CUDA device")
-def test_named_contacts_warp(tmp_path: Path) -> None:
+@pytest.mark.parametrize("legacy_only", [False, True], ids=["configured", "legacy-only"])
+def test_named_contacts_warp(tmp_path: Path, legacy_only: bool) -> None:
     result_file = tmp_path / "result.txt"
     run_harness(
         _HARNESS,
@@ -39,6 +42,7 @@ def test_named_contacts_warp(tmp_path: Path) -> None:
         "2",
         "--result-file",
         str(result_file),
+        *(["--legacy-only"] if legacy_only else []),
         label="mjwarp/named-contacts",
         timeout=600,
         reuse_process=True,

@@ -8,9 +8,16 @@ import pytest
 
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.run_sim import RunSimConfig
-from holosoma.config_types.sensor import CameraSensorConfig, ContactSensorConfig, ContactTargetConfig, SensorMountConfig
+from holosoma.config_types.sensor import (
+    CameraSensorConfig,
+    ContactSensorConfig,
+    ContactTargetConfig,
+    CustomLidarRayPatternConfig,
+    LidarSensorConfig,
+    SensorMountConfig,
+)
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch
 
@@ -63,7 +70,7 @@ def test_simulator_accessor_selects_environments_and_rejects_bad_names() -> None
         sim.get_contact_data("contacts", "torques")
 
 
-def test_simulator_reserves_only_the_existing_robot_contact_name() -> None:
+def test_simulator_accepts_explicit_contact_sensor_name_without_creating_implicit_records() -> None:
     defaults = RunSimConfig()
     config = FullSimConfig(
         simulator=defaults.simulator.config,
@@ -72,10 +79,16 @@ def test_simulator_reserves_only_the_existing_robot_contact_name() -> None:
         logger=defaults.logger,
         sensors={"contact_sensor": ContactSensorConfig()},
     )
-    with pytest.raises(ValueError, match="Sensor name 'contact_sensor' is reserved"):
-        BaseSimulator(config, None, "cpu")  # type: ignore[arg-type]
+    sim = BaseSimulator(config, None, "cpu", HookRegistry())  # type: ignore[arg-type]
+    assert "contact_sensor" in sim.sensor_config
+    assert sim.sensor_manager.contacts == []
+    sim.sensor_manager.register_contact("contact_sensor", ContactSensorConfig(), lambda: torch.zeros(1, 1, 1, 3))
+    assert sim.get_sensor_names() == ["contact_sensor"]
+    assert sim.get_contact_data("contact_sensor").count_nonzero() == 0
+    with pytest.raises(TypeError, match="name"):
+        sim.get_contact_data()  # type: ignore[call-arg]
     config = dataclasses.replace(config, sensors={"__holosoma_contact_custom": ContactSensorConfig()})
-    sim = BaseSimulator(config, None, "cpu")  # type: ignore[arg-type]
+    sim = BaseSimulator(config, None, "cpu", HookRegistry())  # type: ignore[arg-type]
     assert "__holosoma_contact_custom" in sim.sensor_config
 
 
@@ -84,6 +97,31 @@ def test_bad_native_output_shape_fails_at_publication() -> None:
     manager.register_contact("bad", ContactSensorConfig(), lambda: torch.ones(1, 2, 3))
     with pytest.raises(RuntimeError, match="expected forces"):
         manager.contact_step_completed()
+
+
+@pytest.mark.parametrize(
+    "optical",
+    [
+        CameraSensorConfig(mount=SensorMountConfig(target_kind="world")),
+        LidarSensorConfig(
+            mount=SensorMountConfig(target_kind="world"),
+            pattern=CustomLidarRayPatternConfig(ray_directions=[[0, 0, -1]]),
+        ),
+    ],
+)
+def test_optical_sensor_name_cannot_replace_the_legacy_native_contact_view(
+    optical: CameraSensorConfig | LidarSensorConfig,
+) -> None:
+    defaults = RunSimConfig()
+    config = FullSimConfig(
+        simulator=defaults.simulator.config,
+        robot=defaults.robot,
+        training=defaults.training,
+        logger=defaults.logger,
+        sensors={"contact_sensor": optical},
+    )
+    with pytest.raises(ValueError, match="native robot contact view"):
+        BaseSimulator(config, None, "cpu", HookRegistry())  # type: ignore[arg-type]
 
 
 def test_contacts_publish_at_independent_completed_physics_intervals() -> None:
@@ -127,7 +165,7 @@ def test_zero_rerender_episode_reset_clears_contacts_without_restarting_physics_
         def render_sensors(self, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
             rendered.append((env_ids, num_renders, self.get_contact_data("slow").clone()))
 
-    sim = ResetSimulator(config, None, "cpu")  # type: ignore[arg-type]
+    sim = ResetSimulator(config, None, "cpu", HookRegistry())  # type: ignore[arg-type]
     sample = torch.ones(2, 1, 1, 3)
     captures: list[int] = []
 
@@ -193,7 +231,7 @@ def test_post_step_publishes_contacts_before_consumers_and_skips_playback(start_
         def render_sensors(self, env_ids: torch.Tensor | None = None, num_renders: int | None = None) -> None:
             pass
 
-    sim = StepSimulator(config, None, "cpu")  # type: ignore[arg-type]
+    sim = StepSimulator(config, None, "cpu", HookRegistry())  # type: ignore[arg-type]
     captures: list[str] = []
 
     def capture(name: str) -> torch.Tensor:
@@ -215,7 +253,6 @@ def test_post_step_publishes_contacts_before_consumers_and_skips_playback(start_
     sim.hooks.emit(Phase.FRAME_BEGIN)
     if start_in_playback:
         sim.simulate_at_each_physics_step()
-        sim.hooks.emit(Phase.POST_STEP)
         assert fast.step_counter == slow.step_counter == 0
         assert captures == []
         assert observed == [0]
@@ -225,7 +262,7 @@ def test_post_step_publishes_contacts_before_consumers_and_skips_playback(start_
 
     for value in (1, 2):
         old_frame = sim.get_contact_data("fast")
-        sim.simulate_at_each_physics_step()
+        sim._advance_substep()
         assert sim.get_contact_data("fast") is old_frame
         assert fast.step_counter == value - 1
         sim.hooks.emit(Phase.POST_STEP)
@@ -239,7 +276,6 @@ def test_post_step_publishes_contacts_before_consumers_and_skips_playback(start_
     held = sim.get_contact_data("fast")
     sim.kinematic_playback = True
     sim.simulate_at_each_physics_step()
-    sim.hooks.emit(Phase.POST_STEP)
     sim.hooks.emit(Phase.FRAME_END)
     assert sim.get_contact_data("fast") is held
     assert fast.step_counter == slow.step_counter == 2
@@ -248,6 +284,5 @@ def test_post_step_publishes_contacts_before_consumers_and_skips_playback(start_
     sim.kinematic_playback = False
     for value in (3, 4):
         sim.simulate_at_each_physics_step()
-        sim.hooks.emit(Phase.POST_STEP)
         assert sim.get_contact_data("slow")[0, 0, 0] == (2 if value == 3 else 4)
     assert observed == [1, 2, 2, 3, 4]
