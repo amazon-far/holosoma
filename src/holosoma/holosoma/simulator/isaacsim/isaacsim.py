@@ -630,8 +630,7 @@ class IsaacSim(BaseSimulator):
             self.state.register(name, Columns(source, self.body_ids))
 
     def _robot_contact_forces(self) -> torch.Tensor:
-        """Sensor forces in robot body order, (num_envs, num_bodies, 3). The contact sensor's body
-        ordering differs from the robot's, so every reader must go through this gather."""
+        """Return legacy contact forces in canonical robot body order."""
         return self.contact_sensor.data.net_forces_w[:, self._contact_to_robot_body_ids]
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:

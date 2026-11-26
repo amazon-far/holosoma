@@ -1,10 +1,11 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-"""Translate Holosoma contact groups to native single-body contact views."""
+"""Translate Holosoma contact groups to shared native contact views."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
 from isaaclab.sensors import ContactSensor, ContactSensorCfg
@@ -22,6 +23,7 @@ from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
+    from holosoma.simulator.shared.sensor_manager import ContactRecord
 
 _ENV_PATH = "/World/envs/env_0"
 _ENV_EXPRESSION = "/World/envs/env_.*"
@@ -87,6 +89,8 @@ class IsaacContactReader:
     config: ContactSensorConfig
     num_envs: int
     device: str
+    robot_body_ids: dict[int, torch.Tensor] = field(default_factory=dict)
+    robot_forces: Callable[[], torch.Tensor] | None = None
 
     def __call__(self) -> torch.Tensor:
         matrix = torch.zeros(
@@ -97,7 +101,12 @@ class IsaacContactReader:
             dtype=torch.float32,
             device=self.device,
         )
+        robot_forces = self.robot_forces() if self.robot_forces is not None else None
         for source, bodies in enumerate(self.source_bodies):
+            if source in self.robot_body_ids:
+                assert robot_forces is not None
+                matrix[:, source, 0] = robot_forces[:, self.robot_body_ids[source]].sum(dim=1)
+                continue
             for body in bodies:
                 data = self.views[body].data
                 if not self.config.counterparts:
@@ -116,7 +125,7 @@ class IsaacContactReader:
 
 
 def build_contacts(sim: IsaacSim) -> None:
-    """Share one native single-body view across all named contact measurements."""
+    """Create per-body views for filtered and actor measurements."""
     view_configs: dict[str, ContactSensorCfg] = {}
     selections: dict[str, tuple[list[list[str]], list[list[str]]]] = {}
     for name, config in sim.sensor_config.items():
@@ -132,7 +141,13 @@ def build_contacts(sim: IsaacSim) -> None:
         sources = [_source_bodies(sim, source) for source in config.sources]
         selections[name] = sources, counterparts
         filters = [path.replace(_ENV_PATH, _ENV_EXPRESSION) for path in selected]
-        for body in dict.fromkeys(path for group in sources for path in group):
+        view_bodies = (
+            body
+            for source, group in zip(config.sources, sources, strict=True)
+            if config.counterparts or source.target_kind == "actor"
+            for body in group
+        )
+        for body in dict.fromkeys(view_bodies):
             if body not in view_configs:
                 view_configs[body] = ContactSensorCfg(
                     prim_path=body.replace(_ENV_PATH, _ENV_EXPRESSION),
@@ -195,11 +210,41 @@ def register_contacts(sim: IsaacSim) -> None:
                 f"{view.sensor_count} sensors, {sensor.num_bodies} bodies per environment, "
                 f"{view.filter_count} filters for {len(sensor.cfg.filter_prim_paths_expr)} patterns."
             )
-    default = robot_body_contact_config(sim.body_names)
-    sim.sensor_manager.register_contact(
+    sample: torch.Tensor | None = None
+    sampled_step = -1
+
+    def robot_forces() -> torch.Tensor:
+        # The default record's physics counter shares one native read across due robot measurements.
+        nonlocal sample, sampled_step
+        if sampled_step != default.step_counter:
+            sample = sim.contact_sensor.data.net_forces_w
+            sampled_step = default.step_counter
+        assert sample is not None
+        return sample
+
+    robot_body_ids = {
+        path: index
+        for index, path in enumerate(
+            sim.contact_sensor.contact_physx_view.sensor_paths[: sim.contact_sensor.num_bodies]
+        )
+    }
+    default: ContactRecord = sim.sensor_manager.register_contact(
         "contact_sensor",
-        default,
-        lambda: sim._robot_contact_forces().unsqueeze(2),
+        robot_body_contact_config(sim.body_names),
+        lambda: robot_forces()[:, sim._contact_to_robot_body_ids].unsqueeze(2),
     )
     for name, reader in sim.contact_readers.items():
+        if not reader.config.counterparts:
+            for index, (source, bodies) in enumerate(zip(reader.config.sources, reader.source_bodies, strict=True)):
+                if source.target_kind in ("robot", "robot_link"):
+                    missing = [body for body in bodies if body not in robot_body_ids]
+                    if missing:
+                        raise ValueError(
+                            f"Contact source '{source.label}' is absent from the robot contact view: {missing}."
+                        )
+                    reader.robot_body_ids[index] = torch.tensor(
+                        [robot_body_ids[body] for body in bodies], device=sim.sim_device, dtype=torch.long
+                    )
+            if reader.robot_body_ids:
+                reader.robot_forces = robot_forces
         sim.sensor_manager.register_contact(name, reader.config, reader)

@@ -32,6 +32,10 @@ def _build() -> Any:
         "helper": ContactSensorConfig(sources=[helper], counterparts=[actor]),
         "helper_reaction": ContactSensorConfig(sources=[actor], counterparts=[helper]),
         "whole_robot_reaction": ContactSensorConfig(sources=[actor], counterparts=[ContactTargetConfig()]),
+        "unfiltered": ContactSensorConfig(
+            sources=[helper, ContactTargetConfig(), ContactTargetConfig(target_kind="robot_link", target="base_link")]
+        ),
+        "unfiltered_slow": ContactSensorConfig(sources=[helper], update_decimation=2),
     }
     config = build_run_sim_config("isaacsim", "empty", "test-arm-fixed", "terrain_locomotion_plane", sensors=sensors)
     box = RigidObjectConfig(
@@ -104,6 +108,14 @@ def _assert_mapping(sim: Any) -> None:
     torch.testing.assert_close(sim.contact_forces[:], expected)
     torch.testing.assert_close(sim.get_contact_data(), expected)
     torch.testing.assert_close(sim.contact_recorder.recorded_forces[:, 0], expected)
+    helper_id = sim.contact_sensor.body_names.index("link1")
+    unfiltered_expected = torch.stack([native[:, helper_id], native.sum(dim=1), expected[:, 1]], dim=1)
+    unfiltered = sim.get_contact_data("unfiltered")
+    torch.testing.assert_close(unfiltered, unfiltered_expected)
+    assert torch.all((unfiltered[:, 1] - expected.sum(dim=1)).norm(dim=-1) > 1)
+    assert sim.get_contact_data("unfiltered_slow").count_nonzero() == 0
+    # Only the filtered helper body and its actor require additional views.
+    assert len(sim.contact_views) == 2
 
     helper = sim.get_contact_data("helper")
     assert torch.all(torch.linalg.vector_norm(helper[:, 0], dim=-1) > 1), helper
@@ -121,6 +133,15 @@ def _assert_mapping(sim: Any) -> None:
     assert sim.get_contact_data()[0].count_nonzero() == 0
     torch.testing.assert_close(sim.get_contact_data()[1], untouched)
     torch.testing.assert_close(sim.contact_forces[:], legacy)
+    assert sim.get_contact_data("unfiltered")[0].count_nonzero() == 0
+    torch.testing.assert_close(sim.get_contact_data("unfiltered")[1], unfiltered_expected[1])
+    torch.testing.assert_close(unfiltered, unfiltered_expected)
+    sim.simulate_at_each_physics_step()
+    sim.hooks.emit(Phase.POST_STEP)
+    native = sim.contact_sensor.data.net_forces_w
+    torch.testing.assert_close(sim.get_contact_data("unfiltered_slow")[:, 0], native[:, helper_id])
+    torch.testing.assert_close(sim.get_contact_data("unfiltered")[:, 1], native.sum(dim=1))
+    torch.testing.assert_close(unfiltered, unfiltered_expected)
 
 
 def main() -> int:
