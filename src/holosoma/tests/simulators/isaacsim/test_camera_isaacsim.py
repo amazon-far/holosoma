@@ -3,8 +3,9 @@
 Each test runs a camera assert harness against the IsaacSim backend. The geometry harness mounts
 a TiledCamera on the robot base looking at a known red panel and checks the [N,H,W,3] uint8
 frame's panel silhouette is centered, square, and FOV-consistent. Pass/fail is read from the
-harness's --result-file sentinel. All selected headless cells run in one shared subprocess and Kit
-app, each on a fresh stage; test_camera_obs_pipeline boots the windowed experience in its own process.
+harness's --result-file sentinel. Selected camera cells run in one shared subprocess and Kit
+app, each on a fresh stage. The observation and reset-render tests use their own launch settings in
+separate processes.
 
 Marked ``isaacsim`` so the IsaacSim CI job (-m "isaacsim") collects it. importorskip("isaaclab")
 and CUDA-gated. The CI job exports OMNI_KIT_ACCEPT_EULA=YES.
@@ -28,6 +29,7 @@ from tests.simulators._run_harness import run_batched, run_harness  # noqa: E402
 
 _OBS_HARNESS = Path(__file__).resolve().parents[1] / "camera_obs_assert.py"
 _RAYCAST_HARNESS = Path(__file__).resolve().parents[1] / "raycast_camera_assert.py"
+_RERENDER_HARNESS = Path(__file__).resolve().parents[1] / "sensor_rerender_assert.py"
 _TIMEOUT = 2400
 
 # Test name -> (harness stem, args); ``{name}`` is filled from the test's parameters.
@@ -41,12 +43,11 @@ _CELLS = {
     "test_camera_follow_multi_env": ("camera_follow_assert", ["--simulator", "isaacsim", "--num-envs", "4"]),
     "test_camera_orientation": ("camera_orientation_assert", ["--simulator", "isaacsim"]),
     "test_camera_renders_at_its_mount_offset": ("camera_mount_fabric_assert", ["--num-envs", "{num_envs}"]),
-    "test_sensor_rerender_on_reset": ("sensor_rerender_assert", ["--simulator", "isaacsim"]),
 }
 
 
 def _cell(item):
-    """Batch cell for a headless camera test item: one subprocess runs every selected one."""
+    """Batch cell for a camera test item: one subprocess runs every selected one."""
     if getattr(item, "module", None) is not sys.modules[__name__] or item.originalname not in _CELLS:
         return None
     stem, args = _CELLS[item.originalname]
@@ -139,6 +140,17 @@ def test_camera_renders_at_its_mount_offset(request, num_envs):
     run_batched(request, _cell, label=f"isaacsim/camera-mount-fabric (num_envs={num_envs})", timeout=_TIMEOUT)
 
 
-def test_sensor_rerender_on_reset(request):
+def test_sensor_rerender_on_reset(tmp_path):
     # RTX depth camera and LiDAR re-render only the reset envs, and only with num_rerenders_on_reset > 0.
-    run_batched(request, _cell, label="isaacsim/sensor-rerender-on-reset", timeout=_TIMEOUT)
+    # This harness launches headless Kit, unlike the shared camera batch.
+    result_file = tmp_path / "rerender_isaacsim.txt"
+    run_harness(
+        _RERENDER_HARNESS,
+        "--simulator",
+        "isaacsim",
+        "--result-file",
+        str(result_file),
+        label="isaacsim/sensor-rerender-on-reset",
+        timeout=700,
+        result_file=result_file,
+    )
