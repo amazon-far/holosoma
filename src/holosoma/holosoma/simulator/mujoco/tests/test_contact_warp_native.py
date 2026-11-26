@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import cast
+from weakref import ref
 
 import numpy as np
 import pytest
@@ -94,6 +95,96 @@ def test_solve_and_fk_wait_for_delayed_nondefault_torch_inputs() -> None:
         backend.close()
 
 
+def test_simulator_close_releases_queries_with_readers_and_samples_retained() -> None:
+    from holosoma.simulator.base_simulator.hooks import Phase
+    from tests.simulators.contact_sensor_assert import _build
+
+    sim = _build("mjwarp", 2)
+    backend = sim.backend
+    readers = [record.capture for record in sim.sensor_manager._contacts.values()]
+    resources = [
+        ref(getattr(reader, attribute))
+        for reader in readers
+        for attribute in ("graph", "sources", "counterparts", "output", "tensor")
+    ]
+    query_bytes = sum(
+        getattr(reader, attribute).capacity for reader in readers for attribute in ("sources", "counterparts", "output")
+    )
+    consumer = torch.cuda.Stream(device=backend.device)
+    completed = torch.cuda.Event()
+    try:
+        sim.simulate_at_each_physics_step()
+        sim.hooks.emit(Phase.POST_STEP)
+        expected = sim.get_contact_data("robot_ground").clone()
+        torch.cuda.synchronize(backend.device)
+        live_before = wp.get_mempool_used_mem_current(backend.mjw_device)
+        with torch.cuda.stream(consumer):
+            # A queued clone still reads the reader's scratch buffer when close starts.
+            torch.cuda._sleep(100_000_000)
+            sample = sim.sensor_manager.get_sensor("robot_ground").capture().clone()
+            completed.record()
+        assert not completed.query()
+
+        sim.close()
+        assert completed.query()
+        assert all(reader.backend is None for reader in readers)
+        assert all(resource() is None for resource in resources)
+        live_after = wp.get_mempool_used_mem_current(backend.mjw_device)
+        assert live_before - live_after >= query_bytes
+        sim.close()
+        for reader in readers:
+            reader.close()
+        assert wp.get_mempool_used_mem_current(backend.mjw_device) == live_after
+        torch.testing.assert_close(sample[:, :, 0], expected)
+        torch.testing.assert_close(sim.get_contact_data("robot_ground"), expected)
+        print(f"Contact query bytes: {query_bytes}; Warp live pool bytes: {live_before} -> {live_after}")
+        # CUDA allocators can retain free blocks. Reserved memory is not a count of live allocations.
+        print(f"Torch allocated/reserved bytes: {torch.cuda.memory_allocated()} / {torch.cuda.memory_reserved()}")
+    finally:
+        sim.close()
+
+
+def test_reader_close_releases_selection_but_preserves_an_external_torch_alias() -> None:
+    backend = _backend(
+        '<mujoco><worldbody><body><freejoint/><geom type="sphere" size=".1"/></body></worldbody></mujoco>'
+    )
+    mask = np.ones((1, backend.model.ngeom), dtype=np.int32)
+    reader = WarpContactReader(backend, mask, mask, "normal")
+    graph, sources, counterparts = ref(reader.graph), ref(reader.sources), ref(reader.counterparts)
+    output, tensor = ref(reader.output), ref(reader.tensor)
+    torch.cuda.synchronize(backend.device)
+    live_before = wp.get_mempool_used_mem_current(backend.mjw_device)
+    selection_bytes = reader.sources.capacity + reader.counterparts.capacity
+    output_bytes = reader.output.capacity
+    consumer = torch.cuda.Stream(device=backend.device)
+    completed = torch.cuda.Event()
+    try:
+        with torch.cuda.stream(consumer):
+            torch.cuda._sleep(100_000_000)
+            alias = reader()
+            sample = alias.clone()
+            completed.record()
+        assert not completed.query()
+        reader.close()
+        assert completed.query()
+        assert graph() is None and sources() is None and counterparts() is None
+        assert reader.backend is None
+        assert output() is not None and tensor() is alias
+        assert alias.count_nonzero() == 0
+        assert sample.count_nonzero() == 0
+        live_with_alias = wp.get_mempool_used_mem_current(backend.mjw_device)
+        assert live_before - live_with_alias >= selection_bytes
+        reader.close()
+        assert wp.get_mempool_used_mem_current(backend.mjw_device) == live_with_alias
+        del alias
+        wp.synchronize_device(backend.mjw_device)
+        assert output() is None and tensor() is None
+        assert live_with_alias - wp.get_mempool_used_mem_current(backend.mjw_device) >= output_bytes
+    finally:
+        reader.close()
+        backend.close()
+
+
 def test_captured_queries_keep_empty_opposite_and_delayed_previous_force_samples() -> None:
     backend = _backend(
         """
@@ -161,4 +252,6 @@ def test_captured_queries_keep_empty_opposite_and_delayed_previous_force_samples
             torch.testing.assert_close(reaction, -sample, rtol=1e-5, atol=1e-5)
             torch.testing.assert_close(body[:, source_body], sample[:, 0, 0], rtol=1e-5, atol=1e-5)
     finally:
+        reader.close()
+        reverse.close()
         backend.close()

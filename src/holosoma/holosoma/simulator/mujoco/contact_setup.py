@@ -13,6 +13,7 @@ import numpy as np
 import numpy.typing as npt
 
 from holosoma.config_types.sensor import ContactSensorConfig, ContactTargetConfig, SensorConfig
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.mujoco.backends import ClassicBackend, WarpBackend
 from holosoma.simulator.shared.sensor_manager import robot_body_contact_config
 from holosoma.utils.safe_torch_import import torch
@@ -133,12 +134,16 @@ def _reader(
     sources: npt.NDArray[np.int32],
     counterparts: npt.NDArray[np.int32],
     config: ContactSensorConfig,
+    *,
+    name: str,
 ) -> Callable[[], torch.Tensor]:
     backend = sim.backend
     if isinstance(backend, WarpBackend):
         from holosoma.simulator.mujoco.contact_warp import WarpContactReader
 
-        return WarpContactReader(backend, sources, counterparts, config.force_mode)
+        reader = WarpContactReader(backend, sources, counterparts, config.force_mode)
+        sim.hooks.add(Phase.CLOSE, reader.close, name=f"mujoco.contact.{name}.close")
+        return reader
     assert isinstance(backend, ClassicBackend)
     return lambda: backend.contact_pairs().matrix(sources, counterparts, force_mode=config.force_mode)
 
@@ -154,9 +159,9 @@ def register_contacts(sim: MuJoCo) -> None:
     sim.sensor_manager.register_contact(
         "contact_sensor",
         default,
-        _reader(sim, sources, np.ones((1, model.ngeom), dtype=np.int32), default),
+        _reader(sim, sources, np.ones((1, model.ngeom), dtype=np.int32), default, name="contact_sensor"),
     )
     for name, config in sim.sensor_config.items():
         if isinstance(config, ContactSensorConfig):
             sources, counterparts = selection_masks(model, sim.contact_target_map, config)
-            sim.sensor_manager.register_contact(name, config, _reader(sim, sources, counterparts, config))
+            sim.sensor_manager.register_contact(name, config, _reader(sim, sources, counterparts, config, name=name))

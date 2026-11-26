@@ -60,7 +60,7 @@ class WarpContactReader:
         counterparts: npt.NDArray[np.int32],
         force_mode: str,
     ) -> None:
-        self.backend = backend
+        self.backend: WarpBackend | None = backend
         self.normal_only = force_mode == "normal"
         with wp.ScopedStream(backend.wp_stream):
             self.sources = wp.array(sources, dtype=wp.int32)
@@ -86,13 +86,28 @@ class WarpContactReader:
                     outputs=[self.output],
                 )
             self.graph = capture.graph
-        self.tensor = wp.to_torch(self.output)
+        self.tensor: torch.Tensor | None = wp.to_torch(self.output)
 
     def __call__(self) -> torch.Tensor:
         backend = self.backend
+        if backend is None:
+            raise RuntimeError("The Warp contact reader is closed.")
+        assert self.tensor is not None
         consumer = backend.wait_for_torch()
         # Finish the prior Torch clone before reusing the output, then expose this solved sample.
         with wp.ScopedStream(backend.wp_stream):
             wp.capture_launch(self.graph, stream=backend.wp_stream)
         consumer.wait_stream(backend.torch_stream)
         return self.tensor
+
+    def close(self) -> None:
+        """Finish device work and release the query, including its Torch alias."""
+        if self.backend is None:
+            return
+        wp.synchronize_device(self.backend.mjw_device)
+        self.graph = None
+        self.tensor = None
+        self.output = None
+        self.sources = None
+        self.counterparts = None
+        self.backend = None
